@@ -7,7 +7,8 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.ObjectID;
 import net.runelite.api.widgets.Widget;
-import net.runelite.client.plugins.microbot.util.gameobject.Rs2GameObject;
+import net.runelite.client.plugins.microbot.Microbot;
+import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
 import net.runelite.client.plugins.microbot.util.widget.Rs2Widget;
 import net.runelite.client.plugins.worldmap.TeleportLocationData;
 
@@ -30,17 +31,18 @@ public enum MountedDigsite implements PohTeleport {
 
     @Override
     public boolean execute() {
-        DecorativeObject pendant = getObject();
+        Rs2TileObjectModel pendant = getObjectModel();
         if (pendant == null) {
             return false;
         }
         if (pendant.getId() == objectId) {
             // The correct id for the object means it has the right left click option, so we can just use that.
-            return Rs2GameObject.interact(pendant, destinationName);
+            return pendant.click(destinationName);
         }
         Widget widget = getWidget();
         if (widget == null) {
-            if (Rs2GameObject.interact(pendant, "Teleport menu")) {
+            boolean clicked = pendant.click("Teleport menu");
+            if (clicked) {
                 if (!sleepUntil(() -> getWidget() != null, 10000)) {
                     return false;
                 }
@@ -56,7 +58,15 @@ public enum MountedDigsite implements PohTeleport {
     public static final Integer[] IDS = {ObjectID.POH_AMULET_DIGSITE, ObjectID.POH_AMULET_DIG_LITHKREN, ObjectID.POH_AMULET_DIG_FOSSIL, ObjectID.POH_AMULET_DIG_DIGSITE};
 
     public static DecorativeObject getObject() {
-        return Rs2GameObject.getDecorativeObject(IDS);
+        Rs2TileObjectModel object = getObjectModel();
+        return object == null ? null : (DecorativeObject) object.getTileObject();
+    }
+
+    private static Rs2TileObjectModel getObjectModel() {
+        return Microbot.getRs2TileObjectCache().query()
+                .withIds(java.util.Arrays.stream(IDS).mapToInt(Integer::intValue).toArray())
+                .where(object -> object.getTileObject() instanceof DecorativeObject)
+                .nearest();
     }
 
     public static boolean isMountedDigsite(DecorativeObject go) {

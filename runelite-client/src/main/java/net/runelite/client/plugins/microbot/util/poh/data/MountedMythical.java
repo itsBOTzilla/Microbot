@@ -5,7 +5,8 @@ import lombok.RequiredArgsConstructor;
 import net.runelite.api.DecorativeObject;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.ObjectID;
-import net.runelite.client.plugins.microbot.util.gameobject.Rs2GameObject;
+import net.runelite.client.plugins.microbot.Microbot;
+import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
 import net.runelite.client.plugins.worldmap.TeleportLocationData;
 
 
@@ -23,15 +24,20 @@ public enum MountedMythical implements PohTeleport {
 
     @Override
     public boolean execute() {
-        DecorativeObject cape = getObject();
-        if (cape == null) {
-            return false;
-        }
-        return Rs2GameObject.interact(cape, "Teleport");
+        Rs2TileObjectModel object = getObjectModel();
+        return object != null && object.click("Teleport");
     }
 
     public static DecorativeObject getObject() {
-        return Rs2GameObject.getDecorativeObject(MYTHS_GUILD.getObjectId());
+        Rs2TileObjectModel object = getObjectModel();
+        return object == null ? null : (DecorativeObject) object.getTileObject();
+    }
+
+    private static Rs2TileObjectModel getObjectModel() {
+        return Microbot.getRs2TileObjectCache().query()
+                .withId(MYTHS_GUILD.getObjectId())
+                .where(object -> object.getTileObject() instanceof DecorativeObject)
+                .nearest();
     }
 
     public static boolean isMountedMythsCape(DecorativeObject go) {

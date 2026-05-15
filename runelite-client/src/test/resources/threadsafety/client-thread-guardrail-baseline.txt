@@ -186,8 +186,6 @@ net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment#storeEquipmentI
 net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment#storeEquipmentItemsInMemory(ItemContainerChanged): void  ->  net.runelite.api.ItemContainer#getItems(): Item[]
 net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment#storeEquipmentItemsInMemory(ItemContainerChanged): void  ->  net.runelite.api.events.ItemContainerChanged#getContainerId(): int
 net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment#storeEquipmentItemsInMemory(ItemContainerChanged): void  ->  net.runelite.api.events.ItemContainerChanged#getItemContainer(): ItemContainer
-net.runelite.client.plugins.microbot.util.gameobject.Rs2Cannon#refill(int): boolean  ->  net.runelite.api.TileObject#getWorldLocation(): WorldPoint
-net.runelite.client.plugins.microbot.util.gameobject.Rs2Cannon#repair(): boolean  ->  net.runelite.api.TileObject#getWorldLocation(): WorldPoint
 net.runelite.client.plugins.microbot.util.gameobject.Rs2GameObject#canWalkTo(TileObject, int): boolean  ->  net.runelite.api.Client#isInInstancedRegion(): boolean
 net.runelite.client.plugins.microbot.util.gameobject.Rs2GameObject#canWalkTo(TileObject, int): boolean  ->  net.runelite.api.GameObject#sizeX(): int
 net.runelite.client.plugins.microbot.util.gameobject.Rs2GameObject#canWalkTo(TileObject, int): boolean  ->  net.runelite.api.GameObject#sizeY(): int
@@ -450,7 +448,7 @@ net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory#invokeMenu(Rs2I
 net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory#isItemSelected(): boolean  ->  net.runelite.api.Client#isWidgetSelected(): boolean
 net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory#itemBounds(Rs2ItemModel): Rectangle  ->  net.runelite.api.widgets.Widget#getDynamicChildren(): Widget[]
 net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory#lambda$getSelectedItemName$45(Widget): String  ->  net.runelite.api.widgets.Widget#getName(): String
-net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory#lambda$invokeMenu$68(Rs2ItemModel, Widget): boolean  ->  net.runelite.api.widgets.Widget#getIndex(): int
+net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory#lambda$invokeMenu$71(Rs2ItemModel, Widget): boolean  ->  net.runelite.api.widgets.Widget#getIndex(): int
 net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory#lambda$itemBounds$48(Rs2ItemModel, Widget): boolean  ->  net.runelite.api.widgets.Widget#getIndex(): int
 net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory#moveItemToSlot(Rs2ItemModel, int): boolean  ->  net.runelite.api.widgets.Widget#getBounds(): Rectangle
 net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory#moveItemToSlot(Rs2ItemModel, int): boolean  ->  net.runelite.api.widgets.Widget#getDynamicChildren(): Widget[]
