@@ -1113,6 +1113,21 @@ public class Rs2WalkerUnitTest {
         assertEquals(300, Rs2Walker.shortWalkDirectPathCeiling(100));
     }
 
+    @Test
+    public void objectTransportPassEndsWhenDialogueOpensBeforeLanding() {
+        assertTrue(Rs2Walker.shouldEndObjectTransportPass(false, true));
+        assertTrue(Rs2Walker.shouldEndObjectTransportPass(true, false));
+        assertFalse(Rs2Walker.shouldEndObjectTransportPass(false, false));
+    }
+
+    @Test
+    public void handledRouteTransportDialogueReturnsControlToCaller() {
+        assertTrue(Rs2Walker.shouldYieldRouteProgressToCaller("transport-handled", true));
+        assertTrue(Rs2Walker.shouldYieldRouteProgressToCaller("raw-path-scene-object-handled", true));
+        assertFalse(Rs2Walker.shouldYieldRouteProgressToCaller("transport-handled", false));
+        assertFalse(Rs2Walker.shouldYieldRouteProgressToCaller("click-failed-off-minimap", true));
+    }
+
     /**
      * A guarded door replies with a conversation instead of opening; re-clicking it cancels that menu,
      * so whatever answers dialogue never gets a menu that survives long enough to act on and the walk
@@ -1559,6 +1574,58 @@ public class Rs2WalkerUnitTest {
                 0L,
                 false,
                 5));
+    }
+
+    @Test
+    public void shouldYieldForActiveRouteInterim_runningWithinPreclickRange_returnsFalse() {
+        assertFalse(Rs2Walker.shouldYieldForActiveRouteInterim(
+                new WorldPoint(2890, 3396, 0),
+                new WorldPoint(2883, 3396, 0),
+                1_000L,
+                4_900L,
+                5_000L,
+                4_500L,
+                true,
+                8));
+    }
+
+    @Test
+    public void shouldYieldForActiveRouteInterim_walkingBeforePreclickRange_returnsTrue() {
+        assertTrue(Rs2Walker.shouldYieldForActiveRouteInterim(
+                new WorldPoint(2890, 3396, 0),
+                new WorldPoint(2883, 3396, 0),
+                1_000L,
+                4_900L,
+                5_000L,
+                4_500L,
+                true,
+                6));
+    }
+
+    @Test
+    public void shouldYieldForActiveRouteInterim_runningDiagonalOutsideCircularPreclickRange_returnsTrue() {
+        assertTrue(Rs2Walker.shouldYieldForActiveRouteInterim(
+                new WorldPoint(2890, 3396, 0),
+                new WorldPoint(2883, 3389, 0),
+                1_000L,
+                4_900L,
+                5_000L,
+                4_500L,
+                true,
+                8));
+    }
+
+    @Test
+    public void shouldYieldForActiveRouteInterim_walkingDiagonalOutsideCircularPreclickRange_returnsTrue() {
+        assertTrue(Rs2Walker.shouldYieldForActiveRouteInterim(
+                new WorldPoint(2890, 3396, 0),
+                new WorldPoint(2884, 3390, 0),
+                1_000L,
+                4_900L,
+                5_000L,
+                4_500L,
+                true,
+                6));
     }
 
     @Test

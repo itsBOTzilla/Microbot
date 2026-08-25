@@ -284,6 +284,26 @@ if (isStuckTooLong()) {
 
 **Defensive check:** Start a long route and observe a stationary pause. A short idle pause should log `active route idle nudge`; if it reaches full stall recalc, the next log sequence should include `stall recovery click` and a position delta, not another idle-only `STALL_RECALC` loop at the same tile.
 
+## 14. A ranged door click owns the approach movement
+
+Object interaction can be dispatched several tiles from a door. Once the player starts moving toward the door's near-side edge, release the synchronous door await and retain that approach as in-flight route ownership. Do not burn the full traversal timeout waiting for an edge the player has not reached yet, and do not let recovery or another raw door probe replace the queued interaction while the approach is progressing.
+
+**Why this matters:** A four-tile approach can take longer than the door traversal wait. Treating ordinary approach movement as an unresolved traversal produces a timeout, followed by `door_recovery_suppressed` exits and a multi-second idle-nudge holdoff even though the original click is still working.
+
+**Pattern to follow:**
+
+```java
+if (movingTowardDoorNearSide(clickPosition, playerPosition, from, to)) {
+    releaseDoorAwait("approach-started");
+    retainDoorApproachUntilEdgeResolutionOrMovementStops();
+    return MOVING;
+}
+```
+
+**Where this applies:** ranged scene-object door interaction, `Rs2WalkerAwaits`, recent-door recovery gates, and any fallback scanner that can run before the queued interaction reaches the object.
+
+**Defensive check:** Interact with a door from three or four tiles away. The await should release as `approach-started` after the first position delta, recovery should yield while distance to the near-side edge decreases, and no second door interaction should fire before the approach stops or the edge resolves.
+
 After a handled transport, avoid expensive path-adjacent or raw transport scans on ordinary open-ground segments unless a nearby planned transport or recent door attempt exists. Those scans are recovery tools, and on long outdoor routes a no-op scan can add several seconds before the next minimap click.
 
 For long-route minimap walking, let the next checkpoint selection happen before the current minimap target is fully consumed. Waiting until the player is only a few tiles from the interim makes the walker visibly stop before issuing the next click; handing off at a moderate remaining distance keeps movement continuous without rapid re-clicking. If an interim clears as close and no nearby route door/transport is pending, issue the next route-aligned continuation click immediately instead of waiting for idle-nudge recovery.
@@ -296,12 +316,11 @@ When a route-following minimap click is outside the minimap clip, fallback click
 
 For adjacent same-plane shortcuts, do not treat any movement away from the origin as success. Some shortcuts, such as stepping stones, can fail and place the player on a fallback tile; once the player is settled away from the expected destination, stop the landing wait and replan from the actual tile.
 
-## 14. Match transport execution to its interaction mechanism and interface family
+## 15. Match transport execution to its interaction mechanism and interface family
 
 Transport rows do not all represent scene-object clicks, and related networks can use different widget groups. Before admitting new transport data, verify that the walker has an execution branch for the row's actual interaction and selects the interface from the origin object ID. Fail closed for unknown object IDs and tightly identify object-less item actions by their exact origin, destination, action, target, and item requirement.
 
 **Why this matters:** Barrows mound entries use a spade inventory action and therefore have object ID `0`; the generic object executor skips them. River Lum and River Dougne canoe stations open different map interfaces, so waiting unconditionally for the Lum map makes every Dougne route time out.
-
 **Pattern to follow:**
 
 ```java
@@ -320,3 +339,46 @@ if (mapComponent < 0) {
 **Where this applies:** `Rs2Walker.handleTransports`, specialized transport handlers, and shortest-path transport resource additions.
 
 **Defensive check:** Add pure unit tests for exact item-action recognition and for every supported origin-object-to-interface mapping, plus a loader test proving required item and unlock fields survive TSV parsing.
+
+## 16. Yield object-transport waits when dialogue opens
+
+An object transport can open quest dialogue instead of moving the player immediately. When that happens, end the synchronous transport landing wait and propagate that yield through the outer `processWalk` loop by returning `MOVING` to the calling script. The quest layer owns the dialogue response; the walker should not answer it or keep retrying the object.
+
+**Why this matters:** Quest walking and dialogue handling may run on the same script thread. If the walker keeps waiting for a destination or retries the door, the quest script cannot process the dialogue and movement appears stuck.
+
+**Pattern to follow:**
+
+```java
+boolean landed = waitForPostHandleObjectLanding(...);
+if (Rs2Dialogue.isInDialogue()) {
+    return true; // handled this transport pass
+}
+return landed;
+
+// In processWalk, after recording the handled transport/door:
+if (Rs2Dialogue.isInDialogue() && isRouteProgressExit(exitReason)) {
+    return WalkerState.MOVING; // caller can now process the dialogue
+}
+```
+
+**Where this applies:** `Rs2Walker.handleObject`, post-object transport landing waits, and quest-driven doors or shortcuts that can display dialogue.
+
+**Defensive check:** Open a quest door that displays dialogue. The walker should log `object_transport_dialogue_yield`, then `route_dialogue_yield_to_caller`, and then allow a `quest-helper:dialogue-space-step` without another door click.
+
+## 17. Match checkpoint handoff geometry to minimap selection
+
+Minimap route targets are selected inside a circular Euclidean radius, so the early-handoff check must use that same Euclidean radius. Do not use `WorldPoint.distanceTo2D` for this check: its square/Chebyshev distance can classify a diagonal checkpoint as close before the player has made meaningful progress toward it. Keep the separate close/arrival threshold unchanged.
+
+**Why this matters:** A checkpoint seven tiles away on both axes is within eight tiles by Chebyshev distance but almost ten tiles away geometrically. Releasing that checkpoint immediately defeats sticky-target pacing and causes repeated route processing and visible stop-start movement.
+
+**Pattern to follow:**
+
+```java
+long dx = (long) player.getX() - checkpoint.getX();
+long dy = (long) player.getY() - checkpoint.getY();
+boolean readyForHandoff = dx * dx + dy * dy <= (long) radius * radius;
+```
+
+**Where this applies:** `Rs2Walker` interim waits, active-route yield decisions, and any future minimap checkpoint handoff logic.
+
+**Defensive check:** For a running handoff radius of eight, `(7, 7)` must remain in flight while `(8, 0)` may hand off. Recovery and the five-tile checkpoint-clear contract must remain unchanged.

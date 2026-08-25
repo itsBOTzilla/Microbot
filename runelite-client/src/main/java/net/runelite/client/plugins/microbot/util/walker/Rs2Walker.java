@@ -179,6 +179,7 @@ public class Rs2Walker {
     private static final int DOOR_APPROACH_INTERACT_MAX_TILES = 4;
     private static final long RECOVERY_MOVEMENT_IN_FLIGHT_MS = 3_500L;
     private static final long DOOR_TRAVERSAL_RECOVERY_BLOCK_MS = 2_200L;
+    private static final long DOOR_APPROACH_IN_FLIGHT_MS = 4_000L;
     private static final long POST_DOOR_NUDGE_RECENT_ATTEMPT_MS = 6_000L;
     private static final int PATHFINDER_DONE_POLL_WAIT_MS = 1200;
     private static final int PATHFINDER_DONE_RETRY_SLEEP_MIN_MS = 120;
@@ -818,6 +819,10 @@ public class Rs2Walker {
             default:
                 return false;
         }
+    }
+
+    static boolean shouldYieldRouteProgressToCaller(String exitReason, boolean dialogueOpen) {
+        return dialogueOpen && isRouteProgressExit(exitReason);
     }
 
     /** @return true only when a canvas click was actually issued, so the caller can size its minimap hold-off. */
@@ -2385,9 +2390,18 @@ public class Rs2Walker {
                             }
                             boolean gateDoorInteraction = isDoorInteractionSettling() || isDoorEdgePassSkipCoolingDown();
                             long recentDoorAgeMs = recentDoorAttemptAgeNearIndex(rawPath, rawEdgeStart);
-                            boolean pendingDoorTraversal = recentDoorAgeMs >= 0
+                            boolean playerMoving = Rs2Player.isMoving();
+                            boolean doorApproachInFlight = Rs2WalkerAwaits.isDoorApproachInFlight(
+                                    routeState.lastDoorAttemptPlayerPosition,
+                                    playerLoc,
+                                    routeState.lastDoorAttemptFrom,
+                                    routeState.lastDoorAttemptTo,
+                                    playerMoving,
+                                    recentDoorAgeMs,
+                                    DOOR_APPROACH_IN_FLIGHT_MS);
+                            boolean pendingDoorTraversal = doorApproachInFlight || (recentDoorAgeMs >= 0
                                     && recentDoorAgeMs <= DOOR_TRAVERSAL_RECOVERY_BLOCK_MS
-                                    && !Rs2Player.isMoving();
+                                    && !playerMoving);
                             if (gateDoorInteraction) {
                                 // Avoid any follow-up door probing right after an interaction;
                                 // resolver is still settling and re-probes can loop.
@@ -2738,8 +2752,9 @@ public class Rs2Walker {
                                     break;
                                 }
 								final WorldPoint posBeforeWait = playerLoc;
+								final int preclickTiles = interimPreclickTiles();
 								sleepUntil(() ->
-												interimFinal.distanceTo2D(Rs2Player.getWorldLocation()) <= interimPreclickTiles()
+												isWithinRouteHandoffRadius(Rs2Player.getWorldLocation(), interimFinal, preclickTiles)
 														|| !Rs2Player.isMoving(),
 										INTERIM_MOVING_POLL_MS);
                                 WorldPoint posAfterWait = Rs2Player.getWorldLocation();
@@ -2748,9 +2763,9 @@ public class Rs2Walker {
                                         || Rs2Player.isMoving()) {
 									routeState.lastMovedTimeMs = System.currentTimeMillis();
 									routeState.stuckCount = 0;
-								}
-                                boolean closeEnoughForNextClick = posAfterWait != null
-                                        && interimFinal.distanceTo2D(posAfterWait) <= INTERIM_CLOSE_TILES;
+                                }
+                                boolean closeEnoughForNextClick = isWithinRouteHandoffRadius(
+                                        posAfterWait, interimFinal, preclickTiles);
                                 if (!closeEnoughForNextClick && Rs2Player.isMoving()) {
                                     exitReason = "interim-in-flight";
                                     walkerDiag("interim-in-flight interim=%s interimDist=%d player=%s moving=true",
@@ -3013,6 +3028,14 @@ public class Rs2Walker {
                     // now behind the player.
                     i = targetIdx;
                 }
+            }
+
+            if (shouldYieldRouteProgressToCaller(exitReason, Rs2Dialogue.isInDialogue())) {
+                WebWalkLog.spInfo("route_dialogue_yield_to_caller | r={} at={} goal={}",
+                        exitReason,
+                        compactWorldPoint(Rs2Player.getWorldLocation()),
+                        compactWorldPoint(target));
+                return WalkerState.MOVING;
             }
 
             if (doorOrTransportResult && shouldCanvasNudgeAfterDoorLikeExit(exitReason)) {
@@ -6058,6 +6081,8 @@ public class Rs2Walker {
                                     compactWorldPoint(probe), compactWorldPoint(fromWp), compactWorldPoint(toWp), ex.getClass().getSimpleName());
                             return false;
                         }
+                        recordDoorApproachOwnership(routeState, interacted, posBefore,
+                                fromWp, toWp, System.currentTimeMillis());
                         if (!interacted) {
                             WebWalkLog.spInfo("door_interact_failed | mode=segment-door probe={} from={} to={}",
                                     compactWorldPoint(probe), compactWorldPoint(fromWp), compactWorldPoint(toWp));
@@ -6067,6 +6092,9 @@ public class Rs2Walker {
                         waitForDoorInteractionProgress(fromWp, toWp);
                         WorldPoint posAfter = Rs2Player.getWorldLocation();
                         boolean traversed = didTraverseInteractedDoor(posBefore, posAfter, probe, fromWp, toWp);
+                        if (!traversed && isDoorApproachInFlight(posBefore, posAfter, fromWp, toWp)) {
+                            return true;
+                        }
                         if (!traversed && isQuestLockedDoorDialogue()) {
                             String dialogue = Rs2Dialogue.getDialogueText();
                             log.warn("[Walker] Door at {} ({} action={}) appears quest/stat-locked — dialogue=\"{}\" — blacklisting tile, refreshing restrictions, recalculating",
@@ -6195,6 +6223,8 @@ public class Rs2Walker {
                     compactWorldPoint(probe), compactWorldPoint(fromWp), compactWorldPoint(toWp), ex.getClass().getSimpleName());
             return false;
         }
+        recordDoorApproachOwnership(routeState, interacted, posBefore,
+                fromWp, toWp, System.currentTimeMillis());
         if (!interacted) {
             WebWalkLog.spInfo("door_interact_failed | mode=segment-probe probe={} from={} to={}",
                     compactWorldPoint(probe), compactWorldPoint(fromWp), compactWorldPoint(toWp));
@@ -6204,6 +6234,9 @@ public class Rs2Walker {
         waitForDoorInteractionProgress(fromWp, toWp);
         WorldPoint posAfter = Rs2Player.getWorldLocation();
         boolean traversed = didTraverseInteractedDoor(posBefore, posAfter, probe, fromWp, toWp);
+        if (!traversed && isDoorApproachInFlight(posBefore, posAfter, fromWp, toWp)) {
+            return true;
+        }
         if (traversed) {
             markStationaryDoorOpened(probe);
             markNearbyDoorFamilyOpened(object, probe, action, SEGMENT_DOOR_FAMILY_MARK_RADIUS);
@@ -6688,14 +6721,32 @@ public class Rs2Walker {
                 routeState.interimLastProgressAtMs = nowMs;
             }
         }
-        return shouldDeferRouteWorkForActiveInterim(interim,
+        return shouldYieldForActiveRouteInterim(interim,
                 playerLoc,
                 routeState.interimSetAtMs,
                 routeState.interimLastProgressAtMs,
                 nowMs,
                 routeState.lastMovedTimeMs,
                 Rs2Player.isMoving(),
-                INTERIM_CLOSE_TILES);
+                interimPreclickTiles());
+    }
+
+    static boolean shouldYieldForActiveRouteInterim(WorldPoint interim,
+                                                     WorldPoint playerLoc,
+                                                     long setAtMs,
+                                                     long lastProgressAtMs,
+                                                     long nowMs,
+                                                     long lastMovedAtMs,
+                                                     boolean playerMoving,
+                                                     int handoffTiles) {
+        return shouldDeferRouteWorkForActiveInterim(interim,
+                playerLoc,
+                setAtMs,
+                lastProgressAtMs,
+                nowMs,
+                lastMovedAtMs,
+                playerMoving,
+                handoffTiles);
     }
 
     static boolean shouldYieldForActiveRecoveryInterim(WorldPoint interim,
@@ -6742,7 +6793,7 @@ public class Rs2Walker {
         if (playerLoc == null || playerLoc.getPlane() != interim.getPlane()) {
             return false;
         }
-        if (playerLoc.distanceTo2D(interim) <= Math.max(0, handoffTiles)) {
+        if (isWithinRouteHandoffRadius(playerLoc, interim, handoffTiles)) {
             return false;
         }
         if (playerMoving) {
@@ -6752,6 +6803,18 @@ public class Rs2Walker {
             return true;
         }
         return isRecentEvent(nowMs, lastMovedAtMs, RECOVERY_MOVEMENT_IN_FLIGHT_MS);
+    }
+
+    private static boolean isWithinRouteHandoffRadius(WorldPoint playerLoc,
+                                                       WorldPoint interim,
+                                                       int radius) {
+        if (playerLoc == null || interim == null || playerLoc.getPlane() != interim.getPlane()) {
+            return false;
+        }
+        long dx = (long) playerLoc.getX() - interim.getX();
+        long dy = (long) playerLoc.getY() - interim.getY();
+        long boundedRadius = Math.max(0, radius);
+        return dx * dx + dy * dy <= boundedRadius * boundedRadius;
     }
 
     private static void clearInterimTarget(String reason) {
@@ -6890,11 +6953,19 @@ public class Rs2Walker {
 
     private static void markDoorAttempt(WorldPoint doorTile, WorldPoint fromWp, WorldPoint toWp) {
         Rs2DoorHandler.markDoorAttempt(recentDoorAttemptByEdge, doorTile, fromWp, toWp);
-        if (fromWp != null && toWp != null) {
-            routeState.lastDoorAttemptFrom = fromWp;
-            routeState.lastDoorAttemptTo = toWp;
-            routeState.lastDoorAttemptAtMs = System.currentTimeMillis();
+    }
+
+    static void recordDoorApproachOwnership(WalkerRouteState state, boolean interactionDispatched,
+                                            WorldPoint playerPosition, WorldPoint fromWp, WorldPoint toWp,
+                                            long nowMs) {
+        if (!interactionDispatched || state == null || playerPosition == null
+                || fromWp == null || toWp == null || nowMs <= 0L) {
+            return;
         }
+        state.lastDoorAttemptPlayerPosition = playerPosition;
+        state.lastDoorAttemptFrom = fromWp;
+        state.lastDoorAttemptTo = toWp;
+        state.lastDoorAttemptAtMs = nowMs;
     }
 
     private static boolean shouldThrottleCurrentTileTransportAttempt(WorldPoint fromWp, WorldPoint toWp) {
@@ -7151,6 +7222,15 @@ public class Rs2Walker {
                 rawScanDoorInteractionWaitMs += System.currentTimeMillis() - startedAt;
             }
         }
+    }
+
+    private static boolean isDoorApproachInFlight(WorldPoint before, WorldPoint now,
+                                                   WorldPoint fromWp, WorldPoint toWp) {
+        long ageMs = routeState.lastDoorAttemptAtMs <= 0L
+                ? -1L
+                : System.currentTimeMillis() - routeState.lastDoorAttemptAtMs;
+        return Rs2WalkerAwaits.isDoorApproachInFlight(
+                before, now, fromWp, toWp, Rs2Player.isMoving(), ageMs, DOOR_APPROACH_IN_FLIGHT_MS);
     }
 
     private static boolean waitForDoorEdgeResolution(WorldPoint fromWp, WorldPoint toWp, int timeoutMs) {
@@ -7876,6 +7956,8 @@ public class Rs2Walker {
             }
 			return false;
 		}
+		recordDoorApproachOwnership(routeState, interacted, posBefore,
+				bestFrom, bestTo, System.currentTimeMillis());
 		if (!interacted) {
 			WebWalkLog.spInfo("door_interact_failed | mode=path-adj probe={} from={} to={}",
 					compactWorldPoint(bestLoc), compactWorldPoint(bestFrom), compactWorldPoint(bestTo));
@@ -7890,6 +7972,9 @@ public class Rs2Walker {
 		waitForDoorInteractionProgress(bestFrom, bestTo);
 		WorldPoint posAfter = Rs2Player.getWorldLocation();
 		boolean traversed = didTraverseInteractedDoor(posBefore, posAfter, bestLoc, bestFrom, bestTo);
+		if (!traversed && isDoorApproachInFlight(posBefore, posAfter, bestFrom, bestTo)) {
+			return true;
+		}
 		if (traversed) {
             for (WorldPoint loc : bestComponent.locations) {
                 if (loc != null) {
@@ -9170,6 +9255,18 @@ public class Rs2Walker {
                             return false;
                         }
                         boolean landedAfterObject = waitForPostHandleObjectLanding(transport, destWait, maxInclusive);
+                        boolean dialogueOpen = Rs2Dialogue.isInDialogue();
+                        if (shouldEndObjectTransportPass(landedAfterObject, dialogueOpen)) {
+                            if (dialogueOpen) {
+                                WebWalkLog.spInfo("object_transport_dialogue_yield | origin={} dest={} at={}",
+                                        compactWorldPoint(transport.getOrigin()),
+                                        compactWorldPoint(destWait),
+                                        compactWorldPoint(Rs2Player.getWorldLocation()));
+                                return true;
+                            }
+                            markAdjacentSamePlaneTransportHandled(transport, object);
+                            return finishHandledTransport(transport);
+                        }
                         if (!landedAfterObject) {
                             WorldPoint afterInteraction = Rs2Player.getWorldLocation();
                             // Adjacent same-plane transports demand landing on the EXACT destination
@@ -9192,10 +9289,6 @@ public class Rs2Walker {
                                     compactWorldPoint(destWait),
                                     compactWorldPoint(afterInteraction));
                         }
-                        if (landedAfterObject) {
-                            markAdjacentSamePlaneTransportHandled(transport, object);
-                            return finishHandledTransport(transport);
-                        }
                         return false;
                     }
                 }
@@ -9211,7 +9304,8 @@ public class Rs2Walker {
         AtomicBoolean settledAwayFromAdjacentDestination = new AtomicBoolean(false);
         AtomicBoolean settledNearAdjacentDestination = new AtomicBoolean(false);
         boolean completed = sleepUntil(() -> {
-            if (isPlayerWithinChebyshevInclusive(destWait, maxInclusive)) {
+            boolean atDestination = isPlayerWithinChebyshevInclusive(destWait, maxInclusive);
+            if (shouldEndObjectTransportPass(atDestination, Rs2Dialogue.isInDialogue())) {
                 return true;
             }
             if (!isAdjacentSamePlaneTransport(transport)
@@ -9237,6 +9331,9 @@ public class Rs2Walker {
             return false;
         }, POST_HANDLE_OBJECT_LANDING_WAIT_MS);
 
+        if (Rs2Dialogue.isInDialogue()) {
+            return false;
+        }
         if (settledNearAdjacentDestination.get()) {
             WebWalkLog.spInfo("post-handleObject adjacent landing accepted | dest={} at={}",
                     compactWorldPoint(destWait), compactWorldPoint(Rs2Player.getWorldLocation()));
@@ -9248,6 +9345,10 @@ public class Rs2Walker {
             return false;
         }
         return completed;
+    }
+
+    static boolean shouldEndObjectTransportPass(boolean landed, boolean dialogueOpen) {
+        return landed || dialogueOpen;
     }
 
     static boolean isSettledNearAdjacentSamePlaneLanding(Transport transport,
@@ -9417,11 +9518,17 @@ public class Rs2Walker {
                 Rs2Dialogue.clickOption("Yes please"); //shillo village cart
                 if (isAdjacentSamePlaneTransport(transport)) {
                     sleepUntil(() -> {
+                        if (Rs2Dialogue.isInDialogue()) {
+                            return true;
+                        }
                         WorldPoint now = Rs2Player.getWorldLocation();
                         return now != null && (now.equals(transport.getDestination())
                                 || !now.equals(before)
                                 || !Rs2Player.isMoving());
                     }, 2000);
+                    if (Rs2Dialogue.isInDialogue()) {
+                        return true;
+                    }
                     WorldPoint afterOpen = Rs2Player.getWorldLocation();
                     if (afterOpen != null && !afterOpen.equals(transport.getDestination())) {
                         boolean clicked = walkMiniMap(transport.getDestination());
@@ -12293,7 +12400,7 @@ public class Rs2Walker {
             WalkerState state = walkWithStateInternal(target, distance);
             if (state == WalkerState.ARRIVED) {
                 WebWalkLog.bankWalkDebug("arrived goal={}", target);
-            } else {
+            } else if (isTerminalBankedDirectWalkFailure(state)) {
                 WebWalkLog.bankWalkFailed(target, state);
                 setTarget(null, "rs2walker:walkWithBankedTransports:direct-walk-failed");
                 return state;
@@ -12327,6 +12434,10 @@ public class Rs2Walker {
         }
 
 
+    }
+
+    static boolean isTerminalBankedDirectWalkFailure(WalkerState state) {
+        return state == WalkerState.UNREACHABLE || state == WalkerState.EXIT;
     }
 
     /**

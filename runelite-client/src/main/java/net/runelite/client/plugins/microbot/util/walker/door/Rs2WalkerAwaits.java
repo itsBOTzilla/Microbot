@@ -14,6 +14,7 @@ import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
 public final class Rs2WalkerAwaits {
     private static final int DOOR_INTERACTION_START_WAIT_MS = 700;
     private static final int DOOR_TRAVERSAL_PROGRESS_WAIT_MS = 2200;
+    private static final long DOOR_APPROACH_IN_FLIGHT_MS = 4_000L;
     /** Stationary and not animating for longer than this, with the edge unresolved, means the click didn't land. */
     private static final long DOOR_IDLE_ACCEPT_MIN_MS = 1_200L;
     /** Above this combined wait, say which condition released the door await. */
@@ -80,11 +81,16 @@ public final class Rs2WalkerAwaits {
                 releasedBy[0] = "arrived-far-side";
                 return true;
             }
+            long elapsedMs = System.currentTimeMillis() - ticket.startedAtMs();
+            if (isDoorApproachInFlight(ticket.beforePosition(), now, fromWp, toWp,
+                    Rs2Player.isMoving(), elapsedMs, DOOR_APPROACH_IN_FLIGHT_MS)) {
+                releasedBy[0] = "approach-started";
+                return true;
+            }
             if (hasMeaningfulDoorProgress(ticket.beforePosition(), now, fromWp, toWp)) {
                 releasedBy[0] = "progress";
                 return true;
             }
-            long elapsedMs = System.currentTimeMillis() - ticket.startedAtMs();
             boolean idleAccepted = shouldAcceptIdleDoorAwait(
                     Rs2Player.isMoving(),
                     Rs2Player.isAnimating(),
@@ -184,5 +190,29 @@ public final class Rs2WalkerAwaits {
         int beforeFrom = before.distanceTo2D(fromWp);
         int nowFrom = now.distanceTo2D(fromWp);
         return nowTo < beforeTo && nowFrom >= beforeFrom;
+    }
+
+    public static boolean isDoorApproachInFlight(WorldPoint before, WorldPoint now,
+                                                  WorldPoint fromWp, WorldPoint toWp,
+                                                  boolean moving, long ageMs, long maxAgeMs) {
+        if (!moving || ageMs < 0L || ageMs > maxAgeMs
+                || before == null || now == null || fromWp == null || toWp == null
+                || before.equals(now)) {
+            return false;
+        }
+        int plane = before.getPlane();
+        if (now.getPlane() != plane || fromWp.getPlane() != plane || toWp.getPlane() != plane) {
+            return false;
+        }
+        if (Rs2WalkerProgress.isWithinChebyshev(now, toWp, 1)) {
+            return false;
+        }
+
+        int nowFrom = now.distanceTo2D(fromWp);
+        int nowTo = now.distanceTo2D(toWp);
+        if (nowTo + 1 < nowFrom) {
+            return false;
+        }
+        return nowFrom < before.distanceTo2D(fromWp);
     }
 }
