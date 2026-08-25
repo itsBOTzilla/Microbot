@@ -109,6 +109,8 @@ public final class WalkerRouteState {
     /** Origin/destination/time of the last door interaction attempt (wrong-traversal detection reads these). */
     public volatile WorldPoint lastDoorAttemptFrom = null;
     public volatile WorldPoint lastDoorAttemptTo = null;
+    /** Player tile when the last door click was dispatched; used to recognize ranged approach progress. */
+    public volatile WorldPoint lastDoorAttemptPlayerPosition = null;
     public volatile long lastDoorAttemptAtMs = 0L;
     /** Global door-interaction throttle: no door interaction may fire before this wall-clock ms. */
     public volatile long nextDoorInteractionAllowedAtMs = 0L;

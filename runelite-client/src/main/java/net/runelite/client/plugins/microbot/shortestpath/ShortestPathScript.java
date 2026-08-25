@@ -89,34 +89,62 @@ public class ShortestPathScript extends Script {
 
         walkTaskFuture = scheduledExecutorService.submit(() -> {
             try {
-                WorldPoint target = getTriggerWalker();
-                if (target == null || config == null || !Microbot.isLoggedIn()) {
-                    return;
-                }
-
-                WalkerState state;
-                if (config.walkWithBankedTransports()) {
-                    state = Rs2Walker.walkWithBankedTransportsAndState(target, 10, false);
-                } else {
-                    state = Rs2Walker.walkWithState(target);
-                }
-
-                if (target.equals(getTriggerWalker())) {
-                    if (state == WalkerState.EXIT && shouldRetryAfterExit(target)) {
+                while (!Thread.currentThread().isInterrupted() && Microbot.isLoggedIn()) {
+                    WorldPoint target = getTriggerWalker();
+                    ShortestPathConfig currentConfig = config;
+                    if (target == null || currentConfig == null) {
                         return;
+                    }
+
+                    WalkerState state;
+                    if (currentConfig.walkWithBankedTransports()) {
+                        state = Rs2Walker.walkWithBankedTransportsAndState(
+                                target,
+                                currentConfig.reachedDistance(),
+                                false);
+                    } else {
+                        state = Rs2Walker.walkWithState(target);
+                    }
+
+                    WorldPoint currentTarget = getTriggerWalker();
+                    if (!target.equals(currentTarget)) {
+                        return;
+                    }
+                    if (state == WalkerState.EXIT && shouldRetryAfterExit(target)) {
+                        sleepUntil(() -> Thread.currentThread().isInterrupted()
+                                || !target.equals(getTriggerWalker()), 150);
+                        continue;
                     }
                     if (state == WalkerState.ARRIVED || state == WalkerState.UNREACHABLE || state == WalkerState.EXIT) {
                         resetExitRetryState();
                         triggerWalker = null;
                         Rs2Walker.clearWalkingRoute("shortest-path-script:walk-task-terminal-state");
+                        return;
                     }
+
+                    if (!shouldContinueWalkTask(target, currentTarget, state)) {
+                        return;
+                    }
+                    sleepUntil(() -> Thread.currentThread().isInterrupted()
+                            || !target.equals(getTriggerWalker()), 150);
                 }
             } catch (Exception ex) {
-                log.error("Exception in ShortestPathScript walk task: {} - ", ex.getMessage(), ex);
+                if (!Thread.currentThread().isInterrupted()) {
+                    log.error("Exception in ShortestPathScript walk task: {} - ", ex.getMessage(), ex);
+                }
             } finally {
                 walkTaskRunning.set(false);
             }
         });
+    }
+
+    static boolean shouldContinueWalkTask(
+            WorldPoint target,
+            WorldPoint currentTarget,
+            WalkerState state) {
+        return target != null
+                && target.equals(currentTarget)
+                && state == WalkerState.MOVING;
     }
 
     private boolean shouldRetryAfterExit(WorldPoint target) {

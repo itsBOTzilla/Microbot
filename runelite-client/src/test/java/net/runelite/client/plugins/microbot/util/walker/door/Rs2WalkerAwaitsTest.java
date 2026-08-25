@@ -1,5 +1,6 @@
 package net.runelite.client.plugins.microbot.util.walker.door;
 
+import net.runelite.api.coords.WorldPoint;
 import org.junit.Test;
 
 import static org.junit.Assert.assertFalse;
@@ -32,5 +33,46 @@ public class Rs2WalkerAwaitsTest {
     public void shouldAcceptIdleDoorAwait_rejectsBeforeMinimumElapsed() {
         assertFalse(Rs2WalkerAwaits.shouldAcceptIdleDoorAwait(false, false, 1200L, true));
         assertFalse(Rs2WalkerAwaits.shouldAcceptIdleDoorAwait(false, false, 800L, true));
+    }
+
+    @Test
+    public void doorApproachInFlight_acceptsMovementTowardNearSide() {
+        assertTrue(Rs2WalkerAwaits.isDoorApproachInFlight(
+                new WorldPoint(3170, 3300, 0),
+                new WorldPoint(3169, 3301, 0),
+                new WorldPoint(3167, 3302, 0),
+                new WorldPoint(3166, 3303, 0),
+                true,
+                700L,
+                4000L));
+    }
+
+    @Test
+    public void doorApproachInFlight_rejectsMovementAwayFromDoor() {
+        assertFalse(Rs2WalkerAwaits.isDoorApproachInFlight(
+                new WorldPoint(3169, 3301, 0),
+                new WorldPoint(3170, 3300, 0),
+                new WorldPoint(3167, 3302, 0),
+                new WorldPoint(3166, 3303, 0),
+                true,
+                700L,
+                4000L));
+    }
+
+    @Test
+    public void doorApproachInFlight_rejectsExpiredStationaryOrCrossedMovement() {
+        WorldPoint before = new WorldPoint(3169, 3301, 0);
+        WorldPoint nearSide = new WorldPoint(3167, 3302, 0);
+        WorldPoint farSide = new WorldPoint(3166, 3303, 0);
+
+        assertFalse(Rs2WalkerAwaits.isDoorApproachInFlight(
+                before, new WorldPoint(3168, 3302, 0), nearSide, farSide,
+                false, 700L, 4000L));
+        assertFalse(Rs2WalkerAwaits.isDoorApproachInFlight(
+                before, new WorldPoint(3168, 3302, 0), nearSide, farSide,
+                true, 4001L, 4000L));
+        assertFalse(Rs2WalkerAwaits.isDoorApproachInFlight(
+                before, farSide, nearSide, farSide,
+                true, 700L, 4000L));
     }
 }
