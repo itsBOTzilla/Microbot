@@ -2469,7 +2469,7 @@ public class Rs2Walker {
                                 break;
                             }
                             if (handlePendingDoorNearRawPath(rawPath, obstaclePolicy.unreachableDoorTimeoutMs(),
-                                    doorEdgesAttemptedThisTail, playerLoc, 2, 14)) {
+                                    doorEdgesAttemptedThisTail, playerLoc, 2, 14, false)) {
                                 exitReason = "door-handled-local-reachability-raw-scan";
                                 break;
                             }
@@ -5203,11 +5203,11 @@ public class Rs2Walker {
                                                           WorldPoint playerLoc) {
         if (rawPath == null || rawPath.size() < 2 || playerLoc == null
                 || isDoorInteractionSettling() || isDoorEdgePassSkipCoolingDown()
-                || isRecoveryMovementInFlight() || Rs2Player.isMoving()) {
+                || isRecoveryMovementInFlight()) {
             return false;
         }
 
-        return handlePendingDoorNearRawPath(rawPath, timeoutMs, attempted, playerLoc, 2, 14);
+        return handlePendingDoorNearRawPath(rawPath, timeoutMs, attempted, playerLoc, 2, 14, true);
     }
 
     private static boolean handlePendingDoorNearRawPath(List<WorldPoint> rawPath,
@@ -5215,11 +5215,12 @@ public class Rs2Walker {
                                                         Map<String, WorldPoint> attempted,
                                                         WorldPoint playerLoc,
                                                         int backtrackEdges,
-                                                        int lookaheadEdges) {
+                                                        int lookaheadEdges,
+                                                        boolean allowMovingApproach) {
         if (rawPath == null || rawPath.size() < 2 || playerLoc == null) {
             return false;
         }
-        if (Rs2Player.isMoving()) {
+        if (shouldDeferPendingDoorRawScan(Rs2Player.isMoving(), allowMovingApproach)) {
             return false;
         }
 
@@ -5253,6 +5254,10 @@ public class Rs2Walker {
             }
         }
         return false;
+    }
+
+    static boolean shouldDeferPendingDoorRawScan(boolean moving, boolean allowMovingApproach) {
+        return moving && !allowMovingApproach;
     }
 
     private static boolean handleUnresolvedDoorNearRawPath(List<WorldPoint> rawPath,
