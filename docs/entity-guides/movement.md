@@ -358,3 +358,36 @@ boolean readyForHandoff = dx * dx + dy * dy <= (long) radius * radius;
 **Where this applies:** `Rs2Walker` interim waits, active-route yield decisions, and any future minimap checkpoint handoff logic.
 
 **Defensive check:** For a running handoff radius of eight, `(7, 7)` must remain in flight while `(8, 0)` may hand off. Recovery and the five-tile checkpoint-clear contract must remain unchanged.
+
+Apply the route handoff at the start of the next walk pass, before collision, door, and transport scans, and apply the same decision if the path loop revisits the checkpoint in the same pass that issued it. Waking the pass at the larger pre-click radius without releasing the route-owned checkpoint there still lets those scans consume the remaining movement time and produces a stop before the continuation click. Require observed distance progress before this early release so a newly issued seven-tile checkpoint is not immediately replaced by an eight-tile running handoff. Tag recovery-owned checkpoints separately and keep them on the five-tile clear threshold.
+
+## 18. Exit a walk when the local player disappears
+
+Login transitions, connection loss, profile changes, and client shutdown can make `Client.getLocalPlayer()` return null while a blocking walk is still inside a movement wait. Treat a missing player location as a normal walk exit. Do not dereference it for an arrival-distance check, and do not keep a stale walker target active.
+
+**Why this matters:** A Fishing return walk reached its anchor, then the local player disappeared during the final idle wait. `Rs2Player.getWorldLocation_Internal()` threw on the client thread and `Rs2Walker.processWalk()` immediately threw again while calculating the final distance.
+
+**Pattern to follow:**
+
+```java
+WorldPoint player = Rs2Player.getWorldLocation();
+if (player == null) {
+    setTarget(null, "rs2walker:player-unavailable");
+    return WalkerState.EXIT;
+}
+int distance = player.distanceTo(target);
+```
+
+**Where this applies:** `Rs2Player.getWorldLocation_Internal()`, blocking `Rs2Walker` waits, final arrival checks, and exception/diagnostic paths that run during login or shutdown transitions.
+
+**Defensive check:** Unit-test the local-player-null resolver, and guard every post-wait distance calculation before dereferencing the returned `WorldPoint`.
+
+## 19. Let the normal route selector own the first movement click
+
+Before the first movement click, skip speculative local-reachability recovery for unreachable smoothed waypoints. The startup path already avoids broad segment handlers, and the normal route selector can choose a collision-reachable raw-path point. Keep the final `handlePendingDoorBeforeRouteClick` guard so a real nearby door is still resolved before dispatch.
+
+**Why this matters:** A short route can contain a smoothed waypoint across a wall even though its raw route is valid. Treating that waypoint as a blocked frontier during startup runs several door and transport timeout windows, replans a walled recovery target, and can let the idle nudge issue the first click away from the goal. In the observed Varrock route, pathfinding completed in 344 ms but this recovery cascade delayed the first action until 6.8 seconds.
+
+**Where this applies:** the `Rs2Walker.processWalk` local-reachability branch before `firstMovementClickMarked`, startup obstacle policy, and the final route-click door check.
+
+**Defensive check:** On a fresh walk with an unreachable smoothed waypoint but a usable raw route, logs should progress from `preclick_segment_handler_skip` to `click_candidate_found` and `first_minimap_click`; they should not emit `frontier rewind`, `recovery_target_walled`, or `active_route_idle_nudge` before that first click.
