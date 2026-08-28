@@ -1635,6 +1635,42 @@ public class Rs2WalkerUnitTest {
     }
 
     @Test
+    public void routeInterimReadyForContinuation_handsOffEarlyWithoutWeakeningRecovery() {
+        WorldPoint interim = new WorldPoint(2890, 3396, 0);
+        WorldPoint initialPlayer = new WorldPoint(2883, 3396, 0);
+        WorldPoint progressedPlayer = new WorldPoint(2884, 3396, 0);
+
+        assertFalse(Rs2Walker.routeInterimReadyForContinuation(
+                interim, initialPlayer, 7, false, 8));
+        assertTrue(Rs2Walker.routeInterimReadyForContinuation(
+                interim, progressedPlayer, 7, false, 8));
+        assertFalse(Rs2Walker.routeInterimReadyForContinuation(
+                interim, progressedPlayer, 7, true, 8));
+    }
+
+    @Test
+    public void shouldHoldInterimBeforeRouteScans_enforcesProgressAndRecoveryBoundaries() {
+        WorldPoint interim = new WorldPoint(2890, 3396, 0);
+        long now = 5_000L;
+
+        assertTrue(Rs2Walker.shouldHoldInterimBeforeRouteScans(
+                interim, new WorldPoint(2883, 3396, 0),
+                4_900L, 4_900L, now, 4_900L, 7, false, true, 8));
+        assertFalse(Rs2Walker.shouldHoldInterimBeforeRouteScans(
+                interim, new WorldPoint(2884, 3396, 0),
+                4_900L, 4_900L, now, 4_900L, 7, false, true, 8));
+        assertTrue(Rs2Walker.shouldHoldInterimBeforeRouteScans(
+                interim, new WorldPoint(2884, 3396, 0),
+                4_900L, 4_900L, now, 4_900L, 7, true, true, 8));
+        assertFalse(Rs2Walker.shouldHoldInterimBeforeRouteScans(
+                interim, new WorldPoint(2885, 3396, 0),
+                4_900L, 4_900L, now, 4_900L, 7, true, true, 8));
+        assertTrue(Rs2Walker.shouldHoldInterimBeforeRouteScans(
+                interim, new WorldPoint(2883, 3389, 0),
+                4_900L, 4_900L, now, 4_900L, 7, false, true, 8));
+    }
+
+    @Test
     public void routeMovementClickPhase_labelsContinuationSeparatelyFromRecovery() {
         assertEquals("stall_recovery_click", Rs2Walker.routeMovementClickPhase("stall recovery click"));
         assertEquals("active_route_idle_nudge", Rs2Walker.routeMovementClickPhase("active route idle nudge"));
@@ -1732,6 +1768,30 @@ public class Rs2WalkerUnitTest {
                 false,
                 false,
                 false));
+    }
+
+    @Test
+    public void shouldRunLocalReachabilityRecovery_startupBeforeFirstClick_usesNormalRouteClick() {
+        assertFalse("startup must reach the normal route-click path before speculative recovery scans",
+                Rs2Walker.shouldRunLocalReachabilityRecovery(false, false, true));
+        assertTrue("steady walking must retain blocked-frontier recovery",
+                Rs2Walker.shouldRunLocalReachabilityRecovery(false, false, false));
+        assertFalse("reachable route tiles do not need recovery",
+                Rs2Walker.shouldRunLocalReachabilityRecovery(true, false, false));
+        assertFalse("instances do not use overworld local recovery",
+                Rs2Walker.shouldRunLocalReachabilityRecovery(false, true, false));
+    }
+
+    @Test
+    public void shouldAttemptRouteClick_startupWaypointBypassesRandomDistanceThreshold() {
+        assertTrue("startup must enter the common click dispatcher for the first nonzero waypoint",
+                Rs2Walker.shouldAttemptRouteClick(6, 12, false, true));
+        assertFalse("steady walking keeps the normal checkpoint distance threshold",
+                Rs2Walker.shouldAttemptRouteClick(6, 12, false, false));
+        assertFalse("the player's current tile is not a movement target",
+                Rs2Walker.shouldAttemptRouteClick(0, 12, false, true));
+        assertTrue("planned transport approaches remain eligible in every phase",
+                Rs2Walker.shouldAttemptRouteClick(0, 12, true, false));
     }
 
     @Test

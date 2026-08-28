@@ -62,6 +62,8 @@ public final class WalkerRouteState {
     public volatile int interimLastDistanceToTarget = Integer.MAX_VALUE;
     /** Wall-clock ms the interim target was last re-chosen. */
     public volatile long interimLastRetargetAtMs = 0L;
+    /** Whether the current interim target was issued by recovery rather than normal route flow. */
+    public volatile boolean interimTargetRecovery = false;
 
     // ---- idle nudge: detects a stationary player mid-route and re-clicks to un-stick. ----
 
