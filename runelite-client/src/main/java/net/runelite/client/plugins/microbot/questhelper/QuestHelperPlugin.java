@@ -234,6 +234,7 @@ public class QuestHelperPlugin extends Plugin
 	@Override
 	protected void shutDown()
 	{
+		questScript.shutdown();
 		runeliteObjectManager.shutDown();
 
 		eventBus.unregister(playerStateManager);

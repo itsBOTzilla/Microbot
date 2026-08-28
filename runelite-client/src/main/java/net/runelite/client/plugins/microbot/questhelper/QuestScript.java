@@ -1504,6 +1504,8 @@ public class QuestScript extends Script {
 
             boolean interacted;
             boolean itemOnObjectInteraction = itemId != -1;
+            int initialItemQuantity = itemOnObjectInteraction ? Rs2Inventory.itemQuantity(itemId) : 0;
+            long interactedObjectHash = object.getHash();
             if (itemId == -1) {
                 interacted = Rs2GameObject.interact(tileObject, chooseCorrectObjectOption(step, object));
             } else {
@@ -1517,9 +1519,12 @@ public class QuestScript extends Script {
                 return false;
             }
 
-            boolean interactionStarted = sleepUntil(() -> Rs2Player.isMoving()
-                    || Rs2Player.isAnimating()
-                    || itemOnObjectInteraction && !isInventoryItemSelected(), 1_200);
+            boolean interactionStarted = sleepUntil(() -> isObjectInteractionConfirmed(
+                    Rs2Player.isMoving(),
+                    Rs2Player.isAnimating(),
+                    Rs2Dialogue.isInDialogue(),
+                    itemOnObjectInteraction && Rs2Inventory.itemQuantity(itemId) != initialItemQuantity,
+                    Rs2GameObject.getAll(candidate -> candidate.getHash() == interactedObjectHash).isEmpty()), 1_200);
             if (!interactionStarted) {
                 return false;
             }
@@ -1539,6 +1544,11 @@ public class QuestScript extends Script {
         return objectAvailable
                 ? !objectInLineOfSight
                 : moreThanOneTileFromStep;
+    }
+
+    static boolean isObjectInteractionConfirmed(boolean moving, boolean animating, boolean dialogueOpen,
+                                                boolean itemQuantityChanged, boolean objectChanged) {
+        return moving || animating || dialogueOpen || itemQuantityChanged || objectChanged;
     }
 
     static WorldPoint selectObjectApproachTile(WorldArea objectArea, WorldPoint playerLocation,
