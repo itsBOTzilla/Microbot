@@ -26,6 +26,7 @@ import net.runelite.client.plugins.microbot.util.dialogues.Rs2Dialogue;
 import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
 import net.runelite.client.plugins.microbot.util.grandexchange.Rs2GrandExchange;
 import net.runelite.client.plugins.microbot.util.grandexchange.models.WikiPrice;
+import net.runelite.client.plugins.microbot.util.gameobject.Rs2GameObject;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.keyboard.Rs2Keyboard;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
@@ -53,6 +54,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.IntPredicate;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
@@ -141,13 +144,53 @@ public class QuestScript extends Script {
                 }
 
                 if (questStep != null && !questStep.getWidgetsToHighlight().isEmpty()) {
-                    var widgetHighlight = questStep.getWidgetsToHighlight().stream()
+                    var visibleWidgetHighlights = questStep.getWidgetsToHighlight().stream()
                             .filter(x -> x instanceof WidgetHighlight)
                             .map(x -> (WidgetHighlight) x)
                             .filter(x -> Rs2Widget.isWidgetVisible(x.getInterfaceID()))
-                            .findFirst().orElse(null);
+                            .collect(Collectors.toList());
+
+                    List<Integer> shopItemIds = visibleWidgetHighlights.stream()
+                            .map(WidgetHighlight::getItemIdRequirement)
+                            .filter(Objects::nonNull)
+                            .collect(Collectors.toList());
+                    if (Rs2Shop.isOpen() && !shopItemIds.isEmpty()) {
+                        int itemId = firstMissingShopItemId(shopItemIds, Rs2Inventory::hasItem);
+                        if (itemId != -1 && Rs2Shop.buyItem(itemId, "1")) {
+                            sleepUntil(() -> Rs2Inventory.hasItem(itemId), 3_000);
+                        }
+                        return;
+                    }
+
+                    var widgetHighlight = visibleWidgetHighlights.stream().findFirst().orElse(null);
 
                     if (widgetHighlight != null) {
+                        Integer highlightedItemId = widgetHighlight.getItemIdRequirement();
+                        if (highlightedItemId != null) {
+                            if (Rs2Widget.isProductionWidgetOpen()) {
+                                ItemComposition itemComposition = Microbot.getRs2ItemManager()
+                                        .getItemComposition(highlightedItemId);
+                                if (itemComposition != null) {
+                                    Rs2Widget.enableQuantityOption("All");
+                                    if (Rs2Widget.handleProcessingInterface(itemComposition.getName())) {
+                                        Rs2Player.waitForAnimation();
+                                    }
+                                    return;
+                                }
+                            }
+
+                            Rectangle targetBounds = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+                                Widget root = Microbot.getClient().getWidget(widgetHighlight.getInterfaceID());
+                                Widget target = findVisibleWidgetByItemId(root, highlightedItemId);
+                                return target == null ? null : new Rectangle(target.getBounds());
+                            }).orElse(null);
+                            if (targetBounds != null && !targetBounds.isEmpty()) {
+                                Microbot.getMouse().click(targetBounds);
+                                Rs2Player.waitForAnimation();
+                            }
+                            return;
+                        }
+
                         var widget = Rs2Widget.getWidget(widgetHighlight.getInterfaceID());
                         if (widget != null) {
                             if (widgetHighlight.getChildChildId() != -1) {
@@ -244,7 +287,7 @@ public class QuestScript extends Script {
 						return;
 					}
 
-					if (questStep instanceof DetailedQuestStep && shouldObtainMissingItems() && handleMissingItemRequirements((DetailedQuestStep) questStep)) {
+					if (questStep instanceof DetailedQuestStep && handleMissingItemRequirements((DetailedQuestStep) questStep)) {
 						return;
 					}
 
@@ -314,7 +357,7 @@ public class QuestScript extends Script {
 		List<ItemRequirement> missing = new ArrayList<>();
 		List<ItemRequirement> needsUnnoting = new ArrayList<>();
 
-		for (Requirement requirement : collectAllItemRequirements(questStep)) {
+		for (Requirement requirement : questStep.getRequirements()) {
 			if (!(requirement instanceof ItemRequirement)) {
 				continue;
 			}
@@ -346,6 +389,10 @@ public class QuestScript extends Script {
 
 		if (missing.isEmpty()) {
 			return false;
+		}
+
+		if (!shouldObtainMissingItems()) {
+			return obtainItemsPromptInFlight.get();
 		}
 
 		ItemRequirement nonTradable = missing.stream()
@@ -1358,24 +1405,24 @@ public class QuestScript extends Script {
 
 
     public boolean applyObjectStep(ObjectStep step) {
-        Rs2TileObjectModel object = step.getObjects().stream()
+        TileObject tileObject = step.getObjects().stream()
                 .filter(Objects::nonNull)
-                .map(Rs2TileObjectModel::new)
                 .findFirst().orElse(null);
+        Rs2TileObjectModel object = tileObject == null ? null : new Rs2TileObjectModel(tileObject);
         var itemId = step.getIconItemID();
 
-        List<Rs2TileObjectModel> stepObjects = step.getObjects().stream()
+        List<TileObject> stepObjects = step.getObjects().stream()
                 .filter(Objects::nonNull)
-                .map(Rs2TileObjectModel::new)
                 .collect(Collectors.toList());
 
         if (stepObjects.size() > 1) {
-            object = stepObjects.stream()
+            tileObject = stepObjects.stream()
                     .filter(x -> !objectsHandeled.contains(x.getHash()))
                     .findFirst()
                     .orElseGet(() -> stepObjects.stream()
                             .min(Comparator.comparing(x -> Rs2Player.getWorldLocation().distanceTo(x.getWorldLocation())))
                             .orElse(null));
+            object = tileObject == null ? null : new Rs2TileObjectModel(tileObject);
         }
 
         if (object != null && unreachableTarget) {
@@ -1401,13 +1448,29 @@ public class QuestScript extends Script {
             return false;
         }
 
-        // Walk first when more than one tile away AND the target is either unreachable or not in line of
-        // sight. canReach() can still return true with a closed door between us; routing through the
-        // walker lets it open the door before we try to interact.
-        if (step.getDefinedPoint().getWorldPoint() != null && Rs2Player.getWorldLocation().distanceTo2D(step.getDefinedPoint().getWorldPoint()) > 1
-                && (object == null || !Rs2Walker.canReach(object.getWorldLocation()) || !hasLineOfSightToObject(object))) {
+        // A nearby object can still be behind a wall. When the object is present, use its reachability and
+        // line of sight to decide whether to route to an interaction tile; only use coordinate distance as
+        // the fallback when the object has not loaded yet.
+        WorldPoint definedWorldPoint = step.getDefinedPoint().getWorldPoint();
+        boolean moreThanOneTileFromStep = definedWorldPoint != null
+                && Rs2Player.getWorldLocation().distanceTo2D(definedWorldPoint) > 1;
+        boolean objectInLineOfSight = tileObject != null
+                && Rs2GameObject.hasLineOfSight(Rs2Player.getWorldLocation(), tileObject);
+        if (definedWorldPoint != null && shouldWalkToObjectApproach(object != null, moreThanOneTileFromStep,
+                objectInLineOfSight)) {
             WorldPoint targetTile = null;
             WorldPoint stepLocation = object == null ? step.getDefinedPoint().getWorldPoint() : object.getWorldLocation();
+
+            if (tileObject instanceof GameObject) {
+                TileObject approachObject = tileObject;
+                WorldArea objectArea = Rs2GameObject.getWorldArea((GameObject) approachObject);
+                targetTile = selectObjectApproachTile(
+                        objectArea,
+                        Rs2Player.getWorldLocation(),
+                        Rs2Tile::isWalkable,
+                        point -> Rs2GameObject.hasLineOfSight(point, approachObject));
+            }
+
             int radius = 0;
             while (targetTile == null) {
                 if (mainScheduledFuture.isCancelled())
@@ -1422,7 +1485,11 @@ public class QuestScript extends Script {
                     targetTile = stepLocation;
             }
 
-            Rs2Walker.walkTo(targetTile, 3);
+            if (object == null) {
+                Rs2Walker.walkTo(targetTile, 1);
+            } else {
+                Rs2Walker.walkTo(targetTile, 0);
+            }
 
             if (ShortestPathPlugin.getPathfinder() != null) {
                 var path = ShortestPathPlugin.getPathfinder().getPath();
@@ -1432,17 +1499,30 @@ public class QuestScript extends Script {
                 return false;
         }
 
-        if (hasLineOfSightToObject(object) || object != null && (Rs2Camera.isTileOnScreen(object.getLocalLocation()) || object.getCanvasLocation() != null)) {
+        if (objectInLineOfSight || object != null && (Rs2Camera.isTileOnScreen(object.getLocalLocation()) || object.getCanvasLocation() != null)) {
             Rs2Walker.clearWalkingRoute("quest-helper:object-step-interact");
 
-            if (itemId == -1)
-                object.click(chooseCorrectObjectOption(step, object));
-            else {
-                Rs2Inventory.use(itemId);
-                object.click("");
+            boolean interacted;
+            boolean itemOnObjectInteraction = itemId != -1;
+            if (itemId == -1) {
+                interacted = Rs2GameObject.interact(tileObject, chooseCorrectObjectOption(step, object));
+            } else {
+                if (!Rs2Inventory.use(itemId) || !waitForSelectedInventoryItem()) {
+                    return false;
+                }
+                interacted = Rs2GameObject.interact(tileObject, "Use");
             }
 
-            sleepUntil(() -> Rs2Player.isMoving() || Rs2Player.isAnimating());
+            if (!interacted) {
+                return false;
+            }
+
+            boolean interactionStarted = sleepUntil(() -> Rs2Player.isMoving()
+                    || Rs2Player.isAnimating()
+                    || itemOnObjectInteraction && !isInventoryItemSelected(), 1_200);
+            if (!interactionStarted) {
+                return false;
+            }
             sleep(100);
             sleepUntil(() -> !Rs2Player.isMoving() && !Rs2Player.isAnimating());
             objectsHandeled.add(object.getHash());
@@ -1452,6 +1532,45 @@ public class QuestScript extends Script {
         }
 
         return true;
+    }
+
+    static boolean shouldWalkToObjectApproach(boolean objectAvailable, boolean moreThanOneTileFromStep,
+                                              boolean objectInLineOfSight) {
+        return objectAvailable
+                ? !objectInLineOfSight
+                : moreThanOneTileFromStep;
+    }
+
+    static WorldPoint selectObjectApproachTile(WorldArea objectArea, WorldPoint playerLocation,
+                                               Predicate<WorldPoint> isWalkable,
+                                               Predicate<WorldPoint> hasLineOfSight) {
+        if (objectArea == null || playerLocation == null) {
+            return null;
+        }
+
+        WorldArea surroundingArea = new WorldArea(
+                objectArea.getX() - 1,
+                objectArea.getY() - 1,
+                objectArea.getWidth() + 2,
+                objectArea.getHeight() + 2,
+                objectArea.getPlane());
+
+        return surroundingArea.toWorldPointList().stream()
+                .filter(point -> !objectArea.contains(point))
+                .filter(isWalkable)
+                .filter(hasLineOfSight)
+                .min(Comparator.comparingInt(point -> point.distanceTo2D(playerLocation)))
+                .orElse(null);
+    }
+
+    private static boolean waitForSelectedInventoryItem() {
+        return sleepUntil(QuestScript::isInventoryItemSelected, 1_500);
+    }
+
+    private static boolean isInventoryItemSelected() {
+        return Microbot.getClientThread()
+                .runOnClientThreadOptional(() -> Microbot.getClient().isWidgetSelected())
+                .orElse(false);
     }
 
     private boolean applyDigStep(DigStep step) {
@@ -1514,21 +1633,83 @@ public class QuestScript extends Script {
         if (npcComp == null)
             return "Talk-to";
 
-        var actions = npcComp.getActions();
+        boolean shopStep = step.getWidgetsToHighlight().stream()
+                .filter(WidgetHighlight.class::isInstance)
+                .map(WidgetHighlight.class::cast)
+                .anyMatch(highlight -> highlight.getItemIdRequirement() != null);
+        return chooseNpcAction(step.getText(), npcComp.getActions(), shopStep);
+    }
 
-        for (var action : actions) {
-            if (action != null && step.getText().stream().anyMatch(x -> x.toLowerCase().contains(action.toLowerCase())))
-                return action;
+    static String chooseNpcAction(List<String> stepText, String[] actions, boolean shopStep) {
+        if (actions == null) {
+            return "Talk-to";
         }
 
-        // Fallback: prefer Talk-to if the NPC has it, otherwise the first non-empty action.
+        if (shopStep) {
+            for (String action : actions) {
+                if ("Trade".equalsIgnoreCase(action)) {
+                    return action;
+                }
+            }
+        }
+
+        for (String action : actions) {
+            if (action != null && stepText.stream()
+                    .anyMatch(text -> text.toLowerCase().contains(action.toLowerCase()))) {
+                return action;
+            }
+        }
+
         String fallback = null;
-        for (var action : actions) {
-            if (action == null || action.isEmpty()) continue;
-            if ("Talk-to".equalsIgnoreCase(action)) return action;
-            if (fallback == null) fallback = action;
+        for (String action : actions) {
+            if (action == null || action.isEmpty()) {
+                continue;
+            }
+            if ("Talk-to".equalsIgnoreCase(action)) {
+                return action;
+            }
+            if (fallback == null) {
+                fallback = action;
+            }
         }
         return fallback != null ? fallback : "Talk-to";
+    }
+
+    static int firstMissingShopItemId(List<Integer> itemIds, IntPredicate hasItem) {
+        return itemIds.stream()
+                .filter(Objects::nonNull)
+                .mapToInt(Integer::intValue)
+                .filter(itemId -> !hasItem.test(itemId))
+                .findFirst()
+                .orElse(-1);
+    }
+
+    static Widget findVisibleWidgetByItemId(Widget widget, int itemId) {
+        if (widget == null || widget.isHidden()) {
+            return null;
+        }
+        if (widget.getItemId() == itemId) {
+            return widget;
+        }
+
+        Widget[][] childGroups = {
+                widget.getChildren(),
+                widget.getNestedChildren(),
+                widget.getDynamicChildren(),
+                widget.getStaticChildren()
+        };
+        for (Widget[] childGroup : childGroups) {
+            if (childGroup == null) {
+                continue;
+            }
+            for (Widget child : childGroup) {
+                Widget match = findVisibleWidgetByItemId(child, itemId);
+                if (match != null) {
+                    return match;
+                }
+            }
+        }
+        return null;
     }
 
 	private String chooseCorrectItemOption(QuestStep step, int itemId) {
@@ -1548,19 +1729,7 @@ public class QuestScript extends Script {
 		return "use";
 	}
 
-	private boolean hasLineOfSightToObject(Rs2TileObjectModel object) {
-		if (object == null || object.getWorldLocation() == null || Microbot.getClient().getLocalPlayer() == null) {
-			return false;
-		}
-
-		WorldArea objectArea = object.getWorldLocation().toWorldArea();
-		WorldArea playerArea = Rs2Player.getWorldLocation().toWorldArea();
-
-		return Microbot.getClient().getTopLevelWorldView() != null
-				&& playerArea.hasLineOfSightTo(Microbot.getClient().getTopLevelWorldView(), objectArea);
-	}
-
-	private boolean hasLineOfSightFrom(WorldPoint point, Rs2TileObjectModel object) {
+    private boolean hasLineOfSightFrom(WorldPoint point, Rs2TileObjectModel object) {
 		if (point == null || object == null || object.getWorldLocation() == null) {
 			return false;
 		}

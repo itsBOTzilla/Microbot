@@ -15,7 +15,6 @@ import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
  * Romeo and Juliet quest custom logic
  */
 public class RomeoAndJuliet extends BaseQuest {
-    private static final WorldPoint JULIET_STAIR_ORIGIN = new WorldPoint(3159, 3436, 0);
     private static final WorldPoint JULIET_TOP_STAIR = new WorldPoint(3156, 3435, 1);
     private static final WorldPoint ROMEO_LOCATION = new WorldPoint(3211, 3422, 0);
 
@@ -33,34 +32,11 @@ public class RomeoAndJuliet extends BaseQuest {
                     return false;
                 }
             }
-            if (questStep.getText().contains("Bring the potion to Juliet in the house west of Varrock.")) {
-                return climbToJulietWithPotion();
-            }
             if (questStep.getText().contains("Talk to Romeo in Varrock Square to finish the quest.")) {
                 return leaveJulietRoomForRomeo();
             }
         }
         return true;
-    }
-
-    private boolean climbToJulietWithPotion() {
-        if (!Rs2Inventory.hasItem(ItemID.CADAVA)) {
-            return true;
-        }
-
-        WorldPoint playerLocation = Rs2Player.getWorldLocation();
-        if (playerLocation == null || playerLocation.getPlane() != 0) {
-            return true;
-        }
-
-        if (playerLocation.distanceTo2D(JULIET_STAIR_ORIGIN) > 0) {
-            Rs2Walker.walkFastCanvas(JULIET_STAIR_ORIGIN);
-            return false;
-        }
-
-        Rs2GameObject.interact(ObjectID.FAI_VARROCK_STAIRS_TALLER, "Climb-up");
-        Rs2Player.waitForWalking();
-        return false;
     }
 
     private boolean leaveJulietRoomForRomeo() {
