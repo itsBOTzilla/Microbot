@@ -18,6 +18,7 @@ import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class QuestObjectInteractionDispatchTest
@@ -94,6 +95,23 @@ public class QuestObjectInteractionDispatchTest
 
         assertEquals("Object steps must not inherit the unrelated five-second default wait",
                 Integer.valueOf(1_200), calls.objectInteractionStartTimeout);
+    }
+
+    @Test
+    public void itemDeselectionAloneDoesNotConfirmObjectInteraction()
+    {
+        assertFalse(QuestScript.isObjectInteractionConfirmed(
+                false, false, false, false, false));
+        assertTrue(QuestScript.isObjectInteractionConfirmed(
+                true, false, false, false, false));
+        assertTrue(QuestScript.isObjectInteractionConfirmed(
+                false, true, false, false, false));
+        assertTrue(QuestScript.isObjectInteractionConfirmed(
+                false, false, true, false, false));
+        assertTrue(QuestScript.isObjectInteractionConfirmed(
+                false, false, false, true, false));
+        assertTrue(QuestScript.isObjectInteractionConfirmed(
+                false, false, false, false, true));
     }
 
     private static DispatchCalls readApplyObjectStepCalls() throws IOException
