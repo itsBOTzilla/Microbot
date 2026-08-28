@@ -1684,8 +1684,11 @@ public class Rs2Walker {
             }
             if (Rs2Player.getWorldLocation() == null) {
                 traceProcessWalkExit("player-unavailable", target, processWalkTail);
-                setTarget(null, "rs2walker:processWalk:player-unavailable");
-                return WalkerState.EXIT;
+                WalkerState unavailableState = playerSnapshotUnavailableState(Microbot.isLoggedIn());
+                if (unavailableState == WalkerState.EXIT) {
+                    setTarget(null, "rs2walker:processWalk:player-unavailable");
+                }
+                return unavailableState;
             }
             if (walkCancelledDiag(target, "processWalk:entry", processWalkTail)) {
                 return WalkerState.EXIT;
@@ -3179,8 +3182,11 @@ public class Rs2Walker {
             WorldPoint finalPlayerLocation = Rs2Player.getWorldLocation();
             if (finalPlayerLocation == null) {
                 traceProcessWalkExit("player-unavailable-after-movement", target, processWalkTail);
-                setTarget(null, "rs2walker:processWalk:player-unavailable-after-movement");
-                return WalkerState.EXIT;
+                WalkerState unavailableState = playerSnapshotUnavailableState(Microbot.isLoggedIn());
+                if (unavailableState == WalkerState.EXIT) {
+                    setTarget(null, "rs2walker:processWalk:player-unavailable-after-movement");
+                }
+                return unavailableState;
             }
             int finalDist = finalPlayerLocation.distanceTo(target);
             if (finalDist <= finishThreshold) {
@@ -3318,6 +3324,10 @@ public class Rs2Walker {
         WebWalkLog.tailExceeded(MAX_PROCESS_WALK_TAIL_ITERATIONS, target, currentTarget, routeState.interimTargetWp, routeState.stuckCount,
                 Rs2Player.getWorldLocation());
         return WalkerState.EXIT;
+    }
+
+    static WalkerState playerSnapshotUnavailableState(boolean loggedIn) {
+        return loggedIn ? WalkerState.MOVING : WalkerState.EXIT;
     }
 
     public static boolean walkNextTo(GameObject target) {

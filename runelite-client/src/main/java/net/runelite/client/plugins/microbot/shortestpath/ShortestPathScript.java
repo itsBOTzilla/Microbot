@@ -12,7 +12,6 @@ import net.runelite.client.plugins.microbot.util.walker.WalkerState;
 
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 public class ShortestPathScript extends Script {
@@ -23,7 +22,7 @@ public class ShortestPathScript extends Script {
     private volatile WorldPoint triggerWalker;
     private volatile ShortestPathConfig config;
     private volatile Future<?> walkTaskFuture;
-    private final AtomicBoolean walkTaskRunning = new AtomicBoolean(false);
+    private final WalkTaskGate walkTaskGate = new WalkTaskGate();
     private volatile WorldPoint lastExitRetryTarget;
     private volatile int consecutiveExitRetries = 0;
     private static final int MAX_CONSECUTIVE_EXIT_RETRIES = 3;
@@ -48,6 +47,14 @@ public class ShortestPathScript extends Script {
 
     @Override
     public void shutdown() {
+        walkTaskGate.shutdown();
+        resetExitRetryState();
+        triggerWalker = null;
+        Rs2Walker.clearWalkingRoute("shortest-path-script:shutdown");
+        Future<?> future = walkTaskFuture;
+        if (future != null && !future.isDone()) {
+            future.cancel(true);
+        }
         super.shutdown();
     }
 
@@ -67,12 +74,11 @@ public class ShortestPathScript extends Script {
 					: "shortest-path-script:trigger-null";
 			triggerWalker = null;
 			Rs2Walker.clearWalkingRoute(r);
-            Future<?> future = walkTaskFuture;
-            if (future != null && !future.isDone()) {
-                future.cancel(true);
-            }
-            walkTaskRunning.set(false);
 		} else {
+			if (walkTaskGate.isShutdown())
+			{
+				return;
+			}
 			if (!point.equals(triggerWalker))
 			{
 				resetExitRetryState();
@@ -80,62 +86,94 @@ public class ShortestPathScript extends Script {
 			triggerWalker = point;
             startWalkTask();
 		}
-	}
+    }
 
     private void startWalkTask() {
-        if (!walkTaskRunning.compareAndSet(false, true)) {
+        if (!walkTaskGate.tryAcquire(getTriggerWalker())) {
             return;
         }
 
-        walkTaskFuture = scheduledExecutorService.submit(() -> {
-            try {
-                while (!Thread.currentThread().isInterrupted() && Microbot.isLoggedIn()) {
-                    WorldPoint target = getTriggerWalker();
-                    ShortestPathConfig currentConfig = config;
-                    if (target == null || currentConfig == null) {
-                        return;
-                    }
+        try {
+            walkTaskFuture = scheduledExecutorService.submit(() -> {
+                try {
+                    while (!walkTaskGate.isShutdown()
+                            && !Thread.currentThread().isInterrupted()
+                            && Microbot.isLoggedIn()) {
+                        WorldPoint target = getTriggerWalker();
+                        ShortestPathConfig currentConfig = config;
+                        if (target == null || currentConfig == null) {
+                            return;
+                        }
 
-                    WalkerState state;
-                    if (currentConfig.walkWithBankedTransports()) {
-                        state = Rs2Walker.walkWithBankedTransportsAndState(
-                                target,
-                                currentConfig.reachedDistance(),
-                                false);
-                    } else {
-                        state = Rs2Walker.walkWithState(target);
-                    }
+                        WalkerState state;
+                        if (currentConfig.walkWithBankedTransports()) {
+                            state = Rs2Walker.walkWithBankedTransportsAndState(
+                                    target,
+                                    currentConfig.reachedDistance(),
+                                    false);
+                        } else {
+                            state = Rs2Walker.walkWithState(target);
+                        }
 
-                    WorldPoint currentTarget = getTriggerWalker();
-                    if (!target.equals(currentTarget)) {
-                        return;
-                    }
-                    if (state == WalkerState.EXIT && shouldRetryAfterExit(target)) {
+                        WorldPoint currentTarget = getTriggerWalker();
+                        if (!target.equals(currentTarget)) {
+                            return;
+                        }
+                        if (state == WalkerState.EXIT && shouldRetryAfterExit(target)) {
+                            sleepUntil(() -> Thread.currentThread().isInterrupted()
+                                    || !target.equals(getTriggerWalker()), 150);
+                            continue;
+                        }
+                        if (state == WalkerState.ARRIVED || state == WalkerState.UNREACHABLE || state == WalkerState.EXIT) {
+                            resetExitRetryState();
+                            triggerWalker = null;
+                            Rs2Walker.clearWalkingRoute("shortest-path-script:walk-task-terminal-state");
+                            return;
+                        }
+
+                        if (!shouldContinueWalkTask(target, currentTarget, state)) {
+                            return;
+                        }
                         sleepUntil(() -> Thread.currentThread().isInterrupted()
                                 || !target.equals(getTriggerWalker()), 150);
-                        continue;
                     }
-                    if (state == WalkerState.ARRIVED || state == WalkerState.UNREACHABLE || state == WalkerState.EXIT) {
-                        resetExitRetryState();
-                        triggerWalker = null;
-                        Rs2Walker.clearWalkingRoute("shortest-path-script:walk-task-terminal-state");
-                        return;
+                } catch (Exception ex) {
+                    if (!Thread.currentThread().isInterrupted()) {
+                        log.error("Exception in ShortestPathScript walk task: {} - ", ex.getMessage(), ex);
                     }
+                } finally {
+                    walkTaskGate.release();
+                }
+            });
+        } catch (RuntimeException ex) {
+            walkTaskGate.release();
+            throw ex;
+        }
+    }
 
-                    if (!shouldContinueWalkTask(target, currentTarget, state)) {
-                        return;
-                    }
-                    sleepUntil(() -> Thread.currentThread().isInterrupted()
-                            || !target.equals(getTriggerWalker()), 150);
-                }
-            } catch (Exception ex) {
-                if (!Thread.currentThread().isInterrupted()) {
-                    log.error("Exception in ShortestPathScript walk task: {} - ", ex.getMessage(), ex);
-                }
-            } finally {
-                walkTaskRunning.set(false);
+    static final class WalkTaskGate {
+        private boolean running;
+        private boolean shutdown;
+
+        synchronized boolean tryAcquire(WorldPoint target) {
+            if (shutdown || running || target == null) {
+                return false;
             }
-        });
+            running = true;
+            return true;
+        }
+
+        synchronized void release() {
+            running = false;
+        }
+
+        synchronized void shutdown() {
+            shutdown = true;
+        }
+
+        synchronized boolean isShutdown() {
+            return shutdown;
+        }
     }
 
     static boolean shouldContinueWalkTask(

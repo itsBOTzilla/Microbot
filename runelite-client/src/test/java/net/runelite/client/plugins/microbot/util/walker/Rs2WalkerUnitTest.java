@@ -49,6 +49,12 @@ import static org.mockito.Mockito.when;
  */
 public class Rs2WalkerUnitTest {
 
+    @Test
+    public void transientMissingPlayerSnapshotKeepsRouteAlive() {
+        assertEquals(WalkerState.MOVING, Rs2Walker.playerSnapshotUnavailableState(true));
+        assertEquals(WalkerState.EXIT, Rs2Walker.playerSnapshotUnavailableState(false));
+    }
+
     @Before
     public void resetTelemetry() {
         Rs2Walker.clearWalkerDedupeForTesting();
