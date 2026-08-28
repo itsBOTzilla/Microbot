@@ -1501,6 +1501,9 @@ public class QuestScript extends Script {
 
         if (objectInLineOfSight || object != null && (Rs2Camera.isTileOnScreen(object.getLocalLocation()) || object.getCanvasLocation() != null)) {
             Rs2Walker.clearWalkingRoute("quest-helper:object-step-interact");
+            if (!waitForObjectInteractionIdle()) {
+                return false;
+            }
 
             boolean interacted;
             boolean itemOnObjectInteraction = itemId != -1;
@@ -1549,6 +1552,14 @@ public class QuestScript extends Script {
     static boolean isObjectInteractionConfirmed(boolean moving, boolean animating, boolean dialogueOpen,
                                                 boolean itemQuantityChanged, boolean objectChanged) {
         return moving || animating || dialogueOpen || itemQuantityChanged || objectChanged;
+    }
+
+    private boolean waitForObjectInteractionIdle() {
+        return sleepUntil(() -> isObjectInteractionIdle(Rs2Player.isMoving(), Rs2Player.isAnimating()), 1_200);
+    }
+
+    static boolean isObjectInteractionIdle(boolean moving, boolean animating) {
+        return !moving && !animating;
     }
 
     static WorldPoint selectObjectApproachTile(WorldArea objectArea, WorldPoint playerLocation,
