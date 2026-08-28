@@ -53,6 +53,13 @@ public class Rs2WalkerUnitTest {
         assertEquals(WalkerState.EXIT, Rs2Walker.playerSnapshotUnavailableState(false));
     }
 
+    @Test
+    public void interimDoorScanMayRunDuringApproachButRecoveryScanStillWaits() {
+        assertFalse(Rs2Walker.shouldDeferPendingDoorRawScan(true, true));
+        assertTrue(Rs2Walker.shouldDeferPendingDoorRawScan(true, false));
+        assertFalse(Rs2Walker.shouldDeferPendingDoorRawScan(false, false));
+    }
+
     @Before
     public void resetTelemetry() {
         Rs2Walker.clearWalkerDedupeForTesting();
