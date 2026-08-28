@@ -275,6 +275,7 @@ public class QuestObjectInteractionDispatchTest
                             }
 
                             lastIntConstant = null;
+                            lastStringConstant = null;
                         }
                     };
                 }
