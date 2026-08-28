@@ -114,6 +114,18 @@ public class QuestObjectInteractionDispatchTest
                 false, false, false, false, true));
     }
 
+    @Test
+    public void objectDispatchWaitsForPreexistingMovementToSettle() throws IOException
+    {
+        DispatchCalls calls = readApplyObjectStepCalls();
+
+        assertTrue(calls.preDispatchIdleWaitOrder > 0);
+        assertTrue(calls.preDispatchIdleWaitOrder < calls.rawGameObjectInteractionOrder);
+        assertFalse(QuestScript.isObjectInteractionIdle(true, false));
+        assertFalse(QuestScript.isObjectInteractionIdle(false, true));
+        assertTrue(QuestScript.isObjectInteractionIdle(false, false));
+    }
+
     private static DispatchCalls readApplyObjectStepCalls() throws IOException
     {
         String resource = "/" + Type.getInternalName(QuestScript.class) + ".class";
@@ -202,12 +214,21 @@ public class QuestObjectInteractionDispatchTest
                             {
                                 calls.selectionWaitOrder = callOrder;
                             }
+                            if (owner.equals(Type.getInternalName(QuestScript.class))
+                                    && methodName.equals("waitForObjectInteractionIdle"))
+                            {
+                                calls.preDispatchIdleWaitOrder = callOrder;
+                            }
 
                             if (owner.equals(Type.getInternalName(Rs2GameObject.class))
                                     && methodName.equals("interact")
                                     && methodDescriptor.equals(rawInteractionDescriptor))
                             {
                                 calls.rawGameObjectInteractions++;
+                                if (calls.rawGameObjectInteractionOrder == 0)
+                                {
+                                    calls.rawGameObjectInteractionOrder = callOrder;
+                                }
                                 if (calls.selectionWaitOrder > 0
                                         && calls.itemObjectInteractionOrder == 0)
                                 {
@@ -270,6 +291,8 @@ public class QuestObjectInteractionDispatchTest
         private int inventoryUseOrder;
         private int selectionWaitOrder;
         private int itemObjectInteractionOrder;
+        private int preDispatchIdleWaitOrder;
+        private int rawGameObjectInteractionOrder;
         private int globalReachabilityChecks;
         private int fullObjectLineOfSightChecks;
         private boolean itemObjectInteractionUsesUseAction;
