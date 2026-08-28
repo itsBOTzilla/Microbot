@@ -35,14 +35,31 @@ import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
 @Deprecated(since = "2.1.0 - Use Rs2TileItemCache/Rs2TileItemQuery instead", forRemoval = true)
 public class Rs2GroundItem {
     private static final int DESPAWN_DELAY_THRESHOLD_TICKS = 150;
+    private static final Object PAUSE_SCOPE_LOCK = new Object();
+    private static int pauseScopeCount;
+    private static boolean restoreUnpausedState;
 
     public static boolean runWhilePaused(BooleanSupplier booleanSupplier) {
-        final boolean paused = Microbot.pauseAllScripts.getAndSet(true);
-        final boolean success = booleanSupplier.getAsBoolean();
-        if (!paused && !Microbot.pauseAllScripts.compareAndSet(true, false)) {
-            log.warn("Another script unpaused all scripts");
+        synchronized (PAUSE_SCOPE_LOCK) {
+            if (pauseScopeCount == 0) {
+                restoreUnpausedState = Microbot.pauseAllScripts.compareAndSet(false, true);
+            }
+            pauseScopeCount++;
         }
-        return success;
+
+        try {
+            return booleanSupplier.getAsBoolean();
+        } finally {
+            synchronized (PAUSE_SCOPE_LOCK) {
+                pauseScopeCount--;
+                if (pauseScopeCount == 0) {
+                    if (restoreUnpausedState && !Microbot.pauseAllScripts.compareAndSet(true, false)) {
+                        log.warn("Another script unpaused all scripts");
+                    }
+                    restoreUnpausedState = false;
+                }
+            }
+        }
     }
 
     private static boolean interact(RS2Item rs2Item, String action) {
