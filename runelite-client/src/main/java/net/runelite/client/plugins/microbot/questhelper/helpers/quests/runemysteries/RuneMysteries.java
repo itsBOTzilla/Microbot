@@ -164,13 +164,12 @@ public class RuneMysteries extends BasicQuestHelper
 
 		var steps = new HashMap<Integer, QuestStep>();
 
-		var goTalkToHoracio = new ConditionalStep(this, goUpToHoracio);
+		var goTalkToHoracio = new ConditionalStep(this, talkToHoracio);
 		goTalkToHoracio.addStep(inUpstairsLumbridge, talkToHoracio);
 
 		steps.put(0, goTalkToHoracio);
 
-		var goTalkToSedridor = new ConditionalStep(this, goDownToSedridor);
-		goTalkToSedridor.addStep(and(airTalisman, inUpstairsLumbridge), goF1ToF0LumbridgeCastle);
+		var goTalkToSedridor = new ConditionalStep(this, bringTalismanToSedridor);
 		goTalkToSedridor.addStep(inWizardBasement, bringTalismanToSedridor);
 
 		steps.put(1, goTalkToSedridor);
