@@ -1,8 +1,10 @@
 package net.runelite.client.plugins.microbot.util.walker.door;
 
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.client.plugins.microbot.util.walker.door.model.AwaitTicket;
 import org.junit.Test;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -73,6 +75,21 @@ public class Rs2WalkerAwaitsTest {
                 true, 4001L, 4000L));
         assertFalse(Rs2WalkerAwaits.isDoorApproachInFlight(
                 before, farSide, nearSide, farSide,
+                true, 700L, 4000L));
+    }
+
+    @Test
+    public void beginTicketPreservesPreDispatchPositionWhenMovementStartsImmediately() {
+        WorldPoint beforeDispatch = new WorldPoint(3170, 3300, 0);
+        WorldPoint afterDispatch = new WorldPoint(3169, 3301, 0);
+        WorldPoint nearSide = new WorldPoint(3167, 3302, 0);
+        WorldPoint farSide = new WorldPoint(3166, 3303, 0);
+
+        AwaitTicket ticket = Rs2WalkerAwaits.beginTicket(beforeDispatch);
+
+        assertEquals(beforeDispatch, ticket.beforePosition());
+        assertTrue(Rs2WalkerAwaits.isDoorApproachInFlight(
+                ticket.beforePosition(), afterDispatch, nearSide, farSide,
                 true, 700L, 4000L));
     }
 }

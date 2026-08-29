@@ -27,6 +27,10 @@ public final class Rs2WalkerAwaits {
         return new AwaitTicket(System.currentTimeMillis(), Rs2Player.getWorldLocation());
     }
 
+    public static AwaitTicket beginTicket(WorldPoint beforePosition) {
+        return new AwaitTicket(System.currentTimeMillis(), beforePosition);
+    }
+
     /**
      * A door that answered with a conversation is never going to move us while we stand here waiting
      * for movement, so waiting out the full budget just burns the window in which the menu could be

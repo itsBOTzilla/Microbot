@@ -6166,7 +6166,7 @@ public class Rs2Walker {
                             return false;
                         }
                         markDoorInteractionSettling(toWp);
-                        waitForDoorInteractionProgress(fromWp, toWp);
+                        waitForDoorInteractionProgress(posBefore, fromWp, toWp);
                         WorldPoint posAfter = Rs2Player.getWorldLocation();
                         boolean traversed = didTraverseInteractedDoor(posBefore, posAfter, probe, fromWp, toWp);
                         if (!traversed && isDoorApproachInFlight(posBefore, posAfter, fromWp, toWp)) {
@@ -6308,7 +6308,7 @@ public class Rs2Walker {
             return false;
         }
         markDoorInteractionSettling(toWp);
-        waitForDoorInteractionProgress(fromWp, toWp);
+        waitForDoorInteractionProgress(posBefore, fromWp, toWp);
         WorldPoint posAfter = Rs2Player.getWorldLocation();
         boolean traversed = didTraverseInteractedDoor(posBefore, posAfter, probe, fromWp, toWp);
         if (!traversed && isDoorApproachInFlight(posBefore, posAfter, fromWp, toWp)) {
@@ -7330,9 +7330,10 @@ public class Rs2Walker {
      * Door-ahead / fallback / LOS scans must treat it as non-door so {@link #handleTransports} owns it.
      */
 
-    private static void waitForDoorInteractionProgress(WorldPoint fromWp, WorldPoint toWp) {
+    private static void waitForDoorInteractionProgress(WorldPoint posBefore,
+                                                       WorldPoint fromWp, WorldPoint toWp) {
         long startedAt = System.currentTimeMillis();
-        AwaitTicket ticket = Rs2WalkerAwaits.beginTicket();
+        AwaitTicket ticket = Rs2WalkerAwaits.beginTicket(posBefore);
         try {
             Rs2WalkerAwaits.awaitDoorInteractionProgress(ticket, fromWp, toWp);
         } finally {
@@ -8087,7 +8088,7 @@ public class Rs2Walker {
 			return false;
 		}
         markDoorInteractionSettling(bestTo);
-		waitForDoorInteractionProgress(bestFrom, bestTo);
+		waitForDoorInteractionProgress(posBefore, bestFrom, bestTo);
 		WorldPoint posAfter = Rs2Player.getWorldLocation();
 		boolean traversed = didTraverseInteractedDoor(posBefore, posAfter, bestLoc, bestFrom, bestTo);
 		if (!traversed && isDoorApproachInFlight(posBefore, posAfter, bestFrom, bestTo)) {

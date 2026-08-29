@@ -70,7 +70,11 @@ Raw-path scene-object probing is a recovery aid for smoothed paths that hide nea
 if (Rs2Player.isMoving()) {
     return false;
 }
-waitForDoorInteractionProgress(fromWp, toWp);
+WorldPoint posBefore = Rs2Player.getWorldLocation();
+boolean interacted = Rs2GameObject.interact(door, action);
+if (interacted) {
+    waitForDoorInteractionProgress(posBefore, fromWp, toWp);
+}
 ```
 
 **Where this applies:** `Rs2Walker.handleNearbyRawPathSceneObjects`, door handlers that call `Rs2GameObject.interact`, and any recovery logic that recurses into `processWalk`.
@@ -375,7 +379,7 @@ dialogue; an open dialogue by itself does not create a route-progress exit.
 
 ## 17. Match checkpoint handoff geometry to minimap selection
 
-Minimap route targets are selected inside a circular Euclidean radius, so the early-handoff check must use that same Euclidean radius. Do not use `WorldPoint.distanceTo2D` for this check: its square/Chebyshev distance can classify a diagonal checkpoint as close before the player has made meaningful progress toward it. Keep the separate close/arrival threshold unchanged.
+Minimap route targets are selected inside a circular Euclidean radius, so the early-handoff check must use that same Euclidean radius. Do not use `WorldPoint.distanceTo2D` for this check: its Chebyshev (maximum-axis) distance can classify a diagonal checkpoint as close before the player has made meaningful progress toward it. Keep the separate close/arrival threshold unchanged.
 
 **Why this matters:** A checkpoint seven tiles away on both axes is within eight tiles by Chebyshev distance but almost ten tiles away geometrically. Releasing that checkpoint immediately defeats sticky-target pacing and causes repeated route processing and visible stop-start movement.
 
