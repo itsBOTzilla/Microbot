@@ -137,13 +137,13 @@ public class Rs2Walker {
 	private static final int INTERIM_CLOSE_TILES = 5;
 
 	/**
-	 * Floor for the jittered per-click route reach. Deliberately above {@link #INTERIM_CLOSE_TILES}
-	 * so a short click cannot land inside the interim-close threshold, which would clear the
-	 * checkpoint immediately and cause click thrash.
+	 * Floor for the jittered per-click route reach. Deliberately above the run handoff radius so
+	 * ordinary open-route clicks do not start inside the continuation band and immediately churn.
 	 */
-	private static final int ROUTE_CLICK_REACH_MIN_TILES = 7;
+	private static final int ROUTE_CLICK_REACH_MIN_TILES = 9;
 	private static final int INTERIM_PRECLICK_TILES = 6;
 	private static final int INTERIM_RUN_PRECLICK_TILES = 8;
+	private static final int INTERIM_HANDOFF_MIN_APPROACH_TILES = 3;
 	private static final int INTERIM_MOVING_POLL_MS = 450;
 	private static final long INTERIM_PROGRESS_TIMEOUT_MS = 2500L;
 	/**
@@ -3892,8 +3892,8 @@ public class Rs2Walker {
      * Per-click route reach, jittered below {@code maxEuclidean} so consecutive clicks do not all
      * cover the same tile span.
      * <p>
-     * The floor matters: it must stay clear of {@link #INTERIM_CLOSE_TILES} or the interim
-     * checkpoint clears almost immediately and the walker re-clicks constantly, producing visible
+     * The floor matters: it must stay ahead of the run-mode handoff radius or the interim checkpoint
+     * starts inside the continuation band and one tile of movement can replace it, producing visible
      * stop-start movement. The ceiling is the caller's reach, which is already tuned to the minimap
      * clip — going above it just produces outside-clip fallbacks.
      */
@@ -6629,6 +6629,7 @@ public class Rs2Walker {
         int currentDistance = distanceToInterimOrMax(interim, playerLoc);
         return !recoveryOwned
                 && bestDistanceSeen != Integer.MAX_VALUE
+                && bestDistanceSeen >= handoffTiles + INTERIM_HANDOFF_MIN_APPROACH_TILES
                 && currentDistance < bestDistanceSeen
                 && isWithinRouteHandoffRadius(playerLoc, interim, handoffTiles);
     }
