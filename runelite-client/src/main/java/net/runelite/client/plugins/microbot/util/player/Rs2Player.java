@@ -979,7 +979,7 @@ public class Rs2Player {
 			WorldPoint playerLocation = player.getWorldLocation();
 			WorldView worldView = client.getTopLevelWorldView();
 			if (playerLocation == null || worldView == null || worldView.getScene() == null) {
-				return playerLocation;
+				return null;
 			}
 			if (worldView.getScene().isInstance()) {
 				LocalPoint localPoint = LocalPoint.fromWorld(worldView, playerLocation);

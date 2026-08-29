@@ -14,7 +14,7 @@ public final class Rs2WalkerTransportAwaits {
     public static boolean didCurrentTileTransportProgress(WorldPoint before, WorldPoint expectedDestination,
                                                           WorldPoint target, boolean dialogueWasOpen) {
         if (before == null) {
-            return false;
+            return hasProgressWithoutPositionSnapshot(dialogueWasOpen, Rs2Dialogue.isInDialogue());
         }
         boolean progressedDuringWait = sleepUntil(() -> {
             WorldPoint now = Rs2Player.getWorldLocation();
@@ -24,6 +24,10 @@ public final class Rs2WalkerTransportAwaits {
         WorldPoint after = Rs2Player.getWorldLocation();
         return resolveTransportProgress(progressedDuringWait, before, after, expectedDestination, target,
                 dialogueWasOpen, Rs2Dialogue.isInDialogue());
+    }
+
+    static boolean hasProgressWithoutPositionSnapshot(boolean dialogueWasOpen, boolean dialogueOpen) {
+        return !dialogueWasOpen && dialogueOpen;
     }
 
     static boolean resolveTransportProgress(boolean progressedDuringWait,
