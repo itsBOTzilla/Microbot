@@ -116,7 +116,7 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         if (currentIndex < 0)
         {
             return new Observation(sample.tick, sample.player, Status.READY,
-                    route, -1, null, -1, false);
+                    route, -1, null, -1, false, sample.runEnabled);
         }
         pathRemaining = Math.max(0, rawPath.size() - currentIndex - 1);
         routeActionIndex = routeActionIndex(rawPath, currentIndex, sample.player, reachable);
