@@ -1,7 +1,5 @@
 package net.runelite.client.plugins.microbot.shortestpath;
 
-import lombok.Getter;
-import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Player;
 import net.runelite.api.coords.WorldPoint;
@@ -14,14 +12,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Objects;
 
 @Slf4j
 public class ShortestPathScript extends Script {
 
-    @Getter
     // used for calling the walker from a mainthread
     // running the walker on a seperate thread is a lot easier for debugging
-    private volatile WorldPoint triggerWalker;
+    private final WalkTargetState walkTargets = new WalkTargetState();
     private volatile ShortestPathConfig config;
     private volatile Future<?> walkTaskFuture;
     private final WalkTaskGate walkTaskGate = new WalkTaskGate();
@@ -51,10 +49,14 @@ public class ShortestPathScript extends Script {
     public void shutdown() {
         walkTaskGate.shutdown();
         resetExitRetryState();
-        triggerWalker = null;
+        walkTargets.publish(null);
         Rs2Walker.clearWalkingRoute("shortest-path-script:shutdown");
         cancelWalkTask();
         super.shutdown();
+    }
+
+    public WorldPoint getTriggerWalker() {
+        return walkTargets.get();
     }
 
 	public void setTriggerWalker(WorldPoint point) {
@@ -71,7 +73,7 @@ public class ShortestPathScript extends Script {
 			String r = stopReason != null && !stopReason.isBlank()
 					? stopReason
 					: "shortest-path-script:trigger-null";
-			triggerWalker = null;
+			walkTargets.publish(null);
 			Rs2Walker.clearWalkingRoute(r);
 			cancelWalkTask();
 		} else {
@@ -79,12 +81,12 @@ public class ShortestPathScript extends Script {
 			{
 				return;
 			}
-			boolean targetChanged = !point.equals(triggerWalker);
+			WalkTargetSnapshot published = walkTargets.publishIfChanged(point);
+			boolean targetChanged = published != null;
 			if (targetChanged)
 			{
 				resetExitRetryState();
 			}
-			triggerWalker = point;
 			if (targetChanged)
 			{
 				cancelWalkTask();
@@ -94,7 +96,8 @@ public class ShortestPathScript extends Script {
     }
 
     private void startWalkTask() {
-        if (!walkTaskGate.tryAcquire(getTriggerWalker())) {
+        WalkTargetSnapshot taskTarget = walkTargets.snapshot();
+        if (!walkTaskGate.tryAcquire(taskTarget.target)) {
             return;
         }
 
@@ -103,7 +106,10 @@ public class ShortestPathScript extends Script {
                 while (!walkTaskGate.isShutdown()
                         && !Thread.currentThread().isInterrupted()
                         && Microbot.isLoggedIn()) {
-                    WorldPoint target = getTriggerWalker();
+                    if (!walkTargets.owns(taskTarget)) {
+                        return;
+                    }
+                    WorldPoint target = taskTarget.target;
                     ShortestPathConfig currentConfig = config;
                     if (target == null || currentConfig == null) {
                         return;
@@ -119,19 +125,20 @@ public class ShortestPathScript extends Script {
                         state = Rs2Walker.walkWithState(target);
                     }
 
-                    WorldPoint currentTarget = getTriggerWalker();
-                    if (!target.equals(currentTarget)) {
+                    if (!walkTargets.owns(taskTarget)) {
                         return;
                     }
+                    WorldPoint currentTarget = getTriggerWalker();
                     if (state == WalkerState.EXIT && shouldRetryAfterExit(target)) {
                         sleepUntil(() -> Thread.currentThread().isInterrupted()
                                 || !target.equals(getTriggerWalker()), 150);
                         continue;
                     }
                     if (state == WalkerState.ARRIVED || state == WalkerState.UNREACHABLE || state == WalkerState.EXIT) {
-                        resetExitRetryState();
-                        triggerWalker = null;
-                        Rs2Walker.clearWalkingRoute("shortest-path-script:walk-task-terminal-state");
+                        walkTargets.clearIfOwned(taskTarget, () -> {
+                            resetExitRetryState();
+                            Rs2Walker.clearWalkingRoute("shortest-path-script:walk-task-terminal-state");
+                        });
                         return;
                     }
 
@@ -160,6 +167,64 @@ public class ShortestPathScript extends Script {
         Future<?> future = walkTaskFuture;
         if (future != null && !future.isDone()) {
             future.cancel(true);
+        }
+    }
+
+    static final class WalkTargetSnapshot {
+        private final WorldPoint target;
+        private final long generation;
+
+        private WalkTargetSnapshot(WorldPoint target, long generation) {
+            this.target = target;
+            this.generation = generation;
+        }
+    }
+
+    static final class WalkTargetState {
+        private WorldPoint target;
+        private long generation;
+
+        synchronized WorldPoint get() {
+            return target;
+        }
+
+        synchronized WalkTargetSnapshot snapshot() {
+            return new WalkTargetSnapshot(target, generation);
+        }
+
+        synchronized WalkTargetSnapshot publish(WorldPoint nextTarget) {
+            target = nextTarget;
+            generation++;
+            return new WalkTargetSnapshot(target, generation);
+        }
+
+        synchronized WalkTargetSnapshot publishIfChanged(WorldPoint nextTarget) {
+            if (Objects.equals(target, nextTarget)) {
+                return null;
+            }
+            return publish(nextTarget);
+        }
+
+        synchronized boolean owns(WalkTargetSnapshot snapshot) {
+            return snapshot != null
+                    && snapshot.generation == generation
+                    && Objects.equals(snapshot.target, target);
+        }
+
+        synchronized boolean clearIfOwned(WalkTargetSnapshot snapshot) {
+            return clearIfOwned(snapshot, null);
+        }
+
+        synchronized boolean clearIfOwned(WalkTargetSnapshot snapshot, Runnable cleanup) {
+            if (!owns(snapshot)) {
+                return false;
+            }
+            target = null;
+            generation++;
+            if (cleanup != null) {
+                cleanup.run();
+            }
+            return true;
         }
     }
 

@@ -39,4 +39,11 @@ public class Rs2WalkerTransportAwaitsTest
         assertTrue(Rs2WalkerTransportAwaits.hasTransportProgress(
                 BEFORE, DESTINATION, DESTINATION, TARGET, false, false));
     }
+
+    @Test
+    public void progressObservedDuringWaitIsNotLostWhenDialogueCloses()
+    {
+        assertTrue(Rs2WalkerTransportAwaits.resolveTransportProgress(
+                true, BEFORE, BEFORE, DESTINATION, TARGET, false, false));
+    }
 }
