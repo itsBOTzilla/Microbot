@@ -13,6 +13,8 @@ New movement fixes must preserve these boundaries:
 - the pathfinder and transport catalog remain the route-planning source;
 - the runtime selects the furthest collision-reachable forward point without crossing a transport;
 - an accepted click owns its actual fallback destination as the checkpoint;
+- after at least two tiles of approach, a checkpoint hands off inside the circular six-tile walk
+  or eight-tile run overlap so the next command is queued before movement is exhausted;
 - doors, transports, and dynamic blockers outrank forward minimap movement;
 - progress means a changed player tile or forward path index, not merely elapsed time;
 - a dispatch always ends the current decision cycle.

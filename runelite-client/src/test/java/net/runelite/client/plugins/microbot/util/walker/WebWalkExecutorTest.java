@@ -44,6 +44,66 @@ public class WebWalkExecutorTest
     }
 
     @Test
+    public void approachingCheckpointWithinRunOverlapHandsOffBeforeArrival()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(100, START, 0);
+        session.recordMinimapDispatch(100, point(10), point(10), 10, false);
+
+        WebWalkExecutor.Decision decision = new WebWalkExecutor().decide(session,
+                ready(101, point(2), 1, 2, point(12), 12, false, true));
+
+        assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, decision.getType());
+        assertEquals(point(12), decision.getTarget());
+    }
+
+    @Test
+    public void walkingCheckpointOutsideWalkOverlapStaysOwned()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(100, START, 0);
+        session.recordMinimapDispatch(100, point(10), point(10), 10, false);
+
+        WebWalkExecutor.Decision decision = new WebWalkExecutor().decide(session,
+                ready(101, point(2), 1, 2, point(12), 12, false, false));
+
+        assertEquals(WebWalkExecutor.DecisionType.WAIT, decision.getType());
+        assertEquals(point(10), session.getCheckpoint());
+    }
+
+    @Test
+    public void checkpointInsideHandoffBandWaitsForActualApproach()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(100, START, 0);
+        session.recordMinimapDispatch(100, point(8), point(8), 8, false);
+
+        WebWalkExecutor.Decision decision = new WebWalkExecutor().decide(session,
+                ready(101, START, 1, 0, point(12), 12, false));
+
+        assertEquals(WebWalkExecutor.DecisionType.WAIT, decision.getType());
+        assertEquals(point(8), session.getCheckpoint());
+    }
+
+    @Test
+    public void diagonalCheckpointOutsideCircularHandoffStaysOwned()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(100, START, 0);
+        session.recordMinimapDispatch(100, point(10, 10), point(10, 10), 10, false);
+
+        WebWalkExecutor.Decision decision = new WebWalkExecutor().decide(session,
+                ready(101, point(3, 3), 1, 3, point(12), 12, false));
+
+        assertEquals(WebWalkExecutor.DecisionType.WAIT, decision.getType());
+        assertEquals(point(10, 10), session.getCheckpoint());
+    }
+
+    @Test
     public void routeActionAlwaysWinsOverMinimapDispatch()
     {
         WebWalkSession session = new WebWalkSession(GOAL, 0);
@@ -100,8 +160,17 @@ public class WebWalkExecutorTest
                                                      int pathIndex, WorldPoint clickTarget,
                                                      int clickIndex, boolean routeAction)
     {
+        return ready(tick, player, generation, pathIndex, clickTarget, clickIndex,
+                routeAction, false);
+    }
+
+    private static WebWalkRuntime.Observation ready(int tick, WorldPoint player, long generation,
+                                                     int pathIndex, WorldPoint clickTarget,
+                                                     int clickIndex, boolean routeAction,
+                                                     boolean runEnabled)
+    {
         return new WebWalkRuntime.Observation(tick, player, WebWalkRuntime.Status.READY,
-                route(generation), pathIndex, clickTarget, clickIndex, routeAction);
+                route(generation), pathIndex, clickTarget, clickIndex, routeAction, runEnabled);
     }
 
     private static WebWalkRuntime.RouteSnapshot route(long generation)
@@ -113,7 +182,12 @@ public class WebWalkExecutorTest
 
     private static WorldPoint point(int x)
     {
-        return new WorldPoint(3200 + x, 3200, 0);
+        return point(x, 0);
+    }
+
+    private static WorldPoint point(int x, int y)
+    {
+        return new WorldPoint(3200 + x, 3200 + y, 0);
     }
 
     private static final class RecordingRuntime implements WebWalkRuntime
