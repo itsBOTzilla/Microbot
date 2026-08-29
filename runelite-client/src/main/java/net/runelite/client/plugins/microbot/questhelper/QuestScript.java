@@ -1380,8 +1380,12 @@ public class QuestScript extends Script {
 
             var itemId = step.getIconItemID();
             if (itemId != -1) {
-                Rs2Inventory.use(itemId);
-                npc.click("");
+                if (!Rs2Inventory.use(itemId) || !waitForSelectedInventoryItem(itemId)) {
+                    return false;
+                }
+                if (!npc.click("")) {
+                    return false;
+                }
             } else {
                 npc.click(chooseCorrectNPCOption(step, npc));
             }
@@ -1512,7 +1516,7 @@ public class QuestScript extends Script {
             if (itemId == -1) {
                 interacted = Rs2GameObject.interact(tileObject, chooseCorrectObjectOption(step, object));
             } else {
-                if (!Rs2Inventory.use(itemId) || !waitForSelectedInventoryItem()) {
+                if (!Rs2Inventory.use(itemId) || !waitForSelectedInventoryItem(itemId)) {
                     return false;
                 }
                 interacted = Rs2GameObject.interact(tileObject, "Use");
@@ -1584,14 +1588,24 @@ public class QuestScript extends Script {
                 .orElse(null);
     }
 
-    private static boolean waitForSelectedInventoryItem() {
-        return sleepUntil(QuestScript::isInventoryItemSelected, 1_500);
+    private static boolean waitForSelectedInventoryItem(int expectedItemId) {
+        return sleepUntil(() -> isInventoryItemSelected(expectedItemId), 1_500);
     }
 
-    private static boolean isInventoryItemSelected() {
+    private static boolean isInventoryItemSelected(int expectedItemId) {
         return Microbot.getClientThread()
-                .runOnClientThreadOptional(() -> Microbot.getClient().isWidgetSelected())
+                .runOnClientThreadOptional(() -> {
+                    Widget selectedWidget = Microbot.getClient().getSelectedWidget();
+                    int selectedItemId = selectedWidget == null ? -1 : selectedWidget.getItemId();
+                    return isExpectedInventoryItemSelected(
+                            Microbot.getClient().isWidgetSelected(), selectedItemId, expectedItemId);
+                })
                 .orElse(false);
+    }
+
+    static boolean isExpectedInventoryItemSelected(boolean widgetSelected, int selectedItemId,
+                                                   int expectedItemId) {
+        return widgetSelected && selectedItemId == expectedItemId;
     }
 
     private boolean applyDigStep(DigStep step) {
