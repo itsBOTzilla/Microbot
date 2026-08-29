@@ -19,6 +19,7 @@ public final class WebWalkExecutor
     static final int MAX_REJECTED_DISPATCHES = 2;
     static final int MAX_ROUTE_ACTION_FAILURES = 2;
     static final int MAX_REPLANS = 3;
+    static final int MAX_EXECUTOR_ITERATIONS = 5_000;
 
     public WalkerState walk(WebWalkSession session, WebWalkRuntime runtime)
     {
@@ -27,7 +28,8 @@ public final class WebWalkExecutor
 
         try
         {
-            while (!Thread.currentThread().isInterrupted())
+            int iteration = 0;
+            while (!Thread.currentThread().isInterrupted() && iteration++ < MAX_EXECUTOR_ITERATIONS)
             {
                 WebWalkRuntime.Observation observation = runtime.observe(session);
                 Decision decision = decide(session, observation);
@@ -86,8 +88,12 @@ public final class WebWalkExecutor
             return WalkerState.EXIT;
         }
 
-        Thread.currentThread().interrupt();
-        runtime.finish(WalkerState.EXIT, "interrupted");
+        boolean interrupted = Thread.currentThread().isInterrupted();
+        if (interrupted)
+        {
+            Thread.currentThread().interrupt();
+        }
+        runtime.finish(WalkerState.EXIT, interrupted ? "interrupted" : "iteration-limit");
         return WalkerState.EXIT;
     }
 

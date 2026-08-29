@@ -84,6 +84,18 @@ public class WebWalkExecutorTest
                 runtime.events);
     }
 
+    @Test
+    public void executorStopsAtIndependentIterationLimit()
+    {
+        WaitingRuntime runtime = new WaitingRuntime();
+
+        WalkerState result = new WebWalkExecutor().walk(new WebWalkSession(GOAL, 0), runtime);
+
+        assertEquals(WalkerState.EXIT, result);
+        assertEquals(WebWalkExecutor.MAX_EXECUTOR_ITERATIONS, runtime.observations);
+        assertEquals("iteration-limit", runtime.finishedReason);
+    }
+
     private static WebWalkRuntime.Observation ready(int tick, WorldPoint player, long generation,
                                                      int pathIndex, WorldPoint clickTarget,
                                                      int clickIndex, boolean routeAction)
@@ -151,6 +163,50 @@ public class WebWalkExecutorTest
         public void finish(WalkerState state, String reason)
         {
             events.add("finish");
+        }
+    }
+
+    private static final class WaitingRuntime implements WebWalkRuntime
+    {
+        private int observations;
+        private String finishedReason;
+
+        @Override
+        public Observation observe(WebWalkSession session)
+        {
+            observations++;
+            return new Observation(observations, START, Status.WAITING_FOR_PATH,
+                    null, -1, null, -1, false);
+        }
+
+        @Override
+        public DispatchResult dispatchMinimap(WorldPoint requestedTarget, int pathIndex,
+                                               boolean redispatch)
+        {
+            throw new AssertionError("unexpected minimap dispatch");
+        }
+
+        @Override
+        public ActionResult interactRouteEdge(Observation observation)
+        {
+            throw new AssertionError("unexpected route action");
+        }
+
+        @Override
+        public void replan(WebWalkSession session, String reason)
+        {
+            throw new AssertionError("unexpected replan");
+        }
+
+        @Override
+        public void awaitChange(Observation observation)
+        {
+        }
+
+        @Override
+        public void finish(WalkerState state, String reason)
+        {
+            finishedReason = reason;
         }
     }
 }

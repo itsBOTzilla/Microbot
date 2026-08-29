@@ -1483,6 +1483,9 @@ public class Rs2Walker {
             return WalkerState.UNREACHABLE;
         }
         WebWalkSession session = new WebWalkSession(target, distance);
+        if (debug) {
+            return WalkerState.EXIT;
+        }
         return new WebWalkExecutor().walk(session, new RuneLiteWebWalkRuntime(target, distance));
     }
 

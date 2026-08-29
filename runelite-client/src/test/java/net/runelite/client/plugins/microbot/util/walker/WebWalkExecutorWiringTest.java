@@ -24,6 +24,7 @@ public class WebWalkExecutorWiringTest
         AtomicBoolean invokesExecutor = new AtomicBoolean();
         AtomicBoolean invokesLegacyLoop = new AtomicBoolean();
         AtomicBoolean pollsPathfinderBeforeExecutor = new AtomicBoolean();
+        AtomicBoolean readsDebugSafeguard = new AtomicBoolean();
         String walkerOwner = Type.getInternalName(Rs2Walker.class);
 
         try (InputStream stream = Rs2Walker.class.getResourceAsStream("Rs2Walker.class"))
@@ -43,6 +44,17 @@ public class WebWalkExecutorWiringTest
                     }
                     return new MethodVisitor(Opcodes.ASM9)
                     {
+                        @Override
+                        public void visitFieldInsn(int opcode, String owner, String fieldName,
+                                                   String fieldDescriptor)
+                        {
+                            if (opcode == Opcodes.GETSTATIC && owner.equals(walkerOwner)
+                                    && fieldName.equals("debug"))
+                            {
+                                readsDebugSafeguard.set(true);
+                            }
+                        }
+
                         @Override
                         public void visitTypeInsn(int opcode, String type)
                         {
@@ -85,5 +97,6 @@ public class WebWalkExecutorWiringTest
         assertTrue(invokesExecutor.get());
         assertFalse(invokesLegacyLoop.get());
         assertFalse(pollsPathfinderBeforeExecutor.get());
+        assertTrue(readsDebugSafeguard.get());
     }
 }
