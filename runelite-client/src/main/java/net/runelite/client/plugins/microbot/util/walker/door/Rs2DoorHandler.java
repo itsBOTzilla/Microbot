@@ -8,16 +8,17 @@ import java.util.Map;
 /**
  * Stateless throttling and cooldown management for door interactions during path traversal.
  * Tracks per-edge door attempts and stationary door open events to prevent redundant interactions
- * and respect game timing constraints. Extracted from {@code Rs2Walker} — pure functions over
- * cooldown maps, no walker state.
+ * and respect game timing constraints. Extracted from {@code Rs2Walker}; methods use the current
+ * wall-clock time and may mutate the supplied cooldown maps.
  */
 public final class Rs2DoorHandler {
     private Rs2DoorHandler() {
     }
 
     /**
-     * Generates a unique key for a door interaction attempt based on the door location and the
-     * path segment (from/to). Uses normalized edge keys when both endpoints are available.
+     * Generates a key for a door interaction attempt. When both endpoints are available, the key is
+     * a direction-independent normalized key for the path edge; otherwise, it includes the supplied
+     * door and endpoint values.
      *
      * @param doorTile the door's world location
      * @param fromWp the starting point of the path segment
