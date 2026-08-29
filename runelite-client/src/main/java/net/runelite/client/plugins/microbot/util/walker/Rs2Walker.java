@@ -2420,7 +2420,8 @@ public class Rs2Walker {
                                 }
                             }
                             boolean gateDoorInteraction = isDoorInteractionSettling() || isDoorEdgePassSkipCoolingDown();
-                            long recentDoorAgeMs = recentDoorAttemptAgeNearIndex(rawPath, rawEdgeStart);
+                            long recentDoorAgeMs = doorApproachAgeMs(
+                                    routeState, System.currentTimeMillis());
                             boolean playerMoving = Rs2Player.isMoving();
                             boolean doorApproachInFlight = Rs2WalkerAwaits.isDoorApproachInFlight(
                                     routeState.lastDoorAttemptPlayerPosition,
@@ -6432,28 +6433,6 @@ public class Rs2Walker {
         return false;
     }
 
-    private static long recentDoorAttemptAgeNearIndex(List<WorldPoint> path, int edgeIdx) {
-        if (path == null || path.size() < 2 || edgeIdx < 0) {
-            return -1L;
-        }
-        long now = System.currentTimeMillis();
-        long newestAttemptAt = -1L;
-        int start = Math.max(0, edgeIdx - 1);
-        int end = Math.min(path.size() - 2, edgeIdx + 1);
-        for (int i = start; i <= end; i++) {
-            WorldPoint from = path.get(i);
-            WorldPoint to = path.get(i + 1);
-            if (!isLikelyDoorEdgeTransition(from, to)) {
-                continue;
-            }
-            Long attemptedAt = recentDoorAttemptByEdge.get(doorAttemptKey(null, from, to));
-            if (attemptedAt != null) {
-                newestAttemptAt = Math.max(newestAttemptAt, attemptedAt);
-            }
-        }
-        return newestAttemptAt < 0 ? -1L : Math.max(0L, now - newestAttemptAt);
-    }
-
     private static boolean isLikelyDoorEdgeTransition(WorldPoint from, WorldPoint to) {
         if (from == null || to == null || from.getPlane() != to.getPlane()) {
             return false;
@@ -7078,6 +7057,13 @@ public class Rs2Walker {
         state.lastDoorAttemptFrom = fromWp;
         state.lastDoorAttemptTo = toWp;
         state.lastDoorAttemptAtMs = nowMs;
+    }
+
+    static long doorApproachAgeMs(WalkerRouteState state, long nowMs) {
+        if (state == null || state.lastDoorAttemptAtMs <= 0L) {
+            return -1L;
+        }
+        return Math.max(0L, nowMs - state.lastDoorAttemptAtMs);
     }
 
     private static boolean shouldThrottleCurrentTileTransportAttempt(WorldPoint fromWp, WorldPoint toWp) {

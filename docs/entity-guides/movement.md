@@ -325,8 +325,11 @@ An object transport can open quest dialogue instead of moving the player immedia
 **Pattern to follow:**
 
 ```java
-boolean landed = waitForPostHandleObjectLanding(...);
-if (Rs2Dialogue.isInDialogue()) {
+boolean dialogueWasOpen = Rs2Dialogue.isInDialogue();
+dispatchObjectTransport(...);
+boolean landed = waitForPostHandleObjectLanding(..., dialogueWasOpen);
+boolean dialogueOpened = !dialogueWasOpen && Rs2Dialogue.isInDialogue();
+if (!landed && dialogueOpened) {
     return true; // handled this transport pass
 }
 return landed;
@@ -336,6 +339,11 @@ if (Rs2Dialogue.isInDialogue() && isRouteProgressExit(exitReason)) {
     return WalkerState.MOVING; // caller can now process the dialogue
 }
 ```
+
+Only the closed-to-open transition counts as the object transport's handled result. The outer
+handoff remains level-triggered after route progress has been independently established, so the
+calling quest layer can also resume when genuine landing progress coincides with an existing
+dialogue; an open dialogue by itself does not create a route-progress exit.
 
 **Where this applies:** `Rs2Walker.handleObject`, post-object transport landing waits, and quest-driven doors or shortcuts that can display dialogue.
 

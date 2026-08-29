@@ -8,6 +8,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 public class ShortestPathWalkTaskPolicyTest {
@@ -99,5 +101,60 @@ public class ShortestPathWalkTaskPolicyTest {
         worker.join(1_000L);
         assertFalse(worker.isAlive());
         assertTrue(gate.tryAcquire(target));
+    }
+
+    @Test
+    public void replacedTargetCannotBeClearedByThePreviousWorker() {
+        ShortestPathScript.WalkTargetState targets = new ShortestPathScript.WalkTargetState();
+        WorldPoint firstTarget = new WorldPoint(3200, 3200, 0);
+        WorldPoint replacementTarget = new WorldPoint(3210, 3210, 0);
+
+        ShortestPathScript.WalkTargetSnapshot first = targets.publish(firstTarget);
+        ShortestPathScript.WalkTargetSnapshot replacement = targets.publish(replacementTarget);
+
+        assertFalse(targets.clearIfOwned(first));
+        assertEquals(replacementTarget, targets.get());
+        assertTrue(targets.clearIfOwned(replacement));
+        assertNull(targets.get());
+    }
+
+    @Test
+    public void replacementCannotPublishUntilOwnedRouteCleanupFinishes() throws Exception {
+        ShortestPathScript.WalkTargetState targets = new ShortestPathScript.WalkTargetState();
+        WorldPoint firstTarget = new WorldPoint(3200, 3200, 0);
+        WorldPoint replacementTarget = new WorldPoint(3210, 3210, 0);
+        ShortestPathScript.WalkTargetSnapshot first = targets.publish(firstTarget);
+        CountDownLatch cleanupStarted = new CountDownLatch(1);
+        CountDownLatch allowCleanupToFinish = new CountDownLatch(1);
+        CountDownLatch replacementAttempted = new CountDownLatch(1);
+        CountDownLatch replacementPublished = new CountDownLatch(1);
+
+        Thread terminalWorker = new Thread(() -> targets.clearIfOwned(first, () -> {
+            cleanupStarted.countDown();
+            try {
+                allowCleanupToFinish.await(1, TimeUnit.SECONDS);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+        terminalWorker.start();
+        assertTrue(cleanupStarted.await(1, TimeUnit.SECONDS));
+
+        Thread replacementWorker = new Thread(() -> {
+            replacementAttempted.countDown();
+            targets.publish(replacementTarget);
+            replacementPublished.countDown();
+        });
+        replacementWorker.start();
+        assertTrue(replacementAttempted.await(1, TimeUnit.SECONDS));
+        assertFalse("replacement publication must wait until old route cleanup finishes",
+                replacementPublished.await(100, TimeUnit.MILLISECONDS));
+
+        allowCleanupToFinish.countDown();
+        terminalWorker.join(1_000L);
+        replacementWorker.join(1_000L);
+        assertFalse(terminalWorker.isAlive());
+        assertFalse(replacementWorker.isAlive());
+        assertEquals(replacementTarget, targets.get());
     }
 }

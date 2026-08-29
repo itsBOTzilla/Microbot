@@ -8,10 +8,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Stateless helpers for resolving door interactions ahead of the player during path traversal.
- * Generates probe points for diagonal path segments and checks whether path edges are blocked
- * by collision or line-of-sight obstacles. Extracted from {@code Rs2Walker} — pure functions
- * over {@link WorldPoint} and reachability checks, no walker state.
+ * Helpers for resolving door interactions ahead of the player during path traversal.
+ * Probe-point generation is stateless, while reachability checks consult live collision and
+ * line-of-sight state and marshal client access through the client thread. This class stores no
+ * walker route state.
  */
 public final class Rs2DoorAheadResolver {
     private Rs2DoorAheadResolver() {

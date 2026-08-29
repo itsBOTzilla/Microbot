@@ -16,14 +16,22 @@ public final class Rs2WalkerTransportAwaits {
         if (before == null) {
             return false;
         }
-        sleepUntil(() -> {
+        boolean progressedDuringWait = sleepUntil(() -> {
             WorldPoint now = Rs2Player.getWorldLocation();
             return hasTransportProgress(before, now, expectedDestination, target,
                     dialogueWasOpen, Rs2Dialogue.isInDialogue());
         }, 1800);
         WorldPoint after = Rs2Player.getWorldLocation();
-        return hasTransportProgress(before, after, expectedDestination, target,
+        return resolveTransportProgress(progressedDuringWait, before, after, expectedDestination, target,
                 dialogueWasOpen, Rs2Dialogue.isInDialogue());
+    }
+
+    static boolean resolveTransportProgress(boolean progressedDuringWait,
+                                            WorldPoint before, WorldPoint after,
+                                            WorldPoint expectedDestination, WorldPoint target,
+                                            boolean dialogueWasOpen, boolean dialogueOpen) {
+        return progressedDuringWait || hasTransportProgress(
+                before, after, expectedDestination, target, dialogueWasOpen, dialogueOpen);
     }
 
     static boolean hasTransportProgress(WorldPoint before, WorldPoint now, WorldPoint expectedDestination,

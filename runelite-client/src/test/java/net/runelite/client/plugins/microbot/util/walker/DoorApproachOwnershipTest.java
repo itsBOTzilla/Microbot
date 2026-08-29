@@ -37,4 +37,14 @@ public class DoorApproachOwnershipTest {
         assertEquals(to, state.lastDoorAttemptTo);
         assertEquals(1000L, state.lastDoorAttemptAtMs);
     }
+
+    @Test
+    public void doorApproachAgeComesFromTheOwnedAttemptTimestamp() {
+        WalkerRouteState state = new WalkerRouteState();
+
+        assertEquals(-1L, Rs2Walker.doorApproachAgeMs(state, 1_700L));
+        state.lastDoorAttemptAtMs = 1_000L;
+        assertEquals(700L, Rs2Walker.doorApproachAgeMs(state, 1_700L));
+        assertEquals(0L, Rs2Walker.doorApproachAgeMs(state, 900L));
+    }
 }
