@@ -14,6 +14,20 @@ public final class WebWalkLog {
     private WebWalkLog() {
     }
 
+    public static void minimapDispatch(WorldPoint requested, WorldPoint actual,
+                                       int pathIndex, int tick, boolean redispatch) {
+        LOG.info("[WebWalk] click | requested={} actual={} idx={} tick={} redispatch={}",
+                requested, actual, pathIndex, tick, redispatch);
+    }
+
+    public static void executorReplan(String reason, int attempt, WorldPoint player, WorldPoint goal) {
+        LOG.info("[WebWalk] replan | reason={} attempt={} at={} goal={}", reason, attempt, player, goal);
+    }
+
+    public static void executorFailure(String errorType, WorldPoint goal) {
+        LOG.warn("[WebWalk] executor_failure | type={} goal={}", errorType, goal);
+    }
+
     public static void routeClear(String reason) {
         LOG.info("[WebWalk] clear | {}", reason);
     }

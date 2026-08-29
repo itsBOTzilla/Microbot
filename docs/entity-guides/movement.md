@@ -1,5 +1,25 @@
 # Movement Gotchas
 
+## Current execution model
+
+Blocking WebWalker calls run through `WebWalkExecutor`, `WebWalkSession`, and
+`RuneLiteWebWalkRuntime`. The executor owns one copied observation at a time and may dispatch at
+most one minimap click or route-edge interaction from it. After every dispatch it waits for a new
+tick, player tile, or pathfinder state before deciding again. `Rs2Walker.processWalk` remains only
+as legacy implementation detail during the migration and is not called by `walkWithStateInternal`.
+
+New movement fixes must preserve these boundaries:
+
+- the pathfinder and transport catalog remain the route-planning source;
+- the runtime selects the furthest collision-reachable forward point without crossing a transport;
+- an accepted click owns its actual fallback destination as the checkpoint;
+- doors, transports, and dynamic blockers outrank forward minimap movement;
+- progress means a changed player tile or forward path index, not merely elapsed time;
+- a dispatch always ends the current decision cycle.
+
+The historical sections below document the failure modes that led to this executor. Do not restore
+their former multi-scan `processWalk` ownership model when reusing an individual helper.
+
 ## 1. Do not recurse on failed minimap clicks without changing the click target
 
 `Rs2Walker.processWalk` holds the walker lock while processing a path. If a minimap click is rejected because the calculated point is outside the minimap clip, immediately recursing with the same target can spin forever while still holding the lock. Shrink the click target toward the player or otherwise change the condition before retrying.
