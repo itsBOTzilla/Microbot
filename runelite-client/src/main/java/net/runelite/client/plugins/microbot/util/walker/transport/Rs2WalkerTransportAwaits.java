@@ -1,5 +1,7 @@
 package net.runelite.client.plugins.microbot.util.walker.transport;
 
+import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.util.dialogues.Rs2Dialogue;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
@@ -14,7 +16,7 @@ public final class Rs2WalkerTransportAwaits {
     public static boolean didCurrentTileTransportProgress(WorldPoint before, WorldPoint expectedDestination,
                                                           WorldPoint target, boolean dialogueWasOpen) {
         if (before == null) {
-            return hasProgressWithoutPositionSnapshot(dialogueWasOpen, Rs2Dialogue.isInDialogue());
+            return waitForProgressWithoutPositionSnapshot(dialogueWasOpen, Rs2Dialogue::isInDialogue);
         }
         boolean progressedDuringWait = sleepUntil(() -> {
             WorldPoint now = Rs2Player.getWorldLocation();
@@ -28,6 +30,19 @@ public final class Rs2WalkerTransportAwaits {
 
     static boolean hasProgressWithoutPositionSnapshot(boolean dialogueWasOpen, boolean dialogueOpen) {
         return !dialogueWasOpen && dialogueOpen;
+    }
+
+    static boolean waitForProgressWithoutPositionSnapshot(boolean dialogueWasOpen,
+                                                          BooleanSupplier dialogueOpen) {
+        return waitForProgressWithoutPositionSnapshot(
+                dialogueWasOpen, dialogueOpen, condition -> sleepUntil(condition, 1800));
+    }
+
+    static boolean waitForProgressWithoutPositionSnapshot(boolean dialogueWasOpen,
+                                                          BooleanSupplier dialogueOpen,
+                                                          Function<BooleanSupplier, Boolean> waitFor) {
+        return dialogueOpen != null && waitFor != null && Boolean.TRUE.equals(waitFor.apply(
+                () -> hasProgressWithoutPositionSnapshot(dialogueWasOpen, dialogueOpen.getAsBoolean())));
     }
 
     static boolean resolveTransportProgress(boolean progressedDuringWait,
