@@ -15,11 +15,29 @@ public final class Rs2DoorGeometry {
     private Rs2DoorGeometry() {
     }
 
+    /**
+     * Checks whether a door object sits on the given path segment. Delegates to the overloaded
+     * variant with explicit location to avoid redundant {@code getWorldLocation()} calls.
+     *
+     * @param object the door/gate tile object
+     * @param fromWp the starting point of the path segment
+     * @param toWp the ending point of the path segment
+     * @return true if the door is on the segment, false otherwise
+     */
     public static boolean isDoorOnSegment(TileObject object, WorldPoint fromWp, WorldPoint toWp) {
         return isDoorOnSegment(object, object == null ? null : object.getWorldLocation(), fromWp, toWp);
     }
 
-    /** As above, with the object's location supplied (see {@link #wallDoorTouchesSegment}). */
+    /**
+     * As above, with the object's location supplied. Optimized for batch door detection to avoid
+     * redundant {@code getWorldLocation()} calls (see {@link #wallDoorTouchesSegment}).
+     *
+     * @param object the door/gate tile object
+     * @param objectLocation the pre-fetched world location of the object
+     * @param fromWp the starting point of the path segment
+     * @param toWp the ending point of the path segment
+     * @return true if the door is on the segment, false otherwise
+     */
     public static boolean isDoorOnSegment(TileObject object, WorldPoint objectLocation,
                                           WorldPoint fromWp, WorldPoint toWp) {
         if (object == null || objectLocation == null) return false;
@@ -29,6 +47,19 @@ public final class Rs2DoorGeometry {
         return isPointNearSegment(objectLocation, fromWp, toWp, 1);
     }
 
+    /**
+     * Checks whether the player is within interaction range of a door on the given path segment.
+     * Considers the door's location, the probe point, and both segment endpoints to find the
+     * closest approach distance.
+     *
+     * @param object the door/gate tile object
+     * @param probe the probe point for door detection
+     * @param fromWp the starting point of the path segment
+     * @param toWp the ending point of the path segment
+     * @param playerLoc the player's current world location
+     * @param rangeTiles the maximum interaction range in tiles
+     * @return true if any relevant point is within range, false otherwise
+     */
     public static boolean isDoorInteractionWithinRange(TileObject object, WorldPoint probe,
                                                        WorldPoint fromWp, WorldPoint toWp,
                                                        WorldPoint playerLoc, int rangeTiles) {
@@ -52,6 +83,15 @@ public final class Rs2DoorGeometry {
         return best <= rangeTiles;
     }
 
+    /**
+     * Checks whether a wall door's blocked edge intersects the given path segment. Delegates to
+     * the overloaded variant with explicit location to avoid redundant {@code getWorldLocation()} calls.
+     *
+     * @param wall the wall door object
+     * @param fromWp the starting point of the path segment
+     * @param toWp the ending point of the path segment
+     * @return true if the wall door blocks the segment, false otherwise
+     */
     public static boolean wallDoorTouchesSegment(WallObject wall, WorldPoint fromWp, WorldPoint toWp) {
         return wallDoorTouchesSegment(wall, wall == null ? null : wall.getWorldLocation(), fromWp, toWp);
     }
