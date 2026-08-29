@@ -7,10 +7,25 @@ import net.runelite.client.plugins.microbot.util.tile.Rs2Tile;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Stateless helpers for resolving door interactions ahead of the player during path traversal.
+ * Generates probe points for diagonal path segments and checks whether path edges are blocked
+ * by collision or line-of-sight obstacles. Extracted from {@code Rs2Walker} — pure functions
+ * over {@link WorldPoint} and reachability checks, no walker state.
+ */
 public final class Rs2DoorAheadResolver {
     private Rs2DoorAheadResolver() {
     }
 
+    /**
+     * Generates a list of probe points for door detection along a path segment.
+     * For diagonal segments, includes intermediate corner points to handle doors on either axis.
+     *
+     * @param fromWp the starting point of the path segment
+     * @param toWp the ending point of the path segment
+     * @param doorWp the door's world location
+     * @return a list of probe points including the door location and diagonal corners if applicable
+     */
     public static List<WorldPoint> buildSegmentProbes(WorldPoint fromWp, WorldPoint toWp, WorldPoint doorWp) {
         if (fromWp == null || toWp == null || doorWp == null) {
             return List.of();
@@ -27,6 +42,13 @@ public final class Rs2DoorAheadResolver {
         return probes;
     }
 
+    /**
+     * Checks whether a path edge between two points is blocked by collision or line-of-sight obstacles.
+     *
+     * @param from the starting point of the edge
+     * @param to the ending point of the edge
+     * @return true if the edge is blocked (unreachable or no line of sight), false otherwise
+     */
     public static boolean isPathEdgeBlocked(WorldPoint from, WorldPoint to) {
         if (from == null || to == null) {
             return false;
