@@ -373,6 +373,8 @@ boolean readyForHandoff = dx * dx + dy * dy <= (long) radius * radius;
 
 Apply the route handoff at the start of the next walk pass, before collision, door, and transport scans, and apply the same decision if the path loop revisits the checkpoint in the same pass that issued it. Waking the pass at the larger pre-click radius without releasing the route-owned checkpoint there still lets those scans consume the remaining movement time and produces a stop before the continuation click. Require observed distance progress before this early release so a newly issued seven-tile checkpoint is not immediately replaced by an eight-tile running handoff. Tag recovery-owned checkpoints separately and keep them on the five-tile clear threshold.
 
+The click reach must also stay ahead of the run handoff band. If normal reach jitter can create a checkpoint inside that band, one tile of progress repeatedly replaces an otherwise valid movement command. Keep the open-route reach floor above the run handoff radius, and only permit early handoff when the prior checkpoint observation was at least three tiles beyond that radius. Shorter checkpoints remain owned until the existing five-tile close threshold, where continuation is issued before route-object scans.
+
 ## 18. Exit a walk when the local player disappears
 
 Login transitions, connection loss, profile changes, and client shutdown can make `Client.getLocalPlayer()` return null while a blocking walk is still inside a movement wait. Treat a missing player location as a normal walk exit. Do not dereference it for an arrival-distance check, and do not keep a stale walker target active.

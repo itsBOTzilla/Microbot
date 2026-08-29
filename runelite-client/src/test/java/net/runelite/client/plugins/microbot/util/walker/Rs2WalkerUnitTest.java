@@ -622,13 +622,13 @@ public class Rs2WalkerUnitTest {
      * never sideways — lateral tile offsets leave the route and were removed for that reason.
      */
     @Test
-    public void routeClickReach_staysWithinSafeBandAndActuallyVaries() {
+    public void routeClickReach_staysAheadOfRunHandoffAndActuallyVaries() {
         int max = 10;
         java.util.Set<Integer> seen = new HashSet<>();
         for (int i = 0; i < 400; i++) {
             int reach = Rs2Walker.routeClickReach(max);
             assertTrue("reach must never exceed the caller's minimap reach, got " + reach, reach <= max);
-            assertTrue("reach must stay clear of the interim-close threshold, got " + reach, reach >= 7);
+            assertTrue("reach must stay ahead of the run handoff threshold, got " + reach, reach >= 9);
             seen.add(reach);
         }
         assertTrue("reach must actually vary between clicks, saw only " + seen, seen.size() > 1);
@@ -637,7 +637,7 @@ public class Rs2WalkerUnitTest {
     /** A caller reach at or below the floor must be returned unchanged rather than inverted. */
     @Test
     public void routeClickReach_degenerateBoundsAreSafe() {
-        for (int max : new int[]{0, 1, 5, 7}) {
+        for (int max : new int[]{0, 1, 5, 7, 8, 9}) {
             int reach = Rs2Walker.routeClickReach(max);
             assertEquals("a reach at/below the floor must pass through unchanged", max, reach);
         }
@@ -1631,17 +1631,31 @@ public class Rs2WalkerUnitTest {
     }
 
     @Test
-    public void routeInterimReadyForContinuation_handsOffEarlyWithoutWeakeningRecovery() {
+    public void routeInterimReadyForContinuation_requiresRoomBeyondTheHandoffBand() {
         WorldPoint interim = new WorldPoint(2890, 3396, 0);
-        WorldPoint initialPlayer = new WorldPoint(2883, 3396, 0);
-        WorldPoint progressedPlayer = new WorldPoint(2884, 3396, 0);
+        WorldPoint shortInitialPlayer = new WorldPoint(2883, 3396, 0);
+        WorldPoint shortProgressedPlayer = new WorldPoint(2884, 3396, 0);
+        WorldPoint mediumInitialPlayer = new WorldPoint(2880, 3396, 0);
+        WorldPoint longInitialPlayer = new WorldPoint(2879, 3396, 0);
+        WorldPoint longProgressedPlayer = new WorldPoint(2882, 3396, 0);
 
         assertFalse(Rs2Walker.routeInterimReadyForContinuation(
-                interim, initialPlayer, 7, false, 8));
-        assertTrue(Rs2Walker.routeInterimReadyForContinuation(
-                interim, progressedPlayer, 7, false, 8));
+                interim, shortInitialPlayer, 7, false, 8));
+        assertFalse("a checkpoint created inside the handoff band must not recycle after one tile",
+                Rs2Walker.routeInterimReadyForContinuation(
+                        interim, shortProgressedPlayer, 7, false, 8));
         assertFalse(Rs2Walker.routeInterimReadyForContinuation(
-                interim, progressedPlayer, 7, true, 8));
+                interim, mediumInitialPlayer, 10, false, 8));
+        assertFalse("two tiles beyond the handoff band is still too short for early recycling",
+                Rs2Walker.routeInterimReadyForContinuation(
+                        interim, longProgressedPlayer, 10, false, 8));
+        assertFalse(Rs2Walker.routeInterimReadyForContinuation(
+                interim, longInitialPlayer, 11, false, 8));
+        assertTrue("a long checkpoint may hand off after entering the run handoff band",
+                Rs2Walker.routeInterimReadyForContinuation(
+                        interim, longProgressedPlayer, 11, false, 8));
+        assertFalse(Rs2Walker.routeInterimReadyForContinuation(
+                interim, longProgressedPlayer, 11, true, 8));
     }
 
     @Test
@@ -1668,9 +1682,18 @@ public class Rs2WalkerUnitTest {
         assertTrue(Rs2Walker.shouldHoldInterimBeforeRouteScans(
                 interim, new WorldPoint(2883, 3396, 0),
                 4_900L, 4_900L, now, 4_900L, 7, false, true, 8));
-        assertFalse(Rs2Walker.shouldHoldInterimBeforeRouteScans(
+        assertTrue("a short checkpoint remains owned until the normal close threshold",
+                Rs2Walker.shouldHoldInterimBeforeRouteScans(
                 interim, new WorldPoint(2884, 3396, 0),
                 4_900L, 4_900L, now, 4_900L, 7, false, true, 8));
+        assertTrue("a medium checkpoint remains owned until the normal close threshold",
+                Rs2Walker.shouldHoldInterimBeforeRouteScans(
+                        interim, new WorldPoint(2882, 3396, 0),
+                        4_900L, 4_900L, now, 4_900L, 10, false, true, 8));
+        assertFalse("a long checkpoint hands off after entering the run handoff band",
+                Rs2Walker.shouldHoldInterimBeforeRouteScans(
+                        interim, new WorldPoint(2882, 3396, 0),
+                        4_900L, 4_900L, now, 4_900L, 11, false, true, 8));
         assertTrue(Rs2Walker.shouldHoldInterimBeforeRouteScans(
                 interim, new WorldPoint(2884, 3396, 0),
                 4_900L, 4_900L, now, 4_900L, 7, true, true, 8));
