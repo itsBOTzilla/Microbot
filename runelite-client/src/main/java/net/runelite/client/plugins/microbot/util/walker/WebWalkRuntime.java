@@ -85,10 +85,19 @@ public interface WebWalkRuntime
         private final WorldPoint clickTarget;
         private final int clickPathIndex;
         private final boolean routeActionAvailable;
+        private final boolean runEnabled;
 
         public Observation(int tick, WorldPoint player, Status status, RouteSnapshot route,
                            int pathIndex, WorldPoint clickTarget, int clickPathIndex,
                            boolean routeActionAvailable)
+        {
+            this(tick, player, status, route, pathIndex, clickTarget, clickPathIndex,
+                    routeActionAvailable, false);
+        }
+
+        public Observation(int tick, WorldPoint player, Status status, RouteSnapshot route,
+                           int pathIndex, WorldPoint clickTarget, int clickPathIndex,
+                           boolean routeActionAvailable, boolean runEnabled)
         {
             this.tick = tick;
             this.player = player;
@@ -98,6 +107,7 @@ public interface WebWalkRuntime
             this.clickTarget = clickTarget;
             this.clickPathIndex = clickPathIndex;
             this.routeActionAvailable = routeActionAvailable;
+            this.runEnabled = runEnabled;
         }
 
         public int getTick()
@@ -138,6 +148,11 @@ public interface WebWalkRuntime
         public boolean isRouteActionAvailable()
         {
             return routeActionAvailable;
+        }
+
+        public boolean isRunEnabled()
+        {
+            return runEnabled;
         }
     }
 

@@ -13,6 +13,8 @@ import net.runelite.api.coords.WorldPoint;
 public final class WebWalkExecutor
 {
     static final int CHECKPOINT_ARRIVAL_DISTANCE = 1;
+    static final int WALK_CHECKPOINT_HANDOFF_DISTANCE = 6;
+    static final int RUN_CHECKPOINT_HANDOFF_DISTANCE = 8;
     static final int NO_PROGRESS_TICKS = 2;
     static final int MINIMAP_COMMAND_START_GRACE_TICKS = 4;
     static final int MAX_REDISPATCHES = 1;
@@ -154,8 +156,12 @@ public final class WebWalkExecutor
             WorldPoint player = observation.getPlayer();
             boolean passedCheckpoint = session.getCheckpointPathIndex() >= 0
                     && observation.getPathIndex() > session.getCheckpointPathIndex();
-            if (passedCheckpoint || player != null && player.getPlane() == checkpoint.getPlane()
-                    && player.distanceTo2D(checkpoint) <= CHECKPOINT_ARRIVAL_DISTANCE)
+            boolean reachedCheckpoint = player != null && player.getPlane() == checkpoint.getPlane()
+                    && player.distanceTo2D(checkpoint) <= CHECKPOINT_ARRIVAL_DISTANCE;
+            int handoffDistance = observation.isRunEnabled()
+                    ? RUN_CHECKPOINT_HANDOFF_DISTANCE : WALK_CHECKPOINT_HANDOFF_DISTANCE;
+            if (passedCheckpoint || reachedCheckpoint
+                    || session.isCheckpointReadyForHandoff(player, handoffDistance))
             {
                 session.clearCheckpoint();
             }

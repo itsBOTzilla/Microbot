@@ -97,12 +97,12 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         if (Rs2Walker.runtimeArrived(target, arrivalDistance, rawPath, walkPath))
         {
             return new Observation(sample.tick, sample.player, Status.ARRIVED,
-                    route, -1, null, -1, false);
+                    route, -1, null, -1, false, sample.runEnabled);
         }
         if (rawPath.isEmpty())
         {
             return new Observation(sample.tick, sample.player, Status.UNREACHABLE,
-                    route, -1, null, -1, false);
+                    route, -1, null, -1, false, sample.runEnabled);
         }
 
         Map<WorldPoint, Integer> reachableMap = Rs2Tile.getReachableTilesFromTile(
@@ -116,7 +116,7 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         if (currentIndex < 0)
         {
             return new Observation(sample.tick, sample.player, Status.READY,
-                    route, -1, null, -1, false);
+                    route, -1, null, -1, false, sample.runEnabled);
         }
         pathRemaining = Math.max(0, rawPath.size() - currentIndex - 1);
         routeActionIndex = routeActionIndex(rawPath, currentIndex, sample.player, reachable);
@@ -130,7 +130,8 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         }
         return new Observation(sample.tick, sample.player, Status.READY, route, currentIndex,
                 candidate == null ? null : candidate.target,
-                candidate == null ? -1 : candidate.pathIndex, routeActionAvailable);
+                candidate == null ? -1 : candidate.pathIndex, routeActionAvailable,
+                sample.runEnabled);
     }
 
     @Override
@@ -299,7 +300,7 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
     private Observation terminal(ClientSample sample, Status status)
     {
         return new Observation(sample.tick, sample.player, status,
-                null, -1, null, -1, false);
+                null, -1, null, -1, false, sample.runEnabled);
     }
 
     private Observation waiting(ClientSample sample)
@@ -325,8 +326,8 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         {
             Client client = Microbot.getClient();
             return new ClientSample(client.getTickCount(), Rs2Player.getWorldLocation(),
-                    Microbot.isLoggedIn());
-        }).orElseGet(() -> new ClientSample(0, null, false));
+                    Microbot.isLoggedIn(), Rs2Player.isRunEnabled());
+        }).orElseGet(() -> new ClientSample(0, null, false, false));
     }
 
     private static int currentTick()
@@ -362,12 +363,14 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         private final int tick;
         private final WorldPoint player;
         private final boolean loggedIn;
+        private final boolean runEnabled;
 
-        private ClientSample(int tick, WorldPoint player, boolean loggedIn)
+        private ClientSample(int tick, WorldPoint player, boolean loggedIn, boolean runEnabled)
         {
             this.tick = tick;
             this.player = player;
             this.loggedIn = loggedIn;
+            this.runEnabled = runEnabled;
         }
     }
 }
