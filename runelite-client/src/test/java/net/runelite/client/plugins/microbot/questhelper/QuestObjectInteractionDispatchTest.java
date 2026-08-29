@@ -6,7 +6,9 @@ import java.util.ArrayList;
 import java.util.List;
 import net.runelite.api.TileObject;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.client.plugins.microbot.api.npc.models.Rs2NpcModel;
 import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
+import net.runelite.client.plugins.microbot.questhelper.steps.NpcStep;
 import net.runelite.client.plugins.microbot.questhelper.steps.ObjectStep;
 import net.runelite.client.plugins.microbot.util.gameobject.Rs2GameObject;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
@@ -47,6 +49,29 @@ public class QuestObjectInteractionDispatchTest
                 calls.itemObjectInteractionOrder > calls.selectionWaitOrder);
         assertTrue("Selected items must be applied to objects with the Use action",
                 calls.itemObjectInteractionUsesUseAction);
+    }
+
+    @Test
+    public void itemObjectStepsRequireTheExpectedInventoryItemSelection()
+    {
+        int expectedItemId = 1925;
+
+        assertFalse(QuestScript.isExpectedInventoryItemSelected(false, expectedItemId, expectedItemId));
+        assertFalse(QuestScript.isExpectedInventoryItemSelected(true, -1, expectedItemId));
+        assertFalse(QuestScript.isExpectedInventoryItemSelected(true, 1931, expectedItemId));
+        assertTrue(QuestScript.isExpectedInventoryItemSelected(true, expectedItemId, expectedItemId));
+    }
+
+    @Test
+    public void itemNpcStepsWaitForSelectionBeforeNpcDispatch() throws IOException
+    {
+        DispatchCalls calls = readApplyNpcStepCalls();
+
+        assertTrue("NPC-step item selection must be dispatched", calls.inventoryUseOrder > 0);
+        assertTrue("QuestScript must confirm the expected item before targeting an NPC",
+                calls.selectionWaitOrder > calls.inventoryUseOrder);
+        assertTrue("The NPC target must be dispatched only after item selection is confirmed",
+                calls.itemNpcInteractionOrder > calls.selectionWaitOrder);
     }
 
     @Test
@@ -284,6 +309,68 @@ public class QuestObjectInteractionDispatchTest
         return calls;
     }
 
+    private static DispatchCalls readApplyNpcStepCalls() throws IOException
+    {
+        String resource = "/" + Type.getInternalName(QuestScript.class) + ".class";
+        DispatchCalls calls = new DispatchCalls();
+        try (InputStream input = QuestScript.class.getResourceAsStream(resource))
+        {
+            if (input == null)
+            {
+                throw new IOException("Unable to load " + resource);
+            }
+
+            String expectedDescriptor = Type.getMethodDescriptor(Type.BOOLEAN_TYPE, Type.getType(NpcStep.class));
+            new ClassReader(input).accept(new ClassVisitor(Opcodes.ASM9)
+            {
+                @Override
+                public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                 String signature, String[] exceptions)
+                {
+                    boolean expectedMethod = name.equals("applyNpcStep")
+                            && descriptor.equals(expectedDescriptor);
+                    return new MethodVisitor(Opcodes.ASM9)
+                    {
+                        private int callOrder;
+
+                        @Override
+                        public void visitMethodInsn(int opcode, String owner, String methodName,
+                                                    String methodDescriptor, boolean isInterface)
+                        {
+                            if (!expectedMethod)
+                            {
+                                return;
+                            }
+
+                            callOrder++;
+                            if (owner.equals(Type.getInternalName(Rs2Inventory.class))
+                                    && methodName.equals("use")
+                                    && methodDescriptor.equals(Type.getMethodDescriptor(
+                                    Type.BOOLEAN_TYPE, Type.INT_TYPE)))
+                            {
+                                calls.inventoryUseOrder = callOrder;
+                            }
+                            if (owner.equals(Type.getInternalName(QuestScript.class))
+                                    && methodName.equals("waitForSelectedInventoryItem"))
+                            {
+                                calls.selectionWaitOrder = callOrder;
+                            }
+                            if (owner.equals(Type.getInternalName(Rs2NpcModel.class))
+                                    && methodName.equals("click")
+                                    && methodDescriptor.equals(Type.getMethodDescriptor(
+                                    Type.BOOLEAN_TYPE, Type.getType(String.class)))
+                                    && calls.selectionWaitOrder > 0)
+                            {
+                                calls.itemNpcInteractionOrder = callOrder;
+                            }
+                        }
+                    };
+                }
+            }, ClassReader.SKIP_FRAMES);
+        }
+        return calls;
+    }
+
     private static final class DispatchCalls
     {
         private int matchedMethods;
@@ -292,6 +379,7 @@ public class QuestObjectInteractionDispatchTest
         private int inventoryUseOrder;
         private int selectionWaitOrder;
         private int itemObjectInteractionOrder;
+        private int itemNpcInteractionOrder;
         private int preDispatchIdleWaitOrder;
         private int rawGameObjectInteractionOrder;
         private int globalReachabilityChecks;
