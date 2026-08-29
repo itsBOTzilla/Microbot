@@ -5430,6 +5430,7 @@ public class Rs2Walker {
                     boolean ranged = originDistance > RAW_TRANSPORT_DISPATCH_MAX_DISTANCE;
                     WorldPoint before = Rs2Player.getWorldLocation();
                     WorldPoint expectedDestination = expectedDest;
+                    boolean dialogueWasOpen = Rs2Dialogue.isInDialogue();
                     long t = System.currentTimeMillis();
                     if (ranged) {
                         WebWalkLog.spInfo("ranged_transport_dispatch | origin={} dist={} — clicking from range, server walks us",
@@ -5438,7 +5439,8 @@ public class Rs2Walker {
                     boolean handledTransport = handleTransports(rawPath, i);
                     transportMs += System.currentTimeMillis() - t;
                     if (handledTransport) {
-                        if (!didCurrentTileTransportProgress(before, expectedDestination, target)) {
+                        if (!didCurrentTileTransportProgress(
+                                before, expectedDestination, target, dialogueWasOpen)) {
                             WebWalkLog.spInfo("raw_path_transport_no_progress",
                                     "at=%s expected=%s target=%s",
                                     before, expectedDestination, target);
@@ -5792,11 +5794,13 @@ public class Rs2Walker {
             }
             markCurrentTileTransportAttempt(origin, transport.getDestination());
             WorldPoint before = Rs2Player.getWorldLocation();
+            boolean dialogueWasOpen = Rs2Dialogue.isInDialogue();
             // Pass the transport's own origin so handleTransports walks the short hop to it before
             // interacting (NPC dispatch already auto-walks via canWalkTo + interact); object/door
             // interactions that can't be reached from here simply return false and we fall through.
             if (handleTransports(Arrays.asList(origin, transport.getDestination()), 0)) {
-                if (didCurrentTileTransportProgress(before, transport.getDestination(), target)) {
+                if (didCurrentTileTransportProgress(
+                        before, transport.getDestination(), target, dialogueWasOpen)) {
                     log.info("[Walker] Nearby transport handler resolved obstacle: origin={} dest={} (player {})",
                             origin, transport.getDestination(), playerLoc);
                     return true;
@@ -5814,8 +5818,10 @@ public class Rs2Walker {
         return false;
     }
 
-    private static boolean didCurrentTileTransportProgress(WorldPoint before, WorldPoint expectedDestination, WorldPoint target) {
-        return Rs2WalkerTransportAwaits.didCurrentTileTransportProgress(before, expectedDestination, target);
+    private static boolean didCurrentTileTransportProgress(WorldPoint before, WorldPoint expectedDestination,
+                                                           WorldPoint target, boolean dialogueWasOpen) {
+        return Rs2WalkerTransportAwaits.didCurrentTileTransportProgress(
+                before, expectedDestination, target, dialogueWasOpen);
     }
 
     // Maps each tile on the planned route at/after the player's closest index to its route position.
@@ -9818,8 +9824,9 @@ public class Rs2Walker {
             WebWalkLog.spInfo("ranged_transport_dispatch | origin={} dist={} — clicking from range, server walks us",
                     compactWorldPoint(origin), originDistance);
             WorldPoint before = Rs2Player.getWorldLocation();
+            boolean dialogueWasOpen = Rs2Dialogue.isInDialogue();
             if (handleTransports(rawPath, ri)) {
-                if (didCurrentTileTransportProgress(before, dest, currentTarget)) {
+                if (didCurrentTileTransportProgress(before, dest, currentTarget, dialogueWasOpen)) {
                     return true;
                 }
                 markRangedTransportEdgeFailed(origin, dest);

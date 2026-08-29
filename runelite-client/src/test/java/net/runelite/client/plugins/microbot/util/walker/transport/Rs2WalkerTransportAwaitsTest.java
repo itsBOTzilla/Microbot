@@ -1,0 +1,42 @@
+package net.runelite.client.plugins.microbot.util.walker.transport;
+
+import net.runelite.api.coords.WorldPoint;
+import org.junit.Test;
+
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+public class Rs2WalkerTransportAwaitsTest
+{
+    private static final WorldPoint BEFORE = new WorldPoint(3200, 3200, 0);
+    private static final WorldPoint DESTINATION = new WorldPoint(3203, 3200, 0);
+    private static final WorldPoint TARGET = new WorldPoint(3210, 3200, 0);
+
+    @Test
+    public void openDialogueCountsAsTransportProgressWithoutMovement()
+    {
+        assertTrue(Rs2WalkerTransportAwaits.hasTransportProgress(
+                BEFORE, BEFORE, DESTINATION, TARGET, false, true));
+    }
+
+    @Test
+    public void preexistingDialogueDoesNotCountAsTransportProgress()
+    {
+        assertFalse(Rs2WalkerTransportAwaits.hasTransportProgress(
+                BEFORE, BEFORE, DESTINATION, TARGET, true, true));
+    }
+
+    @Test
+    public void noDialogueOrMovementDoesNotCountAsTransportProgress()
+    {
+        assertFalse(Rs2WalkerTransportAwaits.hasTransportProgress(
+                BEFORE, BEFORE, DESTINATION, TARGET, false, false));
+    }
+
+    @Test
+    public void movementStillCountsAsTransportProgress()
+    {
+        assertTrue(Rs2WalkerTransportAwaits.hasTransportProgress(
+                BEFORE, DESTINATION, DESTINATION, TARGET, false, false));
+    }
+}
