@@ -1130,6 +1130,8 @@ public class Rs2WalkerUnitTest {
     public void objectTransportPassEndsWhenDialogueOpensBeforeLanding() {
         assertTrue(Rs2Walker.shouldEndObjectTransportPass(false, false, true));
         assertTrue(Rs2Walker.shouldEndObjectTransportPass(true, false, false));
+        assertTrue("a real landing wins even when a new dialogue also opens",
+                Rs2Walker.shouldEndObjectTransportPass(true, false, true));
         assertTrue("a real landing remains progress while an unrelated dialogue stays open",
                 Rs2Walker.shouldEndObjectTransportPass(true, true, true));
         assertFalse(Rs2Walker.shouldEndObjectTransportPass(false, false, false));
@@ -1137,6 +1139,15 @@ public class Rs2WalkerUnitTest {
                 Rs2Walker.shouldEndObjectTransportPass(false, true, true));
         assertTrue(Rs2Walker.isNewObjectTransportDialogue(false, true));
         assertFalse(Rs2Walker.isNewObjectTransportDialogue(true, true));
+        assertTrue(Rs2Walker.shouldYieldObjectTransportDialogue(false, false, true));
+        assertFalse(Rs2Walker.shouldYieldObjectTransportDialogue(true, false, true));
+        assertFalse(Rs2Walker.shouldYieldObjectTransportDialogue(false, true, true));
+        assertTrue(Rs2Walker.resolveObjectTransportLandingWait(true, true, false, false, true));
+        assertTrue("an accepted adjacent landing wins even when dialogue opens",
+                Rs2Walker.resolveObjectTransportLandingWait(false, true, true, false, true));
+        assertFalse(Rs2Walker.resolveObjectTransportLandingWait(false, true, false, false, true));
+        assertTrue(Rs2Walker.shouldEndObjectTransportLandingPoll(false, true, true, false));
+        assertFalse(Rs2Walker.shouldEndObjectTransportLandingPoll(false, false, false, false));
     }
 
     @Test

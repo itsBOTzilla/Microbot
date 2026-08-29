@@ -9391,7 +9391,8 @@ public class Rs2Walker {
                                 transport, destWait, maxInclusive, dialogueWasOpen);
                         boolean dialogueOpen = Rs2Dialogue.isInDialogue();
                         if (shouldEndObjectTransportPass(landedAfterObject, dialogueWasOpen, dialogueOpen)) {
-                            if (isNewObjectTransportDialogue(dialogueWasOpen, dialogueOpen)) {
+                            if (shouldYieldObjectTransportDialogue(
+                                    landedAfterObject, dialogueWasOpen, dialogueOpen)) {
                                 WebWalkLog.spInfo("object_transport_dialogue_yield | origin={} dest={} at={}",
                                         compactWorldPoint(transport.getOrigin()),
                                         compactWorldPoint(destWait),
@@ -9436,51 +9437,60 @@ public class Rs2Walker {
                                                           int maxInclusive,
                                                           boolean dialogueWasOpen) {
         long waitStartedAt = System.currentTimeMillis();
+        AtomicBoolean reachedDestination = new AtomicBoolean(false);
+        AtomicBoolean dialogueOpened = new AtomicBoolean(false);
         AtomicBoolean settledAwayFromAdjacentDestination = new AtomicBoolean(false);
         AtomicBoolean settledNearAdjacentDestination = new AtomicBoolean(false);
         boolean completed = sleepUntil(() -> {
             boolean atDestination = isPlayerWithinChebyshevInclusive(destWait, maxInclusive);
-            if (shouldEndObjectTransportPass(
-                    atDestination, dialogueWasOpen, Rs2Dialogue.isInDialogue())) {
-                return true;
+            boolean dialogueOpen = Rs2Dialogue.isInDialogue();
+            boolean newDialogue = isNewObjectTransportDialogue(dialogueWasOpen, dialogueOpen);
+            boolean settledNearDestination = false;
+            boolean settledAwayFromDestination = false;
+            if (isAdjacentSamePlaneTransport(transport)
+                    && System.currentTimeMillis() - waitStartedAt >= POST_HANDLE_OBJECT_FAILED_SETTLE_MS) {
+                WorldPoint playerLoc = Rs2Player.getWorldLocation();
+                if (playerLoc != null && destWait != null && playerLoc.getPlane() == destWait.getPlane()
+                        && !Rs2Player.isMoving() && !Rs2Player.isAnimating()) {
+                    settledNearDestination = isSettledNearAdjacentSamePlaneLanding(
+                            transport, playerLoc, destWait, maxInclusive);
+                    WorldPoint origin = transport == null ? null : transport.getOrigin();
+                    boolean settledAwayFromOrigin = origin != null && playerLoc.distanceTo2D(origin) > 1;
+                    settledAwayFromDestination = !settledNearDestination
+                            && playerLoc.distanceTo2D(destWait) > Math.max(1, maxInclusive)
+                            && settledAwayFromOrigin;
+                }
             }
-            if (!isAdjacentSamePlaneTransport(transport)
-                    || System.currentTimeMillis() - waitStartedAt < POST_HANDLE_OBJECT_FAILED_SETTLE_MS) {
-                return false;
+            if (atDestination) {
+                reachedDestination.set(true);
             }
-            WorldPoint playerLoc = Rs2Player.getWorldLocation();
-            if (playerLoc == null || destWait == null || playerLoc.getPlane() != destWait.getPlane()
-                    || Rs2Player.isMoving() || Rs2Player.isAnimating()) {
-                return false;
+            if (newDialogue) {
+                dialogueOpened.set(true);
             }
-            if (isSettledNearAdjacentSamePlaneLanding(transport, playerLoc, destWait, maxInclusive)) {
+            if (settledNearDestination) {
                 settledNearAdjacentDestination.set(true);
-                return true;
             }
-            WorldPoint origin = transport == null ? null : transport.getOrigin();
-            boolean settledAwayFromOrigin = origin != null && playerLoc.distanceTo2D(origin) > 1;
-            if (playerLoc.distanceTo2D(destWait) > Math.max(1, maxInclusive)
-                    && settledAwayFromOrigin) {
+            if (settledAwayFromDestination) {
                 settledAwayFromAdjacentDestination.set(true);
-                return true;
             }
-            return false;
+            return shouldEndObjectTransportLandingPoll(
+                    atDestination, newDialogue, settledNearDestination, settledAwayFromDestination);
         }, POST_HANDLE_OBJECT_LANDING_WAIT_MS);
 
-        if (isNewObjectTransportDialogue(dialogueWasOpen, Rs2Dialogue.isInDialogue())) {
-            return false;
-        }
         if (settledNearAdjacentDestination.get()) {
             WebWalkLog.spInfo("post-handleObject adjacent landing accepted | dest={} at={}",
                     compactWorldPoint(destWait), compactWorldPoint(Rs2Player.getWorldLocation()));
-            return true;
         }
         if (settledAwayFromAdjacentDestination.get()) {
             WebWalkLog.spInfo("post-handleObject adjacent landing failed | dest={} at={}",
                     compactWorldPoint(destWait), compactWorldPoint(Rs2Player.getWorldLocation()));
-            return false;
         }
-        return completed;
+        return resolveObjectTransportLandingWait(
+                reachedDestination.get(),
+                dialogueOpened.get(),
+                settledNearAdjacentDestination.get(),
+                settledAwayFromAdjacentDestination.get(),
+                completed);
     }
 
     static boolean shouldEndObjectTransportPass(boolean landed,
@@ -9491,6 +9501,39 @@ public class Rs2Walker {
 
     static boolean isNewObjectTransportDialogue(boolean dialogueWasOpen, boolean dialogueOpen) {
         return !dialogueWasOpen && dialogueOpen;
+    }
+
+    static boolean shouldYieldObjectTransportDialogue(boolean landed,
+                                                      boolean dialogueWasOpen,
+                                                      boolean dialogueOpen) {
+        return !landed && isNewObjectTransportDialogue(dialogueWasOpen, dialogueOpen);
+    }
+
+    static boolean shouldEndObjectTransportLandingPoll(boolean reachedDestination,
+                                                       boolean dialogueOpened,
+                                                       boolean settledNearDestination,
+                                                       boolean settledAwayFromDestination) {
+        return reachedDestination || dialogueOpened || settledNearDestination || settledAwayFromDestination;
+    }
+
+    static boolean resolveObjectTransportLandingWait(boolean reachedDestination,
+                                                     boolean dialogueOpened,
+                                                     boolean settledNearDestination,
+                                                     boolean settledAwayFromDestination,
+                                                     boolean completed) {
+        if (reachedDestination) {
+            return true;
+        }
+        if (settledNearDestination) {
+            return true;
+        }
+        if (dialogueOpened) {
+            return false;
+        }
+        if (settledAwayFromDestination) {
+            return false;
+        }
+        return completed;
     }
 
     static boolean isSettledNearAdjacentSamePlaneLanding(Transport transport,
