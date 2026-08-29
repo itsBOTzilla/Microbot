@@ -157,4 +157,55 @@ public class ShortestPathWalkTaskPolicyTest {
         assertFalse(replacementWorker.isAlive());
         assertEquals(replacementTarget, targets.get());
     }
+
+    @Test
+    public void replacementCannotPublishUntilStopCleanupFinishes() throws Exception {
+        ShortestPathScript.WalkTargetState targets = new ShortestPathScript.WalkTargetState();
+        WorldPoint replacementTarget = new WorldPoint(3210, 3210, 0);
+        targets.publish(new WorldPoint(3200, 3200, 0));
+        ShortestPathScript.WalkTargetSnapshot stopped = targets.publish(null);
+        CountDownLatch cleanupStarted = new CountDownLatch(1);
+        CountDownLatch allowCleanupToFinish = new CountDownLatch(1);
+        CountDownLatch replacementAttempted = new CountDownLatch(1);
+        CountDownLatch replacementPublished = new CountDownLatch(1);
+
+        Thread stopWorker = new Thread(() -> targets.clearIfOwned(stopped, () -> {
+            cleanupStarted.countDown();
+            try {
+                allowCleanupToFinish.await(1, TimeUnit.SECONDS);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+        stopWorker.start();
+        assertTrue(cleanupStarted.await(1, TimeUnit.SECONDS));
+
+        Thread replacementWorker = new Thread(() -> {
+            replacementAttempted.countDown();
+            targets.publishIfChanged(replacementTarget);
+            replacementPublished.countDown();
+        });
+        replacementWorker.start();
+        assertTrue(replacementAttempted.await(1, TimeUnit.SECONDS));
+        assertFalse("replacement publication must wait until stop cleanup finishes",
+                replacementPublished.await(100, TimeUnit.MILLISECONDS));
+
+        allowCleanupToFinish.countDown();
+        stopWorker.join(1_000L);
+        replacementWorker.join(1_000L);
+        assertFalse(stopWorker.isAlive());
+        assertFalse(replacementWorker.isAlive());
+        assertEquals(replacementTarget, targets.get());
+    }
+
+    @Test
+    public void shutdownTargetStateRejectsLaterPublication() {
+        ShortestPathScript.WalkTargetState targets = new ShortestPathScript.WalkTargetState();
+        targets.publish(new WorldPoint(3200, 3200, 0));
+
+        targets.shutdown(null);
+
+        assertNull(targets.publishIfChanged(new WorldPoint(3210, 3210, 0)));
+        assertNull(targets.get());
+    }
 }

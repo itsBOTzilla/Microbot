@@ -47,11 +47,12 @@ public class ShortestPathScript extends Script {
 
     @Override
     public void shutdown() {
-        walkTaskGate.shutdown();
-        resetExitRetryState();
-        walkTargets.publish(null);
-        Rs2Walker.clearWalkingRoute("shortest-path-script:shutdown");
-        cancelWalkTask();
+        walkTargets.shutdown(() -> {
+            walkTaskGate.shutdown();
+            resetExitRetryState();
+            Rs2Walker.clearWalkingRoute("shortest-path-script:shutdown");
+            cancelWalkTask();
+        });
         super.shutdown();
     }
 
@@ -73,9 +74,11 @@ public class ShortestPathScript extends Script {
 			String r = stopReason != null && !stopReason.isBlank()
 					? stopReason
 					: "shortest-path-script:trigger-null";
-			walkTargets.publish(null);
-			Rs2Walker.clearWalkingRoute(r);
-			cancelWalkTask();
+			WalkTargetSnapshot stoppedTarget = walkTargets.publish(null);
+			walkTargets.clearIfOwned(stoppedTarget, () -> {
+				Rs2Walker.clearWalkingRoute(r);
+				cancelWalkTask();
+			});
 		} else {
 			if (walkTaskGate.isShutdown())
 			{
@@ -183,6 +186,7 @@ public class ShortestPathScript extends Script {
     static final class WalkTargetState {
         private WorldPoint target;
         private long generation;
+        private boolean shutdown;
 
         synchronized WorldPoint get() {
             return target;
@@ -199,10 +203,19 @@ public class ShortestPathScript extends Script {
         }
 
         synchronized WalkTargetSnapshot publishIfChanged(WorldPoint nextTarget) {
-            if (Objects.equals(target, nextTarget)) {
+            if (shutdown || Objects.equals(target, nextTarget)) {
                 return null;
             }
             return publish(nextTarget);
+        }
+
+        synchronized void shutdown(Runnable cleanup) {
+            shutdown = true;
+            target = null;
+            generation++;
+            if (cleanup != null) {
+                cleanup.run();
+            }
         }
 
         synchronized boolean owns(WalkTargetSnapshot snapshot) {
