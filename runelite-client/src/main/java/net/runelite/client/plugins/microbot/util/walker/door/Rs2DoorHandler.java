@@ -5,10 +5,26 @@ import net.runelite.client.plugins.microbot.util.walker.door.model.DoorEdge;
 
 import java.util.Map;
 
+/**
+ * Stateless throttling and cooldown management for door interactions during path traversal.
+ * Tracks per-edge door attempts and stationary door open events to prevent redundant interactions
+ * and respect game timing constraints. Extracted from {@code Rs2Walker}; methods use the current
+ * wall-clock time and may mutate the supplied cooldown maps.
+ */
 public final class Rs2DoorHandler {
     private Rs2DoorHandler() {
     }
 
+    /**
+     * Generates a key for a door interaction attempt. When both endpoints are available, the key is
+     * a direction-independent normalized key for the path edge; otherwise, it includes the supplied
+     * door and endpoint values.
+     *
+     * @param doorTile the door's world location
+     * @param fromWp the starting point of the path segment
+     * @param toWp the ending point of the path segment
+     * @return a unique string key representing this door attempt
+     */
     public static String doorAttemptKey(WorldPoint doorTile, WorldPoint fromWp, WorldPoint toWp) {
         if (fromWp != null && toWp != null) {
             return new DoorEdge(fromWp, toWp).normalizedKey();

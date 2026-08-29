@@ -1094,9 +1094,15 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void objectTransportPassEndsWhenDialogueOpensBeforeLanding() {
-        assertTrue(Rs2Walker.shouldEndObjectTransportPass(false, true));
-        assertTrue(Rs2Walker.shouldEndObjectTransportPass(true, false));
-        assertFalse(Rs2Walker.shouldEndObjectTransportPass(false, false));
+        assertTrue(Rs2Walker.shouldEndObjectTransportPass(false, false, true));
+        assertTrue(Rs2Walker.shouldEndObjectTransportPass(true, false, false));
+        assertTrue("a real landing remains progress while an unrelated dialogue stays open",
+                Rs2Walker.shouldEndObjectTransportPass(true, true, true));
+        assertFalse(Rs2Walker.shouldEndObjectTransportPass(false, false, false));
+        assertFalse("an unrelated dialogue that was already open is not transport progress",
+                Rs2Walker.shouldEndObjectTransportPass(false, true, true));
+        assertTrue(Rs2Walker.isNewObjectTransportDialogue(false, true));
+        assertFalse(Rs2Walker.isNewObjectTransportDialogue(true, true));
     }
 
     @Test

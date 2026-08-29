@@ -9353,6 +9353,7 @@ public class Rs2Walker {
                                     interactionAction, transportAction, object.getWorldLocation(), object.getId());
                         }
                         prepareTransportObjectForInteraction(object);
+                        boolean dialogueWasOpen = Rs2Dialogue.isInDialogue();
                         if (!handleObject(transport, object, interactionAction)) {
                             return false;
                         }
@@ -9362,10 +9363,11 @@ public class Rs2Walker {
                         if (destWait == null) {
                             return false;
                         }
-                        boolean landedAfterObject = waitForPostHandleObjectLanding(transport, destWait, maxInclusive);
+                        boolean landedAfterObject = waitForPostHandleObjectLanding(
+                                transport, destWait, maxInclusive, dialogueWasOpen);
                         boolean dialogueOpen = Rs2Dialogue.isInDialogue();
-                        if (shouldEndObjectTransportPass(landedAfterObject, dialogueOpen)) {
-                            if (dialogueOpen) {
+                        if (shouldEndObjectTransportPass(landedAfterObject, dialogueWasOpen, dialogueOpen)) {
+                            if (isNewObjectTransportDialogue(dialogueWasOpen, dialogueOpen)) {
                                 WebWalkLog.spInfo("object_transport_dialogue_yield | origin={} dest={} at={}",
                                         compactWorldPoint(transport.getOrigin()),
                                         compactWorldPoint(destWait),
@@ -9407,13 +9409,15 @@ public class Rs2Walker {
 
     private static boolean waitForPostHandleObjectLanding(Transport transport,
                                                           WorldPoint destWait,
-                                                          int maxInclusive) {
+                                                          int maxInclusive,
+                                                          boolean dialogueWasOpen) {
         long waitStartedAt = System.currentTimeMillis();
         AtomicBoolean settledAwayFromAdjacentDestination = new AtomicBoolean(false);
         AtomicBoolean settledNearAdjacentDestination = new AtomicBoolean(false);
         boolean completed = sleepUntil(() -> {
             boolean atDestination = isPlayerWithinChebyshevInclusive(destWait, maxInclusive);
-            if (shouldEndObjectTransportPass(atDestination, Rs2Dialogue.isInDialogue())) {
+            if (shouldEndObjectTransportPass(
+                    atDestination, dialogueWasOpen, Rs2Dialogue.isInDialogue())) {
                 return true;
             }
             if (!isAdjacentSamePlaneTransport(transport)
@@ -9439,7 +9443,7 @@ public class Rs2Walker {
             return false;
         }, POST_HANDLE_OBJECT_LANDING_WAIT_MS);
 
-        if (Rs2Dialogue.isInDialogue()) {
+        if (isNewObjectTransportDialogue(dialogueWasOpen, Rs2Dialogue.isInDialogue())) {
             return false;
         }
         if (settledNearAdjacentDestination.get()) {
@@ -9455,8 +9459,14 @@ public class Rs2Walker {
         return completed;
     }
 
-    static boolean shouldEndObjectTransportPass(boolean landed, boolean dialogueOpen) {
-        return landed || dialogueOpen;
+    static boolean shouldEndObjectTransportPass(boolean landed,
+                                                boolean dialogueWasOpen,
+                                                boolean dialogueOpen) {
+        return landed || isNewObjectTransportDialogue(dialogueWasOpen, dialogueOpen);
+    }
+
+    static boolean isNewObjectTransportDialogue(boolean dialogueWasOpen, boolean dialogueOpen) {
+        return !dialogueWasOpen && dialogueOpen;
     }
 
     static boolean isSettledNearAdjacentSamePlaneLanding(Transport transport,
