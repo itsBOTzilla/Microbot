@@ -3,6 +3,7 @@ import net.runelite.client.plugins.microbot.util.walker.geometry.WalkerPathGeome
 import net.runelite.client.plugins.microbot.util.walker.obstacle.Rs2ObstacleHandler;
 import net.runelite.client.plugins.microbot.util.walker.recovery.RouteRecovery;
 import net.runelite.client.plugins.microbot.util.walker.door.Rs2DoorGeometry;
+import net.runelite.client.plugins.microbot.util.walker.state.WalkerRouteState;
 
 import net.runelite.api.WallObject;
 import net.runelite.api.coords.WorldPoint;
@@ -1412,6 +1413,48 @@ public class Rs2WalkerUnitTest {
     }
 
     @Test
+    public void recordInterimProgress_changedPlayerTileRefreshesProgressOnCurvedApproach() {
+        WalkerRouteState state = new WalkerRouteState();
+        WorldPoint checkpoint = new WorldPoint(2890, 3396, 0);
+        WorldPoint firstPlayerTile = new WorldPoint(2882, 3396, 0);
+        WorldPoint nextPlayerTileOnCurve = new WorldPoint(2882, 3397, 0);
+        state.interimTargetWp = checkpoint;
+        state.interimLastDistanceToTarget = 8;
+        state.interimLastProgressAtMs = 1_000L;
+
+        Rs2Walker.recordInterimProgress(state, checkpoint, firstPlayerTile, 2_000L);
+        Rs2Walker.recordInterimProgress(state, checkpoint, nextPlayerTileOnCurve, 5_000L);
+
+        assertEquals("a real tile change must keep the active command alive even when Chebyshev distance is unchanged",
+                5_000L, state.interimLastProgressAtMs);
+    }
+
+    @Test
+    public void recordInterimProgress_preservesPublicationDistanceForCumulativeHandoff() {
+        WalkerRouteState state = new WalkerRouteState();
+        WorldPoint checkpoint = new WorldPoint(2890, 3396, 0);
+        state.interimTargetWp = checkpoint;
+        state.interimInitialDistanceToTarget = 8;
+        state.interimLastDistanceToTarget = 8;
+        state.interimLastObservedPlayerPosition = new WorldPoint(2882, 3396, 0);
+
+        Rs2Walker.recordInterimProgress(
+                state, checkpoint, new WorldPoint(2883, 3396, 0), 2_000L);
+        Rs2Walker.recordInterimProgress(
+                state, checkpoint, new WorldPoint(2884, 3396, 0), 3_000L);
+
+        assertEquals(6, state.interimLastDistanceToTarget);
+        assertEquals("closer observations must not erase cumulative approach from publication",
+                8, state.interimInitialDistanceToTarget);
+        assertTrue(Rs2Walker.routeInterimReadyForContinuation(
+                checkpoint,
+                new WorldPoint(2884, 3396, 0),
+                state.interimInitialDistanceToTarget,
+                false,
+                8));
+    }
+
+    @Test
     public void shouldClearInterimTarget_expiredCheckpoint_returnsTrue() {
         assertTrue(Rs2Walker.shouldClearInterimTarget(
                 new WorldPoint(2890, 3396, 0),
@@ -1631,31 +1674,29 @@ public class Rs2WalkerUnitTest {
     }
 
     @Test
-    public void routeInterimReadyForContinuation_requiresRoomBeyondTheHandoffBand() {
+    public void routeInterimReadyForContinuation_requiresActualApproachBeforeCloseThreshold() {
         WorldPoint interim = new WorldPoint(2890, 3396, 0);
-        WorldPoint shortInitialPlayer = new WorldPoint(2883, 3396, 0);
-        WorldPoint shortProgressedPlayer = new WorldPoint(2884, 3396, 0);
-        WorldPoint mediumInitialPlayer = new WorldPoint(2880, 3396, 0);
-        WorldPoint longInitialPlayer = new WorldPoint(2879, 3396, 0);
-        WorldPoint longProgressedPlayer = new WorldPoint(2882, 3396, 0);
+        WorldPoint initialInsideHandoffBand = new WorldPoint(2882, 3396, 0);
+        WorldPoint oneTileCloser = new WorldPoint(2883, 3396, 0);
+        WorldPoint twoTilesCloser = new WorldPoint(2884, 3396, 0);
+        WorldPoint outsideHandoffBand = new WorldPoint(2881, 3396, 0);
+        WorldPoint enteredHandoffBand = new WorldPoint(2882, 3396, 0);
 
         assertFalse(Rs2Walker.routeInterimReadyForContinuation(
-                interim, shortInitialPlayer, 7, false, 8));
-        assertFalse("a checkpoint created inside the handoff band must not recycle after one tile",
+                interim, initialInsideHandoffBand, 8, false, 8));
+        assertFalse("one tile of progress must not churn a newly issued checkpoint",
                 Rs2Walker.routeInterimReadyForContinuation(
-                        interim, shortProgressedPlayer, 7, false, 8));
-        assertFalse(Rs2Walker.routeInterimReadyForContinuation(
-                interim, mediumInitialPlayer, 10, false, 8));
-        assertFalse("two tiles beyond the handoff band is still too short for early recycling",
+                        interim, oneTileCloser, 8, false, 8));
+        assertTrue("two tiles of real approach must renew before the five-tile close threshold",
                 Rs2Walker.routeInterimReadyForContinuation(
-                        interim, longProgressedPlayer, 10, false, 8));
+                        interim, twoTilesCloser, 8, false, 8));
         assertFalse(Rs2Walker.routeInterimReadyForContinuation(
-                interim, longInitialPlayer, 11, false, 8));
-        assertTrue("a long checkpoint may hand off after entering the run handoff band",
+                interim, outsideHandoffBand, 10, false, 8));
+        assertTrue("a longer checkpoint renews when it enters the handoff band after two tiles",
                 Rs2Walker.routeInterimReadyForContinuation(
-                        interim, longProgressedPlayer, 11, false, 8));
+                        interim, enteredHandoffBand, 10, false, 8));
         assertFalse(Rs2Walker.routeInterimReadyForContinuation(
-                interim, longProgressedPlayer, 11, true, 8));
+                interim, twoTilesCloser, 8, true, 8));
     }
 
     @Test
@@ -1681,28 +1722,28 @@ public class Rs2WalkerUnitTest {
 
         assertTrue(Rs2Walker.shouldHoldInterimBeforeRouteScans(
                 interim, new WorldPoint(2883, 3396, 0),
-                4_900L, 4_900L, now, 4_900L, 7, false, true, 8));
-        assertTrue("a short checkpoint remains owned until the normal close threshold",
+                4_900L, 4_900L, now, 4_900L, 7, 8, false, true, 8));
+        assertTrue("one tile of progress keeps the current checkpoint",
                 Rs2Walker.shouldHoldInterimBeforeRouteScans(
-                interim, new WorldPoint(2884, 3396, 0),
-                4_900L, 4_900L, now, 4_900L, 7, false, true, 8));
-        assertTrue("a medium checkpoint remains owned until the normal close threshold",
+                interim, new WorldPoint(2883, 3396, 0),
+                4_900L, 4_900L, now, 4_900L, 7, 8, false, true, 8));
+        assertFalse("two tiles of approach releases before the normal close threshold",
+                Rs2Walker.shouldHoldInterimBeforeRouteScans(
+                        interim, new WorldPoint(2884, 3396, 0),
+                        4_900L, 4_900L, now, 4_900L, 6, 8, false, true, 8));
+        assertFalse("a longer checkpoint releases after entering the handoff band",
                 Rs2Walker.shouldHoldInterimBeforeRouteScans(
                         interim, new WorldPoint(2882, 3396, 0),
-                        4_900L, 4_900L, now, 4_900L, 10, false, true, 8));
-        assertFalse("a long checkpoint hands off after entering the run handoff band",
-                Rs2Walker.shouldHoldInterimBeforeRouteScans(
-                        interim, new WorldPoint(2882, 3396, 0),
-                        4_900L, 4_900L, now, 4_900L, 11, false, true, 8));
+                        4_900L, 4_900L, now, 4_900L, 8, 10, false, true, 8));
         assertTrue(Rs2Walker.shouldHoldInterimBeforeRouteScans(
                 interim, new WorldPoint(2884, 3396, 0),
-                4_900L, 4_900L, now, 4_900L, 7, true, true, 8));
+                4_900L, 4_900L, now, 4_900L, 6, 8, true, true, 8));
         assertFalse(Rs2Walker.shouldHoldInterimBeforeRouteScans(
                 interim, new WorldPoint(2885, 3396, 0),
-                4_900L, 4_900L, now, 4_900L, 7, true, true, 8));
+                4_900L, 4_900L, now, 4_900L, 5, 7, true, true, 8));
         assertTrue(Rs2Walker.shouldHoldInterimBeforeRouteScans(
                 interim, new WorldPoint(2883, 3389, 0),
-                4_900L, 4_900L, now, 4_900L, 7, false, true, 8));
+                4_900L, 4_900L, now, 4_900L, 7, 8, false, true, 8));
     }
 
     @Test

@@ -137,13 +137,13 @@ public class Rs2Walker {
 	private static final int INTERIM_CLOSE_TILES = 5;
 
 	/**
-	 * Floor for the jittered per-click route reach. Deliberately above the run handoff radius so
-	 * ordinary open-route clicks do not start inside the continuation band and immediately churn.
+	 * Floor for the jittered Euclidean route reach. Handoff uses player-to-checkpoint progress plus
+	 * a circular radius, so diagonal targets may still begin inside that band without churning.
 	 */
 	private static final int ROUTE_CLICK_REACH_MIN_TILES = 9;
 	private static final int INTERIM_PRECLICK_TILES = 6;
 	private static final int INTERIM_RUN_PRECLICK_TILES = 8;
-	private static final int INTERIM_HANDOFF_MIN_APPROACH_TILES = 3;
+	private static final int INTERIM_HANDOFF_MIN_PROGRESS_TILES = 2;
 	private static final int INTERIM_MOVING_POLL_MS = 450;
 	private static final long INTERIM_PROGRESS_TIMEOUT_MS = 2500L;
 	/**
@@ -1435,14 +1435,6 @@ public class Rs2Walker {
         Rs2PathApi.setReachedDistance(distance);
         routeState.stuckCount = 0;
         routeState.lastMovedTimeMs = System.currentTimeMillis();
-		routeState.interimTargetWp = null;
-		routeState.interimTargetIdx = -1;
-		routeState.interimSetAtMs = 0L;
-        routeState.interimLastProgressAtMs = 0L;
-        routeState.interimLastBestPathIdx = -1;
-        routeState.interimLastDistanceToTarget = Integer.MAX_VALUE;
-        routeState.interimLastRetargetAtMs = 0L;
-        routeState.interimTargetRecovery = false;
         routeState.lastPartialTransRecalcMs = 0L;
         routeState.idleNudgeLastObservedLocation = playerLocWalk;
         routeState.idleNudgeStationarySinceMs = System.currentTimeMillis();
@@ -1893,7 +1885,7 @@ public class Rs2Walker {
             boolean routeInterimHandoffReady = routeInterimReadyForContinuation(
                     routeState.interimTargetWp,
                     routeState.lastPosition,
-                    routeState.interimLastDistanceToTarget,
+                    routeState.interimInitialDistanceToTarget,
                     routeState.interimTargetRecovery,
                     interimPreclickTiles());
             boolean clearedInterimTarget = clearInterimTargetIfReachedOrExpired(
@@ -1993,6 +1985,7 @@ public class Rs2Walker {
                     activeInterimNowMs,
                     routeState.lastMovedTimeMs,
                     routeState.interimLastDistanceToTarget,
+                    routeState.interimInitialDistanceToTarget,
                     routeState.interimTargetRecovery,
                     Rs2Player.isMoving(),
                     interimPreclickTiles())) {
@@ -2718,6 +2711,8 @@ public class Rs2Walker {
                                 routeState.interimLastBestPathIdx = WalkerPathGeometry.getClosestTileIndex(
                                         path, playerLoc, recoveryReachable);
                                 routeState.interimLastDistanceToTarget = distanceToInterimOrMax(clickedRecoveryTarget, playerLoc);
+                                routeState.interimInitialDistanceToTarget = routeState.interimLastDistanceToTarget;
+                                routeState.interimLastObservedPlayerPosition = playerLoc;
                                 routeState.interimLastRetargetAtMs = routeState.interimSetAtMs;
                                 routeState.interimTargetRecovery = true;
                                 WorldPoint pathLastRecovery = path.get(path.size() - 1);
@@ -2777,7 +2772,8 @@ public class Rs2Walker {
 						boolean routeHandoffReady = false;
 						if (interimDist > INTERIM_CLOSE_TILES) {
 							final WorldPoint interimFinal = interim;
-							final int bestDistanceBeforeWait = routeState.interimLastDistanceToTarget;
+							final int closestDistanceBeforeWait = routeState.interimLastDistanceToTarget;
+							final int initialDistance = routeState.interimInitialDistanceToTarget;
 							final int preclickTiles = interimPreclickTiles();
 							WorldPoint posAfterWait = playerLoc;
 							// If we're already moving toward the interim checkpoint, just wait until
@@ -2798,7 +2794,7 @@ public class Rs2Walker {
 														|| !Rs2Player.isMoving(),
 										INTERIM_MOVING_POLL_MS);
                                 posAfterWait = Rs2Player.getWorldLocation();
-                                recordInterimDistanceProgress(interimFinal, posAfterWait, System.currentTimeMillis());
+                                recordInterimProgress(routeState, interimFinal, posAfterWait, System.currentTimeMillis());
 								if ((posAfterWait != null && posBeforeWait.distanceTo2D(posAfterWait) > 0)
                                         || Rs2Player.isMoving()) {
 									routeState.lastMovedTimeMs = System.currentTimeMillis();
@@ -2808,7 +2804,7 @@ public class Rs2Walker {
 							routeHandoffReady = routeInterimReadyForContinuation(
 									interimFinal,
 									posAfterWait,
-									bestDistanceBeforeWait,
+									initialDistance,
 									routeState.interimTargetRecovery,
 									preclickTiles);
 							if (shouldHoldInterimBeforeRouteScans(
@@ -2818,7 +2814,8 @@ public class Rs2Walker {
 									routeState.interimLastProgressAtMs,
 									System.currentTimeMillis(),
 									routeState.lastMovedTimeMs,
-									bestDistanceBeforeWait,
+									closestDistanceBeforeWait,
+									initialDistance,
 									routeState.interimTargetRecovery,
 									Rs2Player.isMoving(),
 									preclickTiles)) {
@@ -2866,49 +2863,7 @@ public class Rs2Walker {
                                 wp -> inInstance || isKnownWalkableOrUnloaded(wp));
                     }
 
-					// Sticky interim target: if we recently clicked a minimap point and are still
-					// moving/progressing toward it, don't switch to a different waypoint just because
-					// path smoothing/minimap flag visibility changed.
-					final long nowMs = System.currentTimeMillis();
-					WorldPoint sticky = routeState.interimTargetWp;
-					if (sticky != null && sticky.getPlane() == playerLoc.getPlane()) {
-						int stickyDist = sticky.distanceTo2D(playerLoc);
-                        recordInterimDistanceProgress(sticky, playerLoc, nowMs);
-						if (stickyDist <= INTERIM_CLOSE_TILES || nowMs - routeState.interimSetAtMs > INTERIM_MAX_AGE_MS) {
-							routeState.interimTargetWp = null;
-							routeState.interimTargetIdx = -1;
-							routeState.interimSetAtMs = 0L;
-							routeState.interimLastProgressAtMs = 0L;
-							routeState.interimLastBestPathIdx = -1;
-                            routeState.interimLastDistanceToTarget = Integer.MAX_VALUE;
-							routeState.interimLastRetargetAtMs = 0L;
-						} else {
-							// U-turn safe progress: track progress along the path index, not Euclidean
-							// distance-to-target (which can increase on U-shaped routes).
-							int bestIdxNow = WalkerPathGeometry.getClosestTileIndex(
-									path, playerLoc, reachableTilesCache);
-							if (bestIdxNow > routeState.interimLastBestPathIdx) {
-								routeState.interimLastBestPathIdx = bestIdxNow;
-								routeState.interimLastProgressAtMs = nowMs;
-							}
-							boolean movingOrRecentlyMoved = Rs2Player.isMoving()
-									|| (routeState.lastMovedTimeMs > 0 && nowMs - routeState.lastMovedTimeMs < 1500);
-							boolean makingRecentProgress = routeState.interimLastProgressAtMs > 0
-									&& nowMs - routeState.interimLastProgressAtMs < INTERIM_PROGRESS_TIMEOUT_MS;
-							boolean retargetCoolingDown = routeState.interimLastRetargetAtMs > 0
-									&& nowMs - routeState.interimLastRetargetAtMs < INTERIM_RETARGET_COOLDOWN_MS;
-
-							// While moving and making progress, keep the existing interim target.
-							// Cooldown prevents thrash when the route bends and the minimap flag drops.
-							if ((movingOrRecentlyMoved && makingRecentProgress) || retargetCoolingDown) {
-								targetWp = sticky;
-								// Keep the loop index conservative: the sticky point might be interpolated
-								// and not exist in the path.
-								targetIdx = Math.max(targetIdx, i);
-							}
-						}
-					}
-
+                    final long nowMs = System.currentTimeMillis();
                     WorldPoint posBefore = playerLoc;
                     int rawAnchorIndex = rawIndexForSmoothedIndex(i, smoothedToRaw, rawPath);
                     // Prefer a collision-REACHABLE raw-route point. "Walkable" (tile not fully
@@ -2985,6 +2940,8 @@ public class Rs2Walker {
 						routeState.interimLastBestPathIdx = WalkerPathGeometry.getClosestTileIndex(
 								path, posBefore, reachableTilesCache);
                         routeState.interimLastDistanceToTarget = distanceToInterimOrMax(clickedTarget, posBefore);
+						routeState.interimInitialDistanceToTarget = routeState.interimLastDistanceToTarget;
+						routeState.interimLastObservedPlayerPosition = posBefore;
 						routeState.interimLastRetargetAtMs = nowMs;
                         routeState.interimTargetRecovery = false;
 
@@ -3023,6 +2980,8 @@ public class Rs2Walker {
                                 routeState.interimTargetWp = routeRetryTarget;
                                 routeState.interimLastProgressAtMs = lastAttemptedMinimapClickAtMs;
                                 routeState.interimLastDistanceToTarget = distanceToInterimOrMax(routeRetryTarget, before);
+                                routeState.interimInitialDistanceToTarget = routeState.interimLastDistanceToTarget;
+                                routeState.interimLastObservedPlayerPosition = before;
                                 routeState.interimLastRetargetAtMs = lastAttemptedMinimapClickAtMs;
                             }
                         }
@@ -3063,13 +3022,7 @@ public class Rs2Walker {
                     // loop wait for the player to walk closer before re-evaluating.
                     if (!clicked) {
                         exitReason = "click-failed-off-minimap";
-                        routeState.interimTargetWp = null;
-                        routeState.interimTargetIdx = -1;
-                        routeState.interimSetAtMs = 0L;
-                        routeState.interimLastProgressAtMs = 0L;
-                        routeState.interimLastBestPathIdx = -1;
-                        routeState.interimLastDistanceToTarget = Integer.MAX_VALUE;
-                        routeState.interimLastRetargetAtMs = 0L;
+                        clearInterimTarget("click-failed-off-minimap");
                         sleepUntil(() -> isWalkCancelled(target) || !Rs2Player.isMoving(), 1200);
                         if (walkCancelledDiag(target, "processWalk:after-click-failed-wait", processWalkTail)) {
                             return WalkerState.EXIT;
@@ -3892,10 +3845,9 @@ public class Rs2Walker {
      * Per-click route reach, jittered below {@code maxEuclidean} so consecutive clicks do not all
      * cover the same tile span.
      * <p>
-     * The floor matters: it must stay ahead of the run-mode handoff radius or the interim checkpoint
-     * starts inside the continuation band and one tile of movement can replace it, producing visible
-     * stop-start movement. The ceiling is the caller's reach, which is already tuned to the minimap
-     * clip — going above it just produces outside-clip fallbacks.
+     * The floor keeps normal clicks useful without exceeding the caller's minimap clip. Handoff uses
+     * actual approach progress rather than comparing this Euclidean reach with Chebyshev checkpoint
+     * distance, so diagonal targets are not forced to the five-tile close threshold.
      */
     static int routeClickReach(int maxEuclidean) {
         int floor = Math.min(ROUTE_CLICK_REACH_MIN_TILES, maxEuclidean);
@@ -4163,6 +4115,8 @@ public class Rs2Walker {
         routeState.interimLastProgressAtMs = routeState.interimSetAtMs;
         routeState.interimLastBestPathIdx = WalkerPathGeometry.getClosestTileIndex(path, playerLoc, reachable);
         routeState.interimLastDistanceToTarget = distanceToInterimOrMax(clickedTarget, playerLoc);
+        routeState.interimInitialDistanceToTarget = routeState.interimLastDistanceToTarget;
+        routeState.interimLastObservedPlayerPosition = playerLoc;
         routeState.interimLastRetargetAtMs = routeState.interimSetAtMs;
         routeState.interimTargetRecovery = markRecoveryCooldown;
         if (markRecoveryCooldown) {
@@ -6623,14 +6577,14 @@ public class Rs2Walker {
 
     static boolean routeInterimReadyForContinuation(WorldPoint interim,
                                                      WorldPoint playerLoc,
-                                                     int bestDistanceSeen,
+                                                     int initialDistance,
                                                      boolean recoveryOwned,
                                                      int handoffTiles) {
         int currentDistance = distanceToInterimOrMax(interim, playerLoc);
         return !recoveryOwned
-                && bestDistanceSeen != Integer.MAX_VALUE
-                && bestDistanceSeen >= handoffTiles + INTERIM_HANDOFF_MIN_APPROACH_TILES
-                && currentDistance < bestDistanceSeen
+                && initialDistance != Integer.MAX_VALUE
+                && initialDistance - currentDistance >= INTERIM_HANDOFF_MIN_PROGRESS_TILES
+                && currentDistance < initialDistance
                 && isWithinRouteHandoffRadius(playerLoc, interim, handoffTiles);
     }
 
@@ -6641,6 +6595,7 @@ public class Rs2Walker {
                                                      long nowMs,
                                                      long lastMovedAtMs,
                                                      int bestDistanceSeen,
+                                                     int initialDistance,
                                                      boolean recoveryOwned,
                                                      boolean playerMoving,
                                                      int routeHandoffTiles) {
@@ -6659,7 +6614,7 @@ public class Rs2Walker {
                     INTERIM_CLOSE_TILES);
         }
         if (routeInterimReadyForContinuation(
-                interim, playerLoc, bestDistanceSeen, false, routeHandoffTiles)) {
+                interim, playerLoc, initialDistance, false, routeHandoffTiles)) {
             return false;
         }
         if (isWithinRouteHandoffRadius(playerLoc, interim, routeHandoffTiles)) {
@@ -6728,11 +6683,27 @@ public class Rs2Walker {
         return playerLoc.distanceTo2D(interim);
     }
 
-    private static void recordInterimDistanceProgress(WorldPoint interim, WorldPoint playerLoc, long nowMs) {
+    static void recordInterimProgress(WalkerRouteState state,
+                                      WorldPoint interim,
+                                      WorldPoint playerLoc,
+                                      long nowMs) {
+        if (state == null) {
+            return;
+        }
+        if (interim == null) {
+            state.interimLastObservedPlayerPosition = null;
+            return;
+        }
+        WorldPoint previousPlayerPosition = state.interimLastObservedPlayerPosition;
+        state.interimLastObservedPlayerPosition = playerLoc;
+        if (previousPlayerPosition != null && playerLoc != null
+                && !playerLoc.equals(previousPlayerPosition)) {
+            state.interimLastProgressAtMs = nowMs;
+        }
         int distance = distanceToInterimOrMax(interim, playerLoc);
-        if (distance < routeState.interimLastDistanceToTarget) {
-            routeState.interimLastDistanceToTarget = distance;
-            routeState.interimLastProgressAtMs = nowMs;
+        if (distance < state.interimLastDistanceToTarget) {
+            state.interimLastDistanceToTarget = distance;
+            state.interimLastProgressAtMs = nowMs;
         }
     }
 
@@ -6771,7 +6742,7 @@ public class Rs2Walker {
                                                                 List<WorldPoint> path,
                                                                 long nowMs) {
         WorldPoint interim = routeState.interimTargetWp;
-        recordInterimDistanceProgress(interim, playerLoc, nowMs);
+        recordInterimProgress(routeState, interim, playerLoc, nowMs);
         if (interim != null && path != null && !path.isEmpty()) {
             int bestIdxNow = getClosestTileIndex(path, playerLoc);
             if (bestIdxNow > routeState.interimLastBestPathIdx) {
@@ -6808,7 +6779,7 @@ public class Rs2Walker {
         if (interim == null) {
             return false;
         }
-        recordInterimDistanceProgress(interim, playerLoc, nowMs);
+        recordInterimProgress(routeState, interim, playerLoc, nowMs);
         if (playerLoc != null && path != null && !path.isEmpty()) {
             int bestIdxNow = getClosestTileIndex(path, playerLoc);
             if (bestIdxNow > routeState.interimLastBestPathIdx) {
@@ -6833,7 +6804,7 @@ public class Rs2Walker {
         if (interim == null) {
             return false;
         }
-        recordInterimDistanceProgress(interim, playerLoc, nowMs);
+        recordInterimProgress(routeState, interim, playerLoc, nowMs);
         if (playerLoc != null && path != null && !path.isEmpty()) {
             int bestIdxNow = getClosestTileIndex(path, playerLoc);
             if (bestIdxNow > routeState.interimLastBestPathIdx) {
@@ -6952,6 +6923,8 @@ public class Rs2Walker {
         routeState.interimLastProgressAtMs = 0L;
         routeState.interimLastBestPathIdx = -1;
         routeState.interimLastDistanceToTarget = Integer.MAX_VALUE;
+        routeState.interimInitialDistanceToTarget = Integer.MAX_VALUE;
+        routeState.interimLastObservedPlayerPosition = null;
         routeState.interimLastRetargetAtMs = 0L;
         routeState.interimTargetRecovery = false;
     }
