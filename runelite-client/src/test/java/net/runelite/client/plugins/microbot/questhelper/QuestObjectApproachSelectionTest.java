@@ -1,12 +1,16 @@
 package net.runelite.client.plugins.microbot.questhelper;
 
 import java.lang.reflect.Method;
+import java.util.Collections;
+import java.util.List;
 import java.util.function.Predicate;
 import net.runelite.api.coords.WorldArea;
 import net.runelite.api.coords.WorldPoint;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 public class QuestObjectApproachSelectionTest
@@ -40,5 +44,33 @@ public class QuestObjectApproachSelectionTest
                 null, twoTileCrate, player, walkable, visibleFromObjectSide);
 
         assertEquals(insideInteractionTile, selected);
+    }
+
+    @Test
+    public void unloadedObjectOnAnotherPlaneStillRequiresAnApproach()
+    {
+        WorldPoint player = new WorldPoint(3200, 3200, 0);
+        WorldPoint step = new WorldPoint(3200, 3200, 1);
+
+        assertTrue(QuestScript.isAwayFromObjectStep(player, step));
+        assertFalse(QuestScript.isAwayFromObjectStep(player, new WorldPoint(3201, 3200, 0)));
+    }
+
+    @Test
+    public void unloadedObjectStepCannotReportCompletion()
+    {
+        assertFalse(QuestScript.canCompleteObjectStep(false));
+        assertTrue(QuestScript.canCompleteObjectStep(true));
+    }
+
+    @Test
+    public void emptyPathHasNoEndpointNearTheObjectStep()
+    {
+        WorldPoint step = new WorldPoint(3200, 3200, 0);
+
+        assertFalse(QuestScript.pathEndsNearObjectStep(null, step));
+        assertFalse(QuestScript.pathEndsNearObjectStep(Collections.emptyList(), step));
+        assertTrue(QuestScript.pathEndsNearObjectStep(
+                List.of(new WorldPoint(3190, 3190, 0), new WorldPoint(3201, 3200, 0)), step));
     }
 }

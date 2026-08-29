@@ -1456,8 +1456,8 @@ public class QuestScript extends Script {
         // line of sight to decide whether to route to an interaction tile; only use coordinate distance as
         // the fallback when the object has not loaded yet.
         WorldPoint definedWorldPoint = step.getDefinedPoint().getWorldPoint();
-        boolean moreThanOneTileFromStep = definedWorldPoint != null
-                && Rs2Player.getWorldLocation().distanceTo2D(definedWorldPoint) > 1;
+        boolean moreThanOneTileFromStep = isAwayFromObjectStep(
+                Rs2Player.getWorldLocation(), definedWorldPoint);
         boolean objectInLineOfSight = tileObject != null
                 && Rs2GameObject.hasLineOfSight(Rs2Player.getWorldLocation(), tileObject);
         if (definedWorldPoint != null && shouldWalkToObjectApproach(object != null, moreThanOneTileFromStep,
@@ -1497,7 +1497,7 @@ public class QuestScript extends Script {
 
             if (ShortestPathPlugin.getPathfinder() != null) {
                 var path = ShortestPathPlugin.getPathfinder().getPath();
-                if (path.get(path.size() - 1).distanceTo(step.getDefinedPoint().getWorldPoint()) <= 1)
+                if (pathEndsNearObjectStep(path, definedWorldPoint))
                     return false;
             } else
                 return false;
@@ -1543,7 +1543,27 @@ public class QuestScript extends Script {
             return false;
         }
 
-        return true;
+        return canCompleteObjectStep(object != null);
+    }
+
+    static boolean isAwayFromObjectStep(WorldPoint playerLocation, WorldPoint stepLocation) {
+        if (playerLocation == null || stepLocation == null) {
+            return false;
+        }
+        return playerLocation.getPlane() != stepLocation.getPlane()
+                || playerLocation.distanceTo2D(stepLocation) > 1;
+    }
+
+    static boolean pathEndsNearObjectStep(List<WorldPoint> path, WorldPoint stepLocation) {
+        if (path == null || path.isEmpty() || stepLocation == null) {
+            return false;
+        }
+        WorldPoint endpoint = path.get(path.size() - 1);
+        return endpoint != null && endpoint.distanceTo(stepLocation) <= 1;
+    }
+
+    static boolean canCompleteObjectStep(boolean objectAvailable) {
+        return objectAvailable;
     }
 
     static boolean shouldWalkToObjectApproach(boolean objectAvailable, boolean moreThanOneTileFromStep,
