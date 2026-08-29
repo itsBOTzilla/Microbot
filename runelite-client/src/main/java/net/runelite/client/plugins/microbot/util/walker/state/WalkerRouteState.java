@@ -60,6 +60,10 @@ public final class WalkerRouteState {
     public volatile int interimLastBestPathIdx = -1;
     /** Best (smallest) distance-to-target observed while holding the interim target. */
     public volatile int interimLastDistanceToTarget = Integer.MAX_VALUE;
+    /** Distance-to-target when the current interim target was published. */
+    public volatile int interimInitialDistanceToTarget = Integer.MAX_VALUE;
+    /** Player tile last observed while holding the interim target. */
+    public volatile WorldPoint interimLastObservedPlayerPosition = null;
     /** Wall-clock ms the interim target was last re-chosen. */
     public volatile long interimLastRetargetAtMs = 0L;
     /** Whether the current interim target was issued by recovery rather than normal route flow. */
