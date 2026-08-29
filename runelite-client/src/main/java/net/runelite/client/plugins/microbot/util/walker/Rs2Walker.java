@@ -1435,16 +1435,6 @@ public class Rs2Walker {
         Rs2PathApi.setReachedDistance(distance);
         routeState.stuckCount = 0;
         routeState.lastMovedTimeMs = System.currentTimeMillis();
-		routeState.interimTargetWp = null;
-		routeState.interimTargetIdx = -1;
-		routeState.interimSetAtMs = 0L;
-        routeState.interimLastProgressAtMs = 0L;
-        routeState.interimLastBestPathIdx = -1;
-        routeState.interimLastDistanceToTarget = Integer.MAX_VALUE;
-        routeState.interimInitialDistanceToTarget = Integer.MAX_VALUE;
-        routeState.interimLastObservedPlayerPosition = null;
-        routeState.interimLastRetargetAtMs = 0L;
-        routeState.interimTargetRecovery = false;
         routeState.lastPartialTransRecalcMs = 0L;
         routeState.idleNudgeLastObservedLocation = playerLocWalk;
         routeState.idleNudgeStationarySinceMs = System.currentTimeMillis();
@@ -3032,15 +3022,7 @@ public class Rs2Walker {
                     // loop wait for the player to walk closer before re-evaluating.
                     if (!clicked) {
                         exitReason = "click-failed-off-minimap";
-                        routeState.interimTargetWp = null;
-                        routeState.interimTargetIdx = -1;
-                        routeState.interimSetAtMs = 0L;
-                        routeState.interimLastProgressAtMs = 0L;
-                        routeState.interimLastBestPathIdx = -1;
-                        routeState.interimLastDistanceToTarget = Integer.MAX_VALUE;
-                        routeState.interimInitialDistanceToTarget = Integer.MAX_VALUE;
-                        routeState.interimLastObservedPlayerPosition = null;
-                        routeState.interimLastRetargetAtMs = 0L;
+                        clearInterimTarget("click-failed-off-minimap");
                         sleepUntil(() -> isWalkCancelled(target) || !Rs2Player.isMoving(), 1200);
                         if (walkCancelledDiag(target, "processWalk:after-click-failed-wait", processWalkTail)) {
                             return WalkerState.EXIT;
