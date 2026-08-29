@@ -370,7 +370,7 @@ public class Rs2Walker {
         routeState.lastTransportDestinationLocation = null;
     }
 
-    private static void markFirstMovementClick(String phase, WorldPoint target, WorldPoint at, String detail) {
+    static void markFirstMovementClick(String phase, WorldPoint target, WorldPoint at, String detail) {
         if (routeState.firstMovementClickMarked) {
             return;
         }
@@ -634,6 +634,30 @@ public class Rs2Walker {
             return Math.min(cfg, 2);
         }
         return cfg;
+    }
+
+    static boolean runtimeArrived(WorldPoint target, int configuredChebyshev,
+                                  List<WorldPoint> rawPath, List<WorldPoint> walkPath) {
+        WorldPoint player = Rs2Player.getWorldLocation();
+        if (player == null || target == null || player.getPlane() != target.getPlane()) {
+            return false;
+        }
+        WorldPoint endpoint = walkPath == null || walkPath.isEmpty()
+                ? null : walkPath.get(walkPath.size() - 1);
+        int configuredDistance = Math.max(0, configuredChebyshev);
+        boolean endpointArrival = endpoint != null
+                && endpoint.getPlane() == target.getPlane()
+                && endpoint.distanceTo2D(target) <= configuredDistance
+                && player.distanceTo2D(endpoint) <= 1;
+        boolean pendingTransport = hasPendingExplicitTransportStepBeforeArrival(
+                rawPath, target, configuredDistance)
+                || hasPendingExplicitTransportStepBeforeArrival(
+                walkPath, target, configuredDistance);
+        if (endpointArrival && !pendingTransport) {
+            return true;
+        }
+        int finishDistance = tightFinishThreshold(target, endpoint, configuredDistance);
+        return player.distanceTo2D(target) <= finishDistance && !pendingTransport;
     }
 
     /**
@@ -1421,11 +1445,7 @@ public class Rs2Walker {
         }
 
         final Pathfinder pathfinder = Rs2PathApi.getPathfinder();
-        if (pathfinder != null && !pathfinder.isDone()) {
-            return WalkerState.MOVING;
-        }
         boolean hasCurrentPath = pathfinder != null
-                && pathfinder.isDone()
                 && pathfinder.getTargets().contains(target);
         if (!hasCurrentPath) {
             setTarget(target);
@@ -1445,7 +1465,25 @@ public class Rs2Walker {
             Rs2Bank.closeBank();
         }
         markWalkSessionStart(target);
-        return processWalk(target, distance);
+        if (DraynorBasementSolver.isBasementTarget(target)) {
+            DraynorBasementSolver.solveIfNeeded(target);
+            if (Thread.currentThread().isInterrupted()) {
+                setTarget(null, "webwalk-executor:basement-interrupted");
+                return WalkerState.EXIT;
+            }
+            setTarget(target, "webwalk-executor:basement-restore");
+        }
+        PathfinderConfig preflightConfig = Rs2PathApi.getPathfinderConfig();
+        CollisionMap preflightMap = preflightConfig != null ? preflightConfig.getMap() : null;
+        if (!hasWalkableTileWithin(preflightMap, target, distance)) {
+            WorldPoint nearestWalkable = nearestWalkableTile(preflightMap, target, 48);
+            Telemetry.recordUnreachable("target-not-walkable", playerLocWalk,
+                    target, nearestWalkable, 0, distance, null);
+            setTarget(null, "webwalk-executor:target-not-walkable");
+            return WalkerState.UNREACHABLE;
+        }
+        WebWalkSession session = new WebWalkSession(target, distance);
+        return new WebWalkExecutor().walk(session, new RuneLiteWebWalkRuntime(target, distance));
     }
 
     /**
@@ -3560,7 +3598,7 @@ public class Rs2Walker {
         return staminaThresholdCached;
     }
 
-    private static void manageRunEnergy(int pathRemaining) {
+    static void manageRunEnergy(int pathRemaining) {
         try {
             if (!Rs2Player.isRunEnabled() && Rs2Player.getRunEnergy() > 10) {
                 Rs2Player.toggleRunEnergy(true);
@@ -3646,6 +3684,18 @@ public class Rs2Walker {
             return target;
         }
         return null;
+    }
+
+    static WebWalkRuntime.DispatchResult dispatchMiniMapTarget(List<WorldPoint> rawPath,
+                                                               WorldPoint target,
+                                                               WorldPoint playerLoc,
+                                                               int rawAnchorIndex,
+                                                               int maxEuclidean) {
+        WorldPoint actual = clickMiniMapOrFallback(rawPath, target, playerLoc,
+                maxEuclidean, false, rawAnchorIndex);
+        return actual == null
+                ? WebWalkRuntime.DispatchResult.rejected()
+                : WebWalkRuntime.DispatchResult.accepted(actual);
     }
 
     private static WorldPoint walkRawPathMiniMapTargetToward(List<WorldPoint> rawPath,
@@ -7185,7 +7235,7 @@ public class Rs2Walker {
      * to the catalog origin but still targets that row's destination, so door probing does not fight
      * {@code handleTransports}.
      */
-    private static boolean isCatalogBackedTransportSegment(List<WorldPoint> path, int index) {
+    static boolean isCatalogBackedTransportSegment(List<WorldPoint> path, int index) {
         if (path == null || index < 0 || index >= path.size() - 1) {
             return false;
         }
@@ -8894,6 +8944,27 @@ public class Rs2Walker {
      * @param indexOfStartPoint
      * @return
      */
+    static boolean runtimeHandleRouteEdge(List<WorldPoint> path, int indexOfStartPoint) {
+        if (path == null || indexOfStartPoint < 0 || indexOfStartPoint >= path.size() - 1) {
+            return false;
+        }
+        if (isCatalogBackedTransportSegment(path, indexOfStartPoint)
+                && handleTransports(path, indexOfStartPoint)) {
+            return true;
+        }
+        if (handleDoors(path, indexOfStartPoint, true)) {
+            return true;
+        }
+        ObstacleResolution rockfall = resolveRockfallOnEdge(path, indexOfStartPoint);
+        if (rockfall.kind() == ObstacleResolution.Kind.INTERACTED
+                || rockfall.kind() == ObstacleResolution.Kind.WAITING
+                || rockfall.kind() == ObstacleResolution.Kind.CROSSED) {
+            return true;
+        }
+        return tryHandleBlockingPathObjectsWithTimeout(
+                path, indexOfStartPoint, 3, 1, 1_200L, new HashMap<>());
+    }
+
     private static boolean handleTransports(List<WorldPoint> path, int indexOfStartPoint) {
         if (path != null && indexOfStartPoint >= 0 && indexOfStartPoint < path.size() - 1
                 && recentlyOpenedStationaryDoorOnSegment(path.get(indexOfStartPoint), path.get(indexOfStartPoint + 1))) {
