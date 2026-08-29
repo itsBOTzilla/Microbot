@@ -6,6 +6,8 @@ import java.util.Arrays;
 import java.util.Optional;
 import java.util.concurrent.Callable;
 import net.runelite.api.Client;
+import net.runelite.api.Player;
+import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.plugins.microbot.Microbot;
 import org.junit.After;
@@ -57,6 +59,25 @@ public class Rs2PlayerNullSafetyTest
         assertNull(resolver.invoke(null, client));
         verify(clientThread).runOnClientThreadOptional(any());
         verify(client).getLocalPlayer();
+    }
+
+    @Test
+    public void worldLocationReturnsNullWhenTopLevelWorldViewDisappears() throws Exception
+    {
+        Method resolver = Arrays.stream(Rs2Player.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("worldLocationFromClient"))
+                .findFirst()
+                .orElse(null);
+        assertNotNull("Rs2Player needs a directly testable null-safe location resolver", resolver);
+
+        Client client = mock(Client.class);
+        Player player = mock(Player.class);
+        when(client.getLocalPlayer()).thenReturn(player);
+        when(player.getWorldLocation()).thenReturn(new WorldPoint(3200, 3200, 0));
+        when(client.getTopLevelWorldView()).thenReturn(null);
+        resolver.setAccessible(true);
+
+        assertNull(resolver.invoke(null, client));
     }
 
     private static Object swapClientThread(Object value) throws Exception

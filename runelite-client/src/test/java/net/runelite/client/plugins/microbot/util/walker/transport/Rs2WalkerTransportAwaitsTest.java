@@ -46,4 +46,16 @@ public class Rs2WalkerTransportAwaitsTest
         assertTrue(Rs2WalkerTransportAwaits.resolveTransportProgress(
                 true, BEFORE, BEFORE, DESTINATION, TARGET, false, false));
     }
+
+    @Test
+    public void newlyOpenedDialogueCountsWhenPositionSnapshotIsMissing()
+    {
+        assertTrue(Rs2WalkerTransportAwaits.hasProgressWithoutPositionSnapshot(false, true));
+    }
+
+    @Test
+    public void preexistingDialogueDoesNotCountWhenPositionSnapshotIsMissing()
+    {
+        assertFalse(Rs2WalkerTransportAwaits.hasProgressWithoutPositionSnapshot(true, true));
+    }
 }
