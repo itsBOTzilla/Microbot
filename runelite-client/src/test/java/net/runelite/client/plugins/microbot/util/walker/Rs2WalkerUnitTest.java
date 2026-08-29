@@ -1645,6 +1645,22 @@ public class Rs2WalkerUnitTest {
     }
 
     @Test
+    public void routeClickSelectionUsesTheCapturedReachabilitySnapshot() {
+        WorldPoint player = new WorldPoint(3200, 3200, 0);
+        List<WorldPoint> rawPath = Arrays.asList(
+                player,
+                new WorldPoint(3201, 3200, 0),
+                new WorldPoint(3202, 3200, 0),
+                new WorldPoint(3203, 3200, 0));
+        Map<WorldPoint, Integer> reachable = new HashMap<>();
+        reachable.put(player, 0);
+        reachable.put(rawPath.get(1), 1);
+
+        assertEquals(rawPath.get(1), Rs2Walker.findFurthestRawPathPointMatchingGated(
+                rawPath, player, 7, 0, point -> true, reachable));
+    }
+
+    @Test
     public void shouldHoldInterimBeforeRouteScans_enforcesProgressAndRecoveryBoundaries() {
         WorldPoint interim = new WorldPoint(2890, 3396, 0);
         long now = 5_000L;
