@@ -3603,11 +3603,15 @@ public class Rs2Walker {
 
     static void manageRunEnergy(int pathRemaining) {
         try {
-            if (!Rs2Player.isRunEnabled() && Rs2Player.getRunEnergy() > 10) {
-                Rs2Player.toggleRunEnergy(true);
+            int runEnergyPercent = Rs2Player.getRunEnergy();
+            boolean runEnabled = Rs2Player.isRunEnabled();
+            if (Microbot.enableAutoRunOn
+                    && Microbot.shouldEnableAutoRun(runEnergyPercent * 100, runEnabled)
+                    && Rs2Player.toggleRunEnergy(true)) {
+                Microbot.onAutoRunEnabled();
             }
             if (pathRemaining < STAMINA_MIN_PATH_TILES) return;
-            if (Rs2Player.getRunEnergy() >= staminaThreshold()) return;
+            if (runEnergyPercent >= staminaThreshold()) return;
             if (Rs2Player.hasStaminaBuffActive()) return;
             long now = System.currentTimeMillis();
             if (now - lastStaminaDoseAtMs < STAMINA_MIN_INTERVAL_MS) return;

@@ -102,8 +102,18 @@ public class Microbot {
     // Feature Flags
     public static boolean enableAutoRunOn = true;
     public static boolean useStaminaPotsIfNeeded = true;
-    public static int runEnergyThreshold = 1000;
+    private static final AutoRunPolicy AUTO_RUN_POLICY = AutoRunPolicy.create();
+    public static volatile int runEnergyThreshold = AUTO_RUN_POLICY.getThresholdPercent() * 100;
     public static boolean isCantReachTargetDetectionEnabled = false;
+
+    public static boolean shouldEnableAutoRun(int rawEnergy, boolean runEnabled) {
+        return AUTO_RUN_POLICY.shouldEnable(rawEnergy, runEnabled);
+    }
+
+    public static void onAutoRunEnabled() {
+        AUTO_RUN_POLICY.onRunEnabled();
+        runEnergyThreshold = AUTO_RUN_POLICY.getThresholdPercent() * 100;
+    }
 
     @Getter
     @Inject

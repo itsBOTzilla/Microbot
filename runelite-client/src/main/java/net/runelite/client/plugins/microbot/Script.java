@@ -24,6 +24,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @Slf4j
 public abstract class Script extends Global implements IScript {
+    private static final int STAMINA_RESTORE_THRESHOLD = 3000;
+
     protected ScheduledExecutorService scheduledExecutorService = Executors.newScheduledThreadPool(10,
         new ThreadFactory() {
             private final AtomicInteger threadNumber = new AtomicInteger(1);
@@ -94,10 +96,16 @@ public abstract class Script extends Global implements IScript {
             return false;
 
         if (Microbot.isLoggedIn()) {
-            boolean hasRunEnergy = Microbot.getClientThread().runOnClientThreadOptional(() -> Microbot.getClient().getEnergy()).orElse(0) > Microbot.runEnergyThreshold;
-            if (Microbot.enableAutoRunOn && hasRunEnergy)
-                Rs2Player.toggleRunEnergy(true);
-            if (!hasRunEnergy && Microbot.useStaminaPotsIfNeeded && Rs2Player.isMoving()) {
+            int runEnergy = Microbot.getClientThread().runOnClientThreadOptional(
+                () -> Microbot.getClient().getEnergy()).orElse(0);
+            boolean runEnabled = Rs2Player.isRunEnabled();
+            if (Microbot.enableAutoRunOn
+                && Microbot.shouldEnableAutoRun(runEnergy, runEnabled)
+                && Rs2Player.toggleRunEnergy(true)) {
+                Microbot.onAutoRunEnabled();
+            }
+            if (runEnergy < STAMINA_RESTORE_THRESHOLD
+                && Microbot.useStaminaPotsIfNeeded && Rs2Player.isMoving()) {
                 Rs2Inventory.useRestoreEnergyItem();
             }
             Microbot.getConfigManager().setConfiguration(MicrobotConfig.configGroup, MicrobotConfig.keyEnableAutoRunOn, Microbot.enableAutoRunOn);
