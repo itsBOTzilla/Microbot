@@ -6,6 +6,7 @@ import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.VarInsnNode;
@@ -23,6 +24,8 @@ public class RouteReachabilitySnapshotWiringTest
             "net/runelite/client/plugins/microbot/util/player/Rs2Player";
     private static final String GLOBAL =
             "net/runelite/client/plugins/microbot/util/Global";
+    private static final String WALKER_ROUTE_STATE =
+            "net/runelite/client/plugins/microbot/util/walker/state/WalkerRouteState";
     private static final String SELECTOR_DESCRIPTOR =
             "(Ljava/util/List;Lnet/runelite/api/coords/WorldPoint;IILjava/util/Map;)"
                     + "Lnet/runelite/api/coords/WorldPoint;";
@@ -71,6 +74,13 @@ public class RouteReachabilitySnapshotWiringTest
                 assertFalse("no wait may age the reachability snapshot before route selection",
                         containsCallBetween(capture, selector, GLOBAL, "sleepUntil"));
 
+                MethodInsnNode interimClear = previousCall(capture, RS2_WALKER,
+                        "clearInterimTarget");
+                assertNotNull("expired or handed-off interim ownership must be cleared", interimClear);
+                assertFalse("a cleared interim target must not be reread as a sticky route command",
+                        containsFieldReadBetween(interimClear, selector, WALKER_ROUTE_STATE,
+                                "interimTargetWp"));
+
                 MethodInsnNode playerRead = previousCall(capture, RS2_PLAYER, "getWorldLocation");
                 assertNotNull("reachability capture must follow a fresh player snapshot", playerRead);
                 assertFalse("the player and collision snapshots must be captured together",
@@ -86,6 +96,28 @@ public class RouteReachabilitySnapshotWiringTest
         }
 
         assertEquals("processWalk must have one normal route-selection site", 1, selectorCalls);
+    }
+
+    private static boolean containsFieldReadBetween(AbstractInsnNode start,
+                                                    AbstractInsnNode end,
+                                                    String owner,
+                                                    String name)
+    {
+        for (AbstractInsnNode instruction = start.getNext();
+             instruction != null && instruction != end; instruction = instruction.getNext())
+        {
+            if (instruction instanceof FieldInsnNode)
+            {
+                FieldInsnNode field = (FieldInsnNode) instruction;
+                if (field.getOpcode() == Opcodes.GETFIELD
+                        && owner.equals(field.owner)
+                        && name.equals(field.name))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static boolean containsCallBetween(AbstractInsnNode start,

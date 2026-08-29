@@ -2873,51 +2873,7 @@ public class Rs2Walker {
                                 wp -> inInstance || isKnownWalkableOrUnloaded(wp));
                     }
 
-					// Sticky interim target: if we recently clicked a minimap point and are still
-					// moving/progressing toward it, don't switch to a different waypoint just because
-					// path smoothing/minimap flag visibility changed.
-					final long nowMs = System.currentTimeMillis();
-					WorldPoint sticky = routeState.interimTargetWp;
-					if (sticky != null && sticky.getPlane() == playerLoc.getPlane()) {
-						int stickyDist = sticky.distanceTo2D(playerLoc);
-                        recordInterimProgress(routeState, sticky, playerLoc, nowMs);
-						if (stickyDist <= INTERIM_CLOSE_TILES || nowMs - routeState.interimSetAtMs > INTERIM_MAX_AGE_MS) {
-							routeState.interimTargetWp = null;
-							routeState.interimTargetIdx = -1;
-							routeState.interimSetAtMs = 0L;
-							routeState.interimLastProgressAtMs = 0L;
-							routeState.interimLastBestPathIdx = -1;
-                            routeState.interimLastDistanceToTarget = Integer.MAX_VALUE;
-							routeState.interimInitialDistanceToTarget = Integer.MAX_VALUE;
-							routeState.interimLastObservedPlayerPosition = null;
-							routeState.interimLastRetargetAtMs = 0L;
-						} else {
-							// U-turn safe progress: track progress along the path index, not Euclidean
-							// distance-to-target (which can increase on U-shaped routes).
-							int bestIdxNow = WalkerPathGeometry.getClosestTileIndex(
-									path, playerLoc, reachableTilesCache);
-							if (bestIdxNow > routeState.interimLastBestPathIdx) {
-								routeState.interimLastBestPathIdx = bestIdxNow;
-								routeState.interimLastProgressAtMs = nowMs;
-							}
-							boolean movingOrRecentlyMoved = Rs2Player.isMoving()
-									|| (routeState.lastMovedTimeMs > 0 && nowMs - routeState.lastMovedTimeMs < 1500);
-							boolean makingRecentProgress = routeState.interimLastProgressAtMs > 0
-									&& nowMs - routeState.interimLastProgressAtMs < INTERIM_PROGRESS_TIMEOUT_MS;
-							boolean retargetCoolingDown = routeState.interimLastRetargetAtMs > 0
-									&& nowMs - routeState.interimLastRetargetAtMs < INTERIM_RETARGET_COOLDOWN_MS;
-
-							// While moving and making progress, keep the existing interim target.
-							// Cooldown prevents thrash when the route bends and the minimap flag drops.
-							if ((movingOrRecentlyMoved && makingRecentProgress) || retargetCoolingDown) {
-								targetWp = sticky;
-								// Keep the loop index conservative: the sticky point might be interpolated
-								// and not exist in the path.
-								targetIdx = Math.max(targetIdx, i);
-							}
-						}
-					}
-
+                    final long nowMs = System.currentTimeMillis();
                     WorldPoint posBefore = playerLoc;
                     int rawAnchorIndex = rawIndexForSmoothedIndex(i, smoothedToRaw, rawPath);
                     // Prefer a collision-REACHABLE raw-route point. "Walkable" (tile not fully
