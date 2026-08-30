@@ -244,6 +244,7 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         {
             WorldPoint fallback = path.get(index);
             if (fallback == null || fallback.equals(player)
+                    || path.subList(0, currentIndex).contains(fallback)
                     || fallback.getPlane() != player.getPlane()
                     || euclideanSquared(fallback, player) > maxDistanceSquared
                     || !reachable.contains(fallback))

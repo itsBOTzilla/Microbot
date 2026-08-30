@@ -839,7 +839,8 @@ jar xf $sourceJar.FullName runelite.properties
 $properties = Get-Content -LiteralPath 'runelite.properties'
 Pop-Location
 $properties | Select-String -Pattern '^runelite\.(version|build\.commit|dirty)='
-Get-FileHash -Algorithm SHA256 -LiteralPath $sourceJar.FullName
+$sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceJar.FullName -ErrorAction Stop).Hash
+$sourceHash
 ```
 
 Expected: embedded commit equals `git rev-parse HEAD`, dirty is `false`, and a source SHA-256 is recorded. Remove only the exact temporary extraction directory after resolving and validating that it is beneath `$env:TEMP`.
@@ -849,16 +850,32 @@ Expected: embedded commit equals `git rev-parse HEAD`, dirty is `false`, and a s
 Run after the normal Microbot client has been closed:
 
 ```powershell
+$ErrorActionPreference = 'Stop'
 $launcher = Join-Path $env:USERPROFILE '.microbot'
 $temporaryJar = Join-Path $launcher 'microbot-local.jar.pending'
 $stableJar = Join-Path $launcher 'microbot-local.jar'
 $backupJar = Join-Path $launcher 'microbot-local.jar.swap-backup'
-Copy-Item -LiteralPath $sourceJar.FullName -Destination $temporaryJar -Force
-if (Test-Path -LiteralPath $stableJar) {
-    Copy-Item -LiteralPath $stableJar -Destination $backupJar -Force
+$sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceJar.FullName -ErrorAction Stop).Hash
+Copy-Item -LiteralPath $sourceJar.FullName -Destination $temporaryJar -Force -ErrorAction Stop
+$pendingHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $temporaryJar -ErrorAction Stop).Hash
+if ($sourceHash -ne $pendingHash) {
+    throw 'Pending local JAR hash does not match the built source JAR.'
 }
-Move-Item -LiteralPath $temporaryJar -Destination $stableJar -Force
-Get-FileHash -Algorithm SHA256 -LiteralPath $sourceJar.FullName,$stableJar
+$hadStableJar = Test-Path -LiteralPath $stableJar
+if ($hadStableJar) {
+    Copy-Item -LiteralPath $stableJar -Destination $backupJar -Force -ErrorAction Stop
+}
+Move-Item -LiteralPath $temporaryJar -Destination $stableJar -Force -ErrorAction Stop
+$stableHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $stableJar -ErrorAction Stop).Hash
+if ($sourceHash -ne $stableHash) {
+    if ($hadStableJar) {
+        Copy-Item -LiteralPath $backupJar -Destination $stableJar -Force -ErrorAction Stop
+    } else {
+        Remove-Item -LiteralPath $stableJar -Force -ErrorAction Stop
+    }
+    throw 'Stable local JAR hash does not match the built source JAR.'
+}
+$sourceHash
 ```
 
 Expected: the source and stable hashes are identical. Before replacement, verify all resolved destinations equal the three explicit paths under `%USERPROFILE%\.microbot`. Retain `microbot-local.jar.swap-backup` until live acceptance passes; do not use `[IO.File]::Replace` with a null backup path because that is not portable across the supported Windows/.NET launcher environments.

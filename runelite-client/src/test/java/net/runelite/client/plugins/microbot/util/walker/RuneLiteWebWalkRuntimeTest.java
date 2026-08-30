@@ -389,6 +389,26 @@ public class RuneLiteWebWalkRuntimeTest
     }
 
     @Test
+    public void rejectedMinimapTargetSkipsReachablePointRepeatedAfterForwardFloor()
+    {
+        List<WorldPoint> foldedPath = List.of(
+                point(0), point(1), point(2), point(3), point(4),
+                point(2), point(5), point(6));
+        List<WorldPoint> attempts = new ArrayList<>();
+        Set<WorldPoint> reachable = Set.of(point(2), point(4), point(6));
+
+        WebWalkRuntime.DispatchResult result = RuneLiteWebWalkRuntime.dispatchRouteMinimap(
+                foldedPath, point(6), point(4), reachable,
+                4, 7, 10, index -> false, candidate -> {
+                    attempts.add(candidate);
+                    return candidate.equals(point(2));
+                });
+
+        assertFalse(result.isAccepted());
+        assertEquals(List.of(point(6)), attempts);
+    }
+
+    @Test
     public void rejectedMinimapTargetFallbackStopsAtTransportOrigin()
     {
         List<WorldPoint> path = line(0, 10);
