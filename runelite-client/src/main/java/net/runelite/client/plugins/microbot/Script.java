@@ -7,7 +7,9 @@ import net.runelite.client.plugins.microbot.shortestpath.ShortestPathPlugin;
 import net.runelite.client.plugins.microbot.util.Global;
 import net.runelite.client.plugins.microbot.agentserver.handler.ScriptHeartbeatRegistry;
 import net.runelite.client.plugins.microbot.util.antiban.SessionFatigue;
+import net.runelite.client.plugins.microbot.util.input.InputArbiter;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
+import net.runelite.client.plugins.microbot.util.keyboard.Rs2Keyboard;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import org.jetbrains.annotations.NotNull;
@@ -24,6 +26,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @Slf4j
 public abstract class Script extends Global implements IScript {
+    private static final int STAMINA_RESTORE_THRESHOLD = 3000;
+
     protected ScheduledExecutorService scheduledExecutorService = Executors.newScheduledThreadPool(10,
         new ThreadFactory() {
             private final AtomicInteger threadNumber = new AtomicInteger(1);
@@ -60,6 +64,9 @@ public abstract class Script extends Global implements IScript {
             if (Microbot.getClientThread().scheduledFuture != null)
                 Microbot.getClientThread().scheduledFuture.cancel(true);
             initialPlayerLocation = null;
+            // Backstop for a script stopped between a hold and its release. Fires inconsistently:
+            // most scripts catch-and-continue without reaching here.
+            Rs2Keyboard.releaseHeldKeys();
             Microbot.pauseAllScripts.set(false);
             Rs2Walker.disableTeleports = false;
             Microbot.getSpecialAttackConfigs().reset();
@@ -88,16 +95,29 @@ public abstract class Script extends Global implements IScript {
             // A blocking event was found & is executing
             return false;
         }
-        if (Microbot.pauseAllScripts.get())
+        // The arbiter keeps its own flag, so a takeover idles every script through the gate that
+        // already exists, cancelling nothing.
+        boolean humanOwnsInput = InputArbiter.isHuman();
+        if (humanOwnsInput) {
+            // A held key is not gesture-scoped, so InputLoop cannot unwind it.
+            Rs2Keyboard.releaseHeldKeys();
+        }
+        if (Microbot.pauseAllScripts.get() || humanOwnsInput)
             return false;
         if (Thread.currentThread().isInterrupted())
             return false;
 
         if (Microbot.isLoggedIn()) {
-            boolean hasRunEnergy = Microbot.getClientThread().runOnClientThreadOptional(() -> Microbot.getClient().getEnergy()).orElse(0) > Microbot.runEnergyThreshold;
-            if (Microbot.enableAutoRunOn && hasRunEnergy)
-                Rs2Player.toggleRunEnergy(true);
-            if (!hasRunEnergy && Microbot.useStaminaPotsIfNeeded && Rs2Player.isMoving()) {
+            int runEnergy = Microbot.getClientThread().runOnClientThreadOptional(
+                () -> Microbot.getClient().getEnergy()).orElse(0);
+            boolean runEnabled = Rs2Player.isRunEnabled();
+            if (Microbot.enableAutoRunOn
+                && Microbot.shouldEnableAutoRun(runEnergy, runEnabled)
+                && Rs2Player.toggleRunEnergy(true)) {
+                Microbot.onAutoRunEnabled();
+            }
+            if (runEnergy < STAMINA_RESTORE_THRESHOLD
+                && Microbot.useStaminaPotsIfNeeded && Rs2Player.isMoving()) {
                 Rs2Inventory.useRestoreEnergyItem();
             }
             Microbot.getConfigManager().setConfiguration(MicrobotConfig.configGroup, MicrobotConfig.keyEnableAutoRunOn, Microbot.enableAutoRunOn);

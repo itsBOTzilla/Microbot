@@ -342,7 +342,32 @@ When a route-following minimap click is outside the minimap clip, fallback click
 
 For adjacent same-plane shortcuts, do not treat any movement away from the origin as success. Some shortcuts, such as stepping stones, can fail and place the player on a fallback tile; once the player is settled away from the expected destination, stop the landing wait and replan from the actual tile.
 
-## 15. Yield object-transport waits when dialogue opens
+## 15. Match transport execution to its interaction mechanism and interface family
+
+Transport rows do not all represent scene-object clicks, and related networks can use different widget groups. Before admitting new transport data, verify that the walker has an execution branch for the row's actual interaction and selects the interface from the origin object ID. Fail closed for unknown object IDs and tightly identify object-less item actions by their exact origin, destination, action, target, and item requirement.
+
+**Why this matters:** Barrows mound entries use a spade inventory action and therefore have object ID `0`; the generic object executor skips them. River Lum and River Dougne canoe stations open different map interfaces, so waiting unconditionally for the Lum map makes every Dougne route time out.
+
+**Pattern to follow:**
+
+```java
+if (isExactItemActionTransport(transport)) {
+    interactRequiredItem();
+    awaitDestination();
+    return finishHandledTransport(transport);
+}
+
+int mapComponent = mapComponentForOriginObject(transport.getObjectId());
+if (mapComponent < 0) {
+    return false;
+}
+```
+
+**Where this applies:** `Rs2Walker.handleTransports`, specialized transport handlers, and shortest-path transport resource additions.
+
+**Defensive check:** Add pure unit tests for exact item-action recognition and for every supported origin-object-to-interface mapping, plus a loader test proving required item and unlock fields survive TSV parsing.
+
+## 16. Yield object-transport waits when dialogue opens
 
 An object transport can open quest dialogue instead of moving the player immediately. When that happens, end the synchronous transport landing wait and propagate that yield through the outer `processWalk` loop by returning `MOVING` to the calling script. The quest layer owns the dialogue response; the walker should not answer it or keep retrying the object.
 
@@ -375,7 +400,7 @@ dialogue; an open dialogue by itself does not create a route-progress exit.
 
 **Defensive check:** Open a quest door that displays dialogue. The walker should log `object_transport_dialogue_yield`, then `route_dialogue_yield_to_caller`, and then allow a `quest-helper:dialogue-space-step` without another door click.
 
-## 16. Match checkpoint handoff geometry to minimap selection
+## 17. Match checkpoint handoff geometry to minimap selection
 
 Minimap route targets are selected inside a circular Euclidean radius, so the early-handoff check must use that same Euclidean radius. Do not use `WorldPoint.distanceTo2D` for this check: its Chebyshev (maximum-axis) distance can classify a diagonal checkpoint as close before the player has made meaningful progress toward it. Keep the separate close/arrival threshold unchanged.
 
