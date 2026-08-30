@@ -122,7 +122,6 @@ public final class WebWalkSession
         if (progressed)
         {
             redispatchCount = 0;
-            rejectedDispatchCount = 0;
             routeActionFailureCount = 0;
             routeActionPending = false;
             routeActionCommandTick = Integer.MIN_VALUE;

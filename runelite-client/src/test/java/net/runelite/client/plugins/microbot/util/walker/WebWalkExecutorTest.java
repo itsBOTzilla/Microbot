@@ -164,6 +164,35 @@ public class WebWalkExecutorTest
     }
 
     @Test
+    public void residualMovementDoesNotEraseRejectedDispatchBudget()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(10, START, 0);
+        session.recordRejectedDispatch();
+        session.observe(11, point(1), 1);
+        assertEquals(1, session.getRejectedDispatchCount());
+        session.recordRejectedDispatch();
+
+        WebWalkExecutor.Decision decision = new WebWalkExecutor().decide(session,
+                ready(12, point(1), 1, 1, point(12), 12, false));
+
+        assertEquals(WebWalkExecutor.DecisionType.REPLAN, decision.getType());
+    }
+
+    @Test
+    public void acceptedDispatchResetsRejectedDispatchBudget()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(10, START, 0);
+        session.recordRejectedDispatch();
+        session.recordMinimapDispatch(11, point(10), point(10), 10, false);
+
+        assertEquals(0, session.getRejectedDispatchCount());
+    }
+
+    @Test
     public void executorStopsAtIndependentIterationLimit()
     {
         WaitingRuntime runtime = new WaitingRuntime();

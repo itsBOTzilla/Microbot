@@ -8,6 +8,7 @@ import net.runelite.api.coords.WorldPoint;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 
 public class RuneLiteWebWalkRuntimeTest
@@ -50,6 +51,15 @@ public class RuneLiteWebWalkRuntimeTest
                         path, point(0), reachable, 12, index -> false);
 
         assertNull(candidate);
+    }
+
+    @Test
+    public void rejectedDispatchCarriesNoAcceptedTarget()
+    {
+        WebWalkRuntime.DispatchResult result = WebWalkRuntime.DispatchResult.rejected();
+
+        assertFalse(result.isAccepted());
+        assertNull(result.getActualTarget());
     }
 
     private static List<WorldPoint> line(int fromInclusive, int toExclusive)
