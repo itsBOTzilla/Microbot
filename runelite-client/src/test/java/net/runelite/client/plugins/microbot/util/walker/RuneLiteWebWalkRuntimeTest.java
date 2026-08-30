@@ -527,6 +527,95 @@ public class RuneLiteWebWalkRuntimeTest
     }
 
     @Test
+    public void staleCompletionCannotClearSameTargetReplacement()
+    {
+        WorldPoint goal = new WorldPoint(3200, 3200, 0);
+        long staleGeneration = Rs2Walker.updateCurrentTargetOwnership(goal);
+        long replacementGeneration = Rs2Walker.updateCurrentTargetOwnership(goal);
+        try
+        {
+            assertFalse(Rs2Walker.clearWalkingRouteIfOwned(
+                    goal, staleGeneration, "test-stale-same-target"));
+            assertEquals(goal, Rs2Walker.getCurrentTarget());
+            assertEquals(replacementGeneration, Rs2Walker.getCurrentTargetGeneration());
+        }
+        finally
+        {
+            Rs2Walker.clearWalkingRoute("test-cleanup");
+        }
+    }
+
+    @Test
+    public void staleCompletionCannotClearDifferentTargetReplacement()
+    {
+        WorldPoint goal = new WorldPoint(3200, 3200, 0);
+        WorldPoint replacement = new WorldPoint(3210, 3210, 0);
+        long staleGeneration = Rs2Walker.updateCurrentTargetOwnership(goal);
+        long replacementGeneration = Rs2Walker.updateCurrentTargetOwnership(replacement);
+        try
+        {
+            assertFalse(Rs2Walker.clearWalkingRouteIfOwned(
+                    goal, staleGeneration, "test-stale-different-target"));
+            assertEquals(replacement, Rs2Walker.getCurrentTarget());
+            assertEquals(replacementGeneration, Rs2Walker.getCurrentTargetGeneration());
+        }
+        finally
+        {
+            Rs2Walker.clearWalkingRoute("test-cleanup");
+        }
+    }
+
+    @Test
+    public void productionFinishUsesGenerationAwareCompareAndClear() throws IOException
+    {
+        AtomicInteger ownedClearCalls = new AtomicInteger();
+        AtomicInteger unconditionalClearCalls = new AtomicInteger();
+        String walkerOwner = Type.getInternalName(Rs2Walker.class);
+
+        try (InputStream stream = RuneLiteWebWalkRuntime.class.getResourceAsStream(
+                "RuneLiteWebWalkRuntime.class"))
+        {
+            assertTrue(stream != null);
+            new ClassReader(stream).accept(new ClassVisitor(Opcodes.ASM9)
+            {
+                @Override
+                public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                 String signature, String[] exceptions)
+                {
+                    if (!name.equals("finish"))
+                    {
+                        return null;
+                    }
+                    return new MethodVisitor(Opcodes.ASM9)
+                    {
+                        @Override
+                        public void visitMethodInsn(int opcode, String owner, String methodName,
+                                                    String methodDescriptor, boolean isInterface)
+                        {
+                            if (!owner.equals(walkerOwner))
+                            {
+                                return;
+                            }
+                            if (methodName.equals("clearWalkingRouteIfOwned"))
+                            {
+                                ownedClearCalls.incrementAndGet();
+                            }
+                            if (methodName.equals("setTarget")
+                                    || methodName.equals("clearWalkingRoute"))
+                            {
+                                unconditionalClearCalls.incrementAndGet();
+                            }
+                        }
+                    };
+                }
+            }, 0);
+        }
+
+        assertEquals(1, ownedClearCalls.get());
+        assertEquals(0, unconditionalClearCalls.get());
+    }
+
+    @Test
     public void productionSelectionKeepsTargetsInsideReliableMinimapRadius() throws IOException
     {
         AtomicInteger selectorCalls = new AtomicInteger();

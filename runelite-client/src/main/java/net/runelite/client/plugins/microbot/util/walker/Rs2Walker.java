@@ -115,6 +115,7 @@ public class Rs2Walker {
     public static ShortestPathConfig config;
     // stuck/movement tracking state migrated to WalkerRouteState (see routeState)
     static volatile WorldPoint currentTarget;
+    private static final Object currentTargetOwnershipMutex = new Object();
     private static final AtomicLong currentTargetGeneration = new AtomicLong();
     static int nextWalkingDistance = 10;
 
@@ -131,9 +132,16 @@ public class Rs2Walker {
         return currentTargetGeneration.get();
     }
 
-    private static void updateCurrentTargetOwnership(WorldPoint target) {
-        currentTargetGeneration.incrementAndGet();
+    static long updateCurrentTargetOwnership(WorldPoint target) {
+        synchronized (currentTargetOwnershipMutex) {
+            return updateCurrentTargetOwnershipLocked(target);
+        }
+    }
+
+    private static long updateCurrentTargetOwnershipLocked(WorldPoint target) {
+        long generation = currentTargetGeneration.incrementAndGet();
         currentTarget = target;
+        return generation;
     }
 
 	/**
@@ -980,6 +988,18 @@ public class Rs2Walker {
      */
     public static void clearWalkingRoute(String reason) {
         setTarget(null, reason != null && !reason.isBlank() ? reason : "unspecified");
+    }
+
+    static boolean clearWalkingRouteIfOwned(WorldPoint expectedTarget, long expectedGeneration,
+                                             String reason) {
+        synchronized (currentTargetOwnershipMutex) {
+            if (currentTargetGeneration.get() != expectedGeneration
+                    || !Objects.equals(currentTarget, expectedTarget)) {
+                return false;
+            }
+            clearTargetLocked(reason != null && !reason.isBlank() ? reason : "unspecified");
+            return true;
+        }
     }
 
     // lastRouteClearReason / lastRouteClearAtMs migrated to WalkerRouteState; the @Getter-generated
@@ -8928,39 +8948,45 @@ public class Rs2Walker {
             }
         }
 
-        updateCurrentTargetOwnership(target);
-
         if (target == null) {
-            // A completed/cancelled route owns its transport handoff context. Keeping the
-            // timestamp alive made an unrelated walk started within 15 seconds inherit
-            // post-transport handler suppression and misleading elapsed-time markers.
-            clearRecentTransportContext();
-            resetRouteProgress();
-            logRouteClear(clearReasonWhenNull);
-            synchronized (Rs2PathApi.getPathfinderMutex()) {
-                final Pathfinder pathfinder = Rs2PathApi.getPathfinder();
-                if (pathfinder != null) {
-                    pathfinder.cancel();
-                }
-                Future<?> pathfinderFuture = Rs2PathApi.getPathfinderFuture();
-                if (pathfinderFuture != null && !pathfinderFuture.isDone()) {
-                    pathfinderFuture.cancel(true);
-                }
-                Rs2PathApi.setPathfinderFuture(null);
-                Rs2PathApi.setPathfinder(null);
+            synchronized (currentTargetOwnershipMutex) {
+                clearTargetLocked(clearReasonWhenNull);
             }
-
-            WorldMapPointManager wmm = Microbot.getWorldMapPointManager();
-            if (wmm != null) {
-                wmm.remove(Rs2PathApi.getMarker());
-            } else if (Rs2LogRateLimit.once(WORLD_MAP_REMOVE_NULL_LOGGED)) {
-                log.debug("[Walker] WorldMapPointManager null during route clear — marker may linger until teardown");
-            }
-            Rs2PathApi.setMarker(null);
-            Rs2PathApi.setStartPointSet(false);
         } else {
+            updateCurrentTargetOwnership(target);
             applyWalkerDestination(target);
         }
+    }
+
+    private static void clearTargetLocked(String clearReasonWhenNull) {
+        updateCurrentTargetOwnershipLocked(null);
+        // A completed/cancelled route owns its transport handoff context. Keeping the
+        // timestamp alive made an unrelated walk started within 15 seconds inherit
+        // post-transport handler suppression and misleading elapsed-time markers.
+        clearRecentTransportContext();
+        resetRouteProgress();
+        logRouteClear(clearReasonWhenNull);
+        synchronized (Rs2PathApi.getPathfinderMutex()) {
+            final Pathfinder pathfinder = Rs2PathApi.getPathfinder();
+            if (pathfinder != null) {
+                pathfinder.cancel();
+            }
+            Future<?> pathfinderFuture = Rs2PathApi.getPathfinderFuture();
+            if (pathfinderFuture != null && !pathfinderFuture.isDone()) {
+                pathfinderFuture.cancel(true);
+            }
+            Rs2PathApi.setPathfinderFuture(null);
+            Rs2PathApi.setPathfinder(null);
+        }
+
+        WorldMapPointManager wmm = Microbot.getWorldMapPointManager();
+        if (wmm != null) {
+            wmm.remove(Rs2PathApi.getMarker());
+        } else if (Rs2LogRateLimit.once(WORLD_MAP_REMOVE_NULL_LOGGED)) {
+                log.debug("[Walker] WorldMapPointManager null during route clear — marker may linger until teardown");
+        }
+        Rs2PathApi.setMarker(null);
+        Rs2PathApi.setStartPointSet(false);
     }
 
     private static void restoreTargetMarker(WorldPoint target) {

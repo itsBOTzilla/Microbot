@@ -354,10 +354,8 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
     @Override
     public void finish(WalkerState state, String reason)
     {
-        if (target.equals(Rs2Walker.getCurrentTarget()))
-        {
-            Rs2Walker.setTarget(null, "webwalk-executor:" + reason);
-        }
+        Rs2Walker.clearWalkingRouteIfOwned(target, targetGeneration,
+                "webwalk-executor:" + reason);
     }
 
     static ForwardCandidate selectForwardCandidate(List<WorldPoint> path, WorldPoint player,
