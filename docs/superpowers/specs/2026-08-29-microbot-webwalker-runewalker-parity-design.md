@@ -29,8 +29,12 @@ RuneWalker 2.0 does not use the run-specific early-handoff rule. It retains the 
 - Keep open-ground walking and running continuous without walker-caused stop-and-go movement.
 - Issue one authoritative movement command at a time.
 - Select the furthest safe route point that Microbot can dispatch before the next route action.
+- Prefer Microbot's existing canvas walk interaction for safe on-screen route points within five
+  Chebyshev tiles, with a single minimap fallback when the point cannot be canvas-dispatched.
 - Preserve all Microbot door, transport, dialogue, collision, pathfinder, cancellation, banking, and script-call contracts.
 - Preserve randomized run activation using the shared inclusive 50-100 percent threshold.
+- Keep WebWalker active while the user passively moves the real cursor over the game canvas;
+  pointer motion alone is not an input takeover.
 - Make rejected minimap targets bounded and recoverable instead of producing click churn.
 - Keep nightly Microbot updates mergeable by concentrating custom behavior in narrow, tested files.
 - Deploy every verified local build through one stable launcher artifact: `microbot-local.jar`.
@@ -125,6 +129,21 @@ Forward selection follows the RuneWalker 2.0 contract:
 
 The reachability snapshot is captured once at the decision boundary and reused throughout that observation. Door or transport interactions invalidate the observation and force a fresh snapshot before subsequent movement.
 
+## Close-range canvas dispatch
+
+The executor continues to own one movement command at a time, while the Microbot runtime chooses
+how to emit that command. A selected route target is eligible for canvas walking only when it is on
+the player's plane and within five Chebyshev tiles. The runtime then uses the existing
+on-screen-only Microbot canvas walk path. If projection or visibility rejects the canvas target
+before input is emitted, the runtime may issue the normal route-safe minimap fallback from the same
+observation.
+
+This policy does not select a different world point. The target has already passed raw-path,
+reachability, collision, radius, door, and transport boundaries. A successful canvas dispatch owns
+the same checkpoint as a successful minimap dispatch. Run state does not affect the choice or
+checkpoint lifecycle, and the canvas helper must not toggle run because run energy remains owned by
+the shared randomized policy.
+
 ## Minimap dispatch
 
 The runtime continues to use Microbot's existing minimap and input APIs. RuneWalker UI infrastructure is not imported.
@@ -136,7 +155,8 @@ Dispatch outcomes are explicit:
 - accepted with an actual target: create the checkpoint using the actual target and resolved path index;
 - rejected or `actual=null`: do not create a checkpoint and increment the rejection counter;
 - repeated bounded rejection: request a fresh path rather than clicking indefinitely;
-- interruption or human-input arbitration: yield or terminate through the existing Microbot contracts.
+- interruption or a real button/key takeover: yield or terminate through the existing Microbot
+  contracts. Passive cursor motion continues updating pointer position without changing ownership.
 
 No synthetic click may be emitted from a stale observation.
 
@@ -171,7 +191,9 @@ Run activation remains the shared Microbot policy:
 - Target generation remains the cancellation and replacement owner.
 - Stop and shutdown invalidate ownership before cancelling work.
 - No worker may clear or replace a newer target.
-- InputArbiter remains authoritative for human-input yielding and held-input cleanup.
+- InputArbiter remains authoritative for real mouse-button and keyboard yielding and held-input
+  cleanup. `MOUSE_MOVED` and `MOUSE_DRAGGED` position samples alone never claim HUMAN ownership,
+  cancel a route, end a wait, or reject the next WebWalker command.
 
 ## Observability
 
@@ -202,6 +224,8 @@ Tests are organized around behavior rather than private helper implementation.
 ### Dispatch behavior
 
 - The furthest reachable point before a transport is selected.
+- A safe, on-screen route target within five tiles emits one canvas walk command.
+- An off-screen or unprojectable close target emits one minimap fallback, never both inputs.
 - Unreachable, cross-plane, and outside-radius points are rejected before input.
 - `actual=null` never creates a checkpoint.
 - Consecutive bounded rejection causes replan, not an unbounded click loop.
@@ -213,6 +237,8 @@ Tests are organized around behavior rather than private helper implementation.
 - No active call path falls back to legacy `processWalk` movement.
 - Client-thread guardrails remain intact.
 - Nightly InputArbiter, door, transport, pathfinder, and cancellation tests remain green.
+- Real cursor motion over the canvas updates `PointerState` while WebWalker waits continue polling;
+  real button and key gestures retain their existing yield and idle-resume behavior.
 - The RuneWalker 2.0 behavioral fixtures are ported using Microbot package names and APIs.
 
 ## Live acceptance
@@ -224,11 +250,13 @@ The exact built and staged JAR must be tested with run enabled on at least:
 3. a route containing a catalog transport;
 4. a route that triggers replanning or collision disagreement;
 5. a target replacement and explicit stop.
+6. continuous real cursor movement over the hovered game canvas during an open-ground run.
 
 Open-ground acceptance requires:
 
 - no walker-caused stationary gap while an unobstructed route remains;
 - no ordinary checkpoint replacement before it is reached or passed;
+- no route pause, cancellation, dispatch rejection, or cadence change caused only by cursor motion;
 - no repeated 1-5-tile command churn on a clear segment;
 - no off-route or through-wall click;
 - no repeated rejected dispatch loop;

@@ -7,12 +7,15 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import java.util.function.IntPredicate;
+import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import net.runelite.api.Client;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.Pathfinder;
+import net.runelite.client.plugins.microbot.util.input.InputArbiter;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.tile.Rs2Tile;
 
@@ -22,6 +25,7 @@ import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
 public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
 {
     private static final int MINIMAP_ROUTE_RADIUS = 12;
+    private static final int CANVAS_ROUTE_RADIUS = 5;
     private static final int ROUTE_EDGE_ACTION_DISTANCE = 3;
     private static final int STATE_WAIT_MS = 750;
     private static final long PATHFINDER_TIMEOUT_NANOS = 10_000_000_000L;
@@ -48,10 +52,14 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
     @Override
     public Observation observe(WebWalkSession session)
     {
+        if (Thread.currentThread().isInterrupted() || InputArbiter.isHuman())
+        {
+            return new Observation(lastObservedTick, null, Status.CANCELLED,
+                    null, -1, null, -1, false, false);
+        }
         ClientSample sample = readClientSample();
         lastObservedTick = sample.tick;
-        if (Thread.currentThread().isInterrupted()
-                || Rs2Walker.getCurrentTarget() == null
+        if (Rs2Walker.getCurrentTarget() == null
                 || !target.equals(Rs2Walker.getCurrentTarget()))
         {
             return terminal(sample, Status.CANCELLED);
@@ -142,17 +150,55 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         {
             return DispatchResult.rejected();
         }
-        Rs2Walker.manageRunEnergy(pathRemaining);
-        DispatchResult result = Rs2Walker.dispatchMiniMapTarget(
-                lastRawPath, requestedTarget, player, pathIndex, MINIMAP_ROUTE_RADIUS - 1);
-        WebWalkLog.minimapDispatch(requestedTarget, result.getActualTarget(), pathIndex,
-                lastObservedTick, redispatch);
+        if (requestedTarget == null || player.getPlane() != requestedTarget.getPlane())
+        {
+            return DispatchResult.rejected();
+        }
+        DispatchResult result = dispatchMovementTarget(player, requestedTarget,
+                () -> Rs2Walker.manageRunEnergy(pathRemaining),
+                () -> Rs2Walker.walkFastCanvasOnScreenOnly(requestedTarget),
+                () -> Rs2Walker.dispatchMiniMapTarget(
+                        lastRawPath, requestedTarget, player, pathIndex, MINIMAP_ROUTE_RADIUS - 1));
+        WebWalkLog.movementDispatch(result.getMethod(), requestedTarget,
+                result.getActualTarget(), pathIndex, lastObservedTick, redispatch);
         if (result.isAccepted())
         {
-            Rs2Walker.markFirstMovementClick("first_minimap_click", target, player,
-                    "requested=" + requestedTarget + " actual=" + result.getActualTarget());
+            String phase = result.getMethod() == DispatchMethod.CANVAS
+                    ? "first_canvas_click" : "first_minimap_click";
+            Rs2Walker.markFirstMovementClick(phase, target, player,
+                    "method=" + result.getMethod() + " requested=" + requestedTarget
+                            + " actual=" + result.getActualTarget());
         }
         return result;
+    }
+
+    static DispatchResult dispatchMovementTarget(WorldPoint player, WorldPoint requestedTarget,
+                                                   Runnable beforeDispatch,
+                                                   BooleanSupplier canvasDispatcher,
+                                                   Supplier<DispatchResult> minimapDispatcher)
+    {
+        Objects.requireNonNull(beforeDispatch, "beforeDispatch");
+        Objects.requireNonNull(canvasDispatcher, "canvasDispatcher");
+        Objects.requireNonNull(minimapDispatcher, "minimapDispatcher");
+        if (player == null || requestedTarget == null
+                || player.getPlane() != requestedTarget.getPlane())
+        {
+            return DispatchResult.rejected();
+        }
+        beforeDispatch.run();
+        if (shouldPreferCanvas(player, requestedTarget) && canvasDispatcher.getAsBoolean())
+        {
+            return DispatchResult.accepted(requestedTarget, DispatchMethod.CANVAS);
+        }
+        DispatchResult minimapResult = minimapDispatcher.get();
+        return minimapResult == null ? DispatchResult.rejected() : minimapResult;
+    }
+
+    private static boolean shouldPreferCanvas(WorldPoint player, WorldPoint requestedTarget)
+    {
+        return player != null && requestedTarget != null
+                && player.getPlane() == requestedTarget.getPlane()
+                && player.distanceTo2D(requestedTarget) <= CANVAS_ROUTE_RADIUS;
     }
 
     @Override

@@ -235,7 +235,7 @@ public interface MicrobotConfig extends Config
 	@ConfigItem(
 		keyName = keyDisableInputYielding,
 		name = "Disable input yielding",
-		description = "Stop scripts pausing when you use the real mouse or keyboard on the game canvas. " +
+		description = "Stop scripts pausing when you click or use the keyboard on the game canvas. " +
 				"Leave this off unless yielding misfires; with it on, your input and the bot's compete for the cursor.",
 		position = 7,
 		section = generalSection
@@ -248,11 +248,11 @@ public interface MicrobotConfig extends Config
 	String keyInputMotionThresholdPx = "inputMotionThresholdPx";
 	@ConfigItem(
 		keyName = keyInputMotionThresholdPx,
-		name = "Input yield: motion threshold",
-		description = "How far the real mouse must move, in pixels from where the bot last put it, before scripts yield. " +
-				"Lower reacts sooner and risks yielding on an accidental nudge.",
+		name = "Legacy input motion threshold",
+		description = "Retained for configuration compatibility. Passive mouse movement no longer pauses scripts.",
 		position = 8,
-		section = generalSection
+		section = generalSection,
+		hidden = true
 	)
 	default int inputMotionThresholdPx()
 	{
@@ -263,7 +263,7 @@ public interface MicrobotConfig extends Config
 	@ConfigItem(
 		keyName = keyInputIdleResumeMs,
 		name = "Input yield: resume delay (ms)",
-		description = "How long the real mouse and keyboard must stay quiet before scripts resume. " +
+		description = "How long after a real mouse click or keyboard gesture scripts resume. " +
 				"Never resumes while you are holding a button or key, whatever this is set to.",
 		position = 9,
 		section = generalSection

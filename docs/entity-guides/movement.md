@@ -452,3 +452,31 @@ Before the first movement click, skip speculative local-reachability recovery fo
 **Where this applies:** the `Rs2Walker.processWalk` local-reachability branch before `firstMovementClickMarked`, startup obstacle policy, and the final route-click door check.
 
 **Defensive check:** On a fresh walk with an unreachable smoothed waypoint but a usable raw route, logs should progress from `preclick_segment_handler_skip` to `click_candidate_found` and `first_minimap_click`; they should not emit `frontier rewind`, `recovery_target_walled`, or `active_route_idle_nudge` before that first click.
+
+## 20. Treat passive cursor motion as position, not a WebWalker takeover
+
+The real canvas listener must continue recording `MOUSE_MOVED` and `MOUSE_DRAGGED` coordinates in
+`PointerState`, but position samples alone must not mark `InputArbiter` as HUMAN. Only an actual
+mouse-button or keyboard gesture may interrupt script waits and route ownership.
+
+**Why this matters:** When motion was measured against the last synthetic cursor position, moving
+the physical cursor more than ten pixels while hovering the client marked HUMAN for 1.8 seconds.
+Continuous motion repeatedly renewed that window, causing `Script`, `Global.sleepUntil`,
+`VirtualMouse`, and `Rs2Walker` to pause or reject work even though the user never clicked.
+
+**Pattern to follow:**
+
+```java
+PointerState.setFromReal(canvasX, canvasY); // position only
+
+// Ownership begins with deliberate input, not hover motion.
+InputArbiter.onRealButtonPressed(button);
+InputArbiter.onRealKeyPressed(keyCode);
+```
+
+**Where this applies:** `CanvasInputListener`, `InputArbiter`, `Global` waits, `Script.run`,
+`VirtualMouse`, `Rs2Walker`, and any movement executor that consults human-input ownership.
+
+**Defensive check:** Dispatch repeated real `MOUSE_MOVED` events over the canvas and assert the
+pointer changes while `InputArbiter.isHuman()` stays false and a real `Global.sleepUntil` continues
+polling. Keep separate tests proving real button/key gestures still yield.

@@ -4263,33 +4263,52 @@ public class Rs2Walker {
         return walkFastCanvas(worldPoint, true);
     }
 
+    /** Canvas-only movement for the WebWalker runtime; preserves the shared run-energy policy. */
+    static boolean walkFastCanvasOnScreenOnly(WorldPoint worldPoint) {
+        return walkFastCanvasOnScreenOnly(worldPoint, () -> { });
+    }
+
     private static boolean walkFastCanvasOnScreenOnly(WorldPoint worldPoint, boolean toggleRun) {
-        LocalPoint localPoint = localPointForWorld(worldPoint);
-        if (localPoint == null || !Rs2Camera.isTileOnScreen(localPoint)) {
-            return false;
-        }
-        Point canvasPoint = Perspective.localToCanvas(
-                Microbot.getClient(),
-                localPoint,
-                Microbot.getClient().getTopLevelWorldView().getPlane());
-        int canvasX = canvasPoint != null ? canvasPoint.getX() : -1;
-        int canvasY = canvasPoint != null ? canvasPoint.getY() : -1;
-        if (canvasX < 0 || canvasY < 0) {
+        return walkFastCanvasOnScreenOnly(worldPoint, () -> Rs2Player.toggleRunEnergy(toggleRun));
+    }
+
+    private static boolean walkFastCanvasOnScreenOnly(WorldPoint worldPoint, Runnable beforeDispatch) {
+        Rectangle dispatchBounds = Microbot.getClientThread().runOnClientThreadOptional(
+                () -> canvasWalkDispatchBounds(worldPoint)).orElse(null);
+        if (dispatchBounds == null) {
             return false;
         }
 
-        Rs2Player.toggleRunEnergy(toggleRun);
+        beforeDispatch.run();
         NewMenuEntry entry = new NewMenuEntry()
-                .param0(canvasX)
-                .param1(canvasY)
+                .param0(dispatchBounds.x)
+                .param1(dispatchBounds.y)
                 .type(MenuAction.WALK)
                 .identifier(0)
                 .itemId(0)
                 .option("Walk here");
 
-        Microbot.doInvoke(entry,
-                new Rectangle(canvasX, canvasY, Microbot.getClient().getCanvasWidth(), Microbot.getClient().getCanvasHeight()));
+        Microbot.doInvoke(entry, dispatchBounds);
         return true;
+    }
+
+    private static Rectangle canvasWalkDispatchBounds(WorldPoint worldPoint) {
+        LocalPoint localPoint = localPointForWorld(worldPoint);
+        if (localPoint == null || !Rs2Camera.isTileOnScreen(localPoint)) {
+            return null;
+        }
+        Point canvasPoint = Perspective.localToCanvas(
+                Microbot.getClient(),
+                localPoint,
+                Microbot.getClient().getTopLevelWorldView().getPlane());
+        if (canvasPoint == null || canvasPoint.getX() < 0 || canvasPoint.getY() < 0) {
+            return null;
+        }
+        return new Rectangle(
+                canvasPoint.getX(),
+                canvasPoint.getY(),
+                Microbot.getClient().getCanvasWidth(),
+                Microbot.getClient().getCanvasHeight());
     }
 
     private static LocalPoint localPointForWorld(WorldPoint worldPoint) {

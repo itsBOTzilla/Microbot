@@ -171,6 +171,20 @@ public class YieldOnHumanTest
 		assertTrue("after resume the waits behave normally again", Global.sleepUntil(() -> true, 200));
 	}
 
+	@Test
+	public void passiveMouseMotionDoesNotInterruptWalkerWaits()
+	{
+		PointerState.setFromBot(100, 100);
+		InputArbiter.onRealMove(500, 500);
+		AtomicInteger polls = new AtomicInteger();
+
+		boolean result = Global.sleepUntil(() -> polls.incrementAndGet() == 1, 200);
+
+		assertTrue("passive cursor motion must leave WebWalker waits active", result);
+		assertEquals(1, polls.get());
+		assertFalse(InputArbiter.isHuman());
+	}
+
 	/**
 	 * The gate in {@code Script.run()} is what idles a script on takeover, and every other test here
 	 * passes without it: the waits returning early only matter if the loop then declines to run.

@@ -16,8 +16,15 @@ public final class WebWalkLog {
 
     public static void minimapDispatch(WorldPoint requested, WorldPoint actual,
                                        int pathIndex, int tick, boolean redispatch) {
-        LOG.info("[WebWalk] click | requested={} actual={} idx={} tick={} redispatch={}",
-                requested, actual, pathIndex, tick, redispatch);
+        movementDispatch(WebWalkRuntime.DispatchMethod.MINIMAP, requested, actual,
+                pathIndex, tick, redispatch);
+    }
+
+    public static void movementDispatch(WebWalkRuntime.DispatchMethod method,
+                                        WorldPoint requested, WorldPoint actual,
+                                        int pathIndex, int tick, boolean redispatch) {
+        LOG.info("[WebWalk] click | method={} requested={} actual={} idx={} tick={} redispatch={}",
+                method, requested, actual, pathIndex, tick, redispatch);
     }
 
     public static void executorReplan(String reason, int attempt, WorldPoint player, WorldPoint goal) {

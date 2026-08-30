@@ -402,6 +402,88 @@ Expected: the rejection budget survives incidental player movement, while accept
 
 ---
 
+### Task 4A: Prefer Existing Microbot Canvas Walking for Close Route Targets
+
+**Files:**
+- Modify: `runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker/RuneLiteWebWalkRuntime.java`
+- Modify: `runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker/Rs2Walker.java`
+- Modify: `runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker/WebWalkRuntime.java`
+- Modify: `runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker/WebWalkLog.java`
+- Modify: `runelite-client/src/test/java/net/runelite/client/plugins/microbot/util/walker/RuneLiteWebWalkRuntimeTest.java`
+
+**Interfaces:**
+- Consumes: the already selected safe route target and Microbot's existing on-screen canvas walker
+- Produces: one canvas command for safe targets within five Chebyshev tiles, otherwise one minimap command
+
+- [ ] **Step 1: Add failing dispatch-policy tests**
+
+Pin three sequences with injected dispatch functions: a close canvas-eligible target emits only
+canvas, a far target emits only minimap, and a close target rejected before canvas input falls back
+to exactly one minimap command. Assert the accepted result records whether canvas or minimap owned
+the checkpoint.
+
+- [ ] **Step 2: Add dispatch method identity without breaking callers**
+
+Extend `WebWalkRuntime.DispatchResult` with a movement method (`CANVAS`, `MINIMAP`, or `NONE`). Keep
+the existing `accepted(WorldPoint)` and `rejected()` factories compatible; the former remains a
+minimap result for existing implementations.
+
+- [ ] **Step 3: Reuse the existing Microbot canvas path**
+
+Add a package-private, on-screen-only overload in `Rs2Walker` that does not toggle run. The runtime
+must not call the public `walkFastCanvas` fallback because it can both alter run state and conceal
+whether minimap input was emitted.
+
+- [ ] **Step 4: Implement the bounded runtime policy**
+
+When the selected target is same-plane and within five tiles, try the no-run-toggle canvas helper.
+Only a pre-input canvas rejection may fall through to `dispatchMiniMapTarget`. Preserve the exact
+selected route target, checkpoint path index, action preemption, and one-input-per-observation rule.
+
+- [ ] **Step 5: Validate and commit**
+
+Run the executor/runtime suites, route-action boundary suites, checkstyle, `git diff --check`, and
+commit as `fix(walker): prefer canvas for close route targets`.
+
+---
+
+### Task 4B: Keep Passive Real Mouse Motion From Interrupting WebWalker
+
+**Files:**
+- Modify: `runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/input/InputArbiter.java`
+- Modify: `runelite-client/src/main/java/net/runelite/client/plugins/microbot/MicrobotConfig.java`
+- Modify: `runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/input/InputDiagnostics.java`
+- Modify: `runelite-client/src/test/java/net/runelite/client/plugins/microbot/util/input/InputArbiterTest.java`
+- Modify: `runelite-client/src/test/java/net/runelite/client/plugins/microbot/util/input/YieldOnHumanTest.java`
+
+**Interfaces:**
+- Consumes: real canvas motion, button, and key events through `CanvasInputListener`
+- Produces: position-only hover motion and gesture-only HUMAN ownership
+
+- [x] **Step 1: Reproduce the hover takeover through the real listener**
+
+Drive a real `MOUSE_MOVED` event after a bot position and prove the cursor is tracked while
+`InputArbiter.isHuman()` remains false. Repeat enough motion to exceed the former threshold.
+
+- [x] **Step 2: Pin the WebWalker wait contract**
+
+After passive motion, run the real `Global.sleepUntil` path and prove it still polls and succeeds.
+Retain separate coverage proving real button and key gestures yield and honor idle resume.
+
+- [x] **Step 3: Separate pointer position from takeover activity**
+
+Keep `PointerState` updates for hover motion, but only real button/key events call the activity
+owner. Retain the legacy motion-threshold configuration surface as an inert hidden compatibility
+setting so existing configuration loads do not break.
+
+- [ ] **Step 4: Validate with the canvas movement unit and live gates**
+
+Run the input, runtime, executor, checkstyle, and assembly suites. During live acceptance, move the
+physical cursor continuously over the client while running an open-ground route and require no
+route cancellation, wait abort, rejected dispatch, or cadence change attributable to motion.
+
+---
+
 ### Task 5: Prove Route Actions Preempt Movement Without Losing Progress
 
 **Files:**

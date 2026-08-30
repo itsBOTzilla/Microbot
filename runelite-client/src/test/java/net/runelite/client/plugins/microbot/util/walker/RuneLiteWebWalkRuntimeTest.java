@@ -1,15 +1,24 @@
 package net.runelite.client.plugins.microbot.util.walker;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import net.runelite.api.coords.WorldPoint;
 import org.junit.Test;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 public class RuneLiteWebWalkRuntimeTest
 {
@@ -60,6 +69,215 @@ public class RuneLiteWebWalkRuntimeTest
 
         assertFalse(result.isAccepted());
         assertNull(result.getActualTarget());
+        assertEquals(WebWalkRuntime.DispatchMethod.NONE, result.getMethod());
+    }
+
+    @Test
+    public void closeRouteTargetUsesOneCanvasCommand()
+    {
+        AtomicInteger canvasCalls = new AtomicInteger();
+        AtomicInteger minimapCalls = new AtomicInteger();
+
+        WebWalkRuntime.DispatchResult result = RuneLiteWebWalkRuntime.dispatchMovementTarget(
+                point(0), point(5),
+                () -> { },
+                () -> {
+                    canvasCalls.incrementAndGet();
+                    return true;
+                },
+                () -> {
+                    minimapCalls.incrementAndGet();
+                    return WebWalkRuntime.DispatchResult.accepted(point(5));
+                });
+
+        assertTrue(result.isAccepted());
+        assertEquals(point(5), result.getActualTarget());
+        assertEquals(WebWalkRuntime.DispatchMethod.CANVAS, result.getMethod());
+        assertEquals(1, canvasCalls.get());
+        assertEquals(0, minimapCalls.get());
+    }
+
+    @Test
+    public void farRouteTargetUsesOneMinimapCommand()
+    {
+        AtomicInteger canvasCalls = new AtomicInteger();
+        AtomicInteger minimapCalls = new AtomicInteger();
+
+        WebWalkRuntime.DispatchResult result = RuneLiteWebWalkRuntime.dispatchMovementTarget(
+                point(0), point(6),
+                () -> { },
+                () -> {
+                    canvasCalls.incrementAndGet();
+                    return true;
+                },
+                () -> {
+                    minimapCalls.incrementAndGet();
+                    return WebWalkRuntime.DispatchResult.accepted(point(6));
+                });
+
+        assertTrue(result.isAccepted());
+        assertEquals(WebWalkRuntime.DispatchMethod.MINIMAP, result.getMethod());
+        assertEquals(0, canvasCalls.get());
+        assertEquals(1, minimapCalls.get());
+    }
+
+    @Test
+    public void unavailableCloseCanvasFallsBackToOneMinimapCommand()
+    {
+        AtomicInteger canvasCalls = new AtomicInteger();
+        AtomicInteger minimapCalls = new AtomicInteger();
+
+        WebWalkRuntime.DispatchResult result = RuneLiteWebWalkRuntime.dispatchMovementTarget(
+                point(0), point(5),
+                () -> { },
+                () -> {
+                    canvasCalls.incrementAndGet();
+                    return false;
+                },
+                () -> {
+                    minimapCalls.incrementAndGet();
+                    return WebWalkRuntime.DispatchResult.accepted(point(5));
+                });
+
+        assertTrue(result.isAccepted());
+        assertEquals(WebWalkRuntime.DispatchMethod.MINIMAP, result.getMethod());
+        assertEquals(1, canvasCalls.get());
+        assertEquals(1, minimapCalls.get());
+    }
+
+    @Test
+    public void crossPlaneTargetRejectsWithoutAnyInput()
+    {
+        AtomicInteger canvasCalls = new AtomicInteger();
+        AtomicInteger minimapCalls = new AtomicInteger();
+        AtomicInteger runPolicyCalls = new AtomicInteger();
+
+        WebWalkRuntime.DispatchResult result = RuneLiteWebWalkRuntime.dispatchMovementTarget(
+                point(0), new WorldPoint(3201, 3200, 1),
+                runPolicyCalls::incrementAndGet,
+                () -> {
+                    canvasCalls.incrementAndGet();
+                    return true;
+                },
+                () -> {
+                    minimapCalls.incrementAndGet();
+                    return WebWalkRuntime.DispatchResult.accepted(point(1));
+                });
+
+        assertFalse(result.isAccepted());
+        assertEquals(WebWalkRuntime.DispatchMethod.NONE, result.getMethod());
+        assertEquals(0, runPolicyCalls.get());
+        assertEquals(0, canvasCalls.get());
+        assertEquals(0, minimapCalls.get());
+    }
+
+    @Test
+    public void canvasProjectionUsesClientThreadSnapshotBeforeInput() throws IOException
+    {
+        AtomicInteger clientThreadCalls = new AtomicInteger();
+        AtomicInteger directProjectionCalls = new AtomicInteger();
+        String clientThreadOwner = "net/runelite/client/callback/ClientThread";
+        String perspectiveOwner = "net/runelite/api/Perspective";
+        String wrapperDescriptor = "(Lnet/runelite/api/coords/WorldPoint;Ljava/lang/Runnable;)Z";
+
+        try (InputStream stream = Rs2Walker.class.getResourceAsStream("Rs2Walker.class"))
+        {
+            assertTrue(stream != null);
+            new ClassReader(stream).accept(new ClassVisitor(Opcodes.ASM9)
+            {
+                @Override
+                public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                 String signature, String[] exceptions)
+                {
+                    if (!name.equals("walkFastCanvasOnScreenOnly")
+                            || !descriptor.equals(wrapperDescriptor))
+                    {
+                        return null;
+                    }
+                    return new MethodVisitor(Opcodes.ASM9)
+                    {
+                        @Override
+                        public void visitMethodInsn(int opcode, String owner, String methodName,
+                                                    String methodDescriptor, boolean isInterface)
+                        {
+                            if (owner.equals(clientThreadOwner)
+                                    && methodName.equals("runOnClientThreadOptional"))
+                            {
+                                clientThreadCalls.incrementAndGet();
+                            }
+                            if (owner.equals(perspectiveOwner)
+                                    && methodName.equals("localToCanvas"))
+                            {
+                                directProjectionCalls.incrementAndGet();
+                            }
+                        }
+                    };
+                }
+            }, 0);
+        }
+
+        assertEquals("canvas state must be captured through the RuneLite client thread", 1,
+                clientThreadCalls.get());
+        assertEquals("the walker thread must not project live canvas state directly", 0,
+                directProjectionCalls.get());
+    }
+
+    @Test
+    public void productionDispatchWiresCanvasBeforeMinimapPolicy() throws IOException
+    {
+        AtomicInteger policyCalls = new AtomicInteger();
+        AtomicInteger canvasCalls = new AtomicInteger();
+        AtomicInteger minimapCalls = new AtomicInteger();
+        String runtimeOwner = Type.getInternalName(RuneLiteWebWalkRuntime.class);
+        String walkerOwner = Type.getInternalName(Rs2Walker.class);
+
+        try (InputStream stream = RuneLiteWebWalkRuntime.class.getResourceAsStream(
+                "RuneLiteWebWalkRuntime.class"))
+        {
+            assertTrue(stream != null);
+            new ClassReader(stream).accept(new ClassVisitor(Opcodes.ASM9)
+            {
+                @Override
+                public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                 String signature, String[] exceptions)
+                {
+                    boolean dispatchMethod = name.equals("dispatchMinimap");
+                    boolean dispatchLambda = name.startsWith("lambda$dispatchMinimap$");
+                    if (!dispatchMethod && !dispatchLambda)
+                    {
+                        return null;
+                    }
+                    return new MethodVisitor(Opcodes.ASM9)
+                    {
+                        @Override
+                        public void visitMethodInsn(int opcode, String owner, String methodName,
+                                                    String methodDescriptor, boolean isInterface)
+                        {
+                            if (dispatchMethod && owner.equals(runtimeOwner)
+                                    && methodName.equals("dispatchMovementTarget"))
+                            {
+                                policyCalls.incrementAndGet();
+                            }
+                            if (dispatchLambda && owner.equals(walkerOwner)
+                                    && methodName.equals("walkFastCanvasOnScreenOnly")
+                                    && methodDescriptor.equals("(Lnet/runelite/api/coords/WorldPoint;)Z"))
+                            {
+                                canvasCalls.incrementAndGet();
+                            }
+                            if (dispatchLambda && owner.equals(walkerOwner)
+                                    && methodName.equals("dispatchMiniMapTarget"))
+                            {
+                                minimapCalls.incrementAndGet();
+                            }
+                        }
+                    };
+                }
+            }, 0);
+        }
+
+        assertEquals(1, policyCalls.get());
+        assertEquals(1, canvasCalls.get());
+        assertEquals(1, minimapCalls.get());
     }
 
     private static List<WorldPoint> line(int fromInclusive, int toExclusive)

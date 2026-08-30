@@ -160,7 +160,7 @@ public class WebWalkExecutorWiringTest
         }
 
         assertEquals(0, legacyConstructors.get());
-        assertEquals(4, runAwareConstructors.get());
+        assertEquals(5, runAwareConstructors.get());
     }
 
     @Test
