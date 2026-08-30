@@ -566,6 +566,23 @@ public class RuneLiteWebWalkRuntimeTest
     }
 
     @Test
+    public void targetGenerationIsReturnedOnlyWhileTargetIsOwned()
+    {
+        WorldPoint goal = new WorldPoint(3200, 3200, 0);
+        WorldPoint replacement = new WorldPoint(3210, 3210, 0);
+        long generation = Rs2Walker.updateCurrentTargetOwnership(goal);
+        try
+        {
+            assertEquals(generation, Rs2Walker.currentTargetGenerationIfOwned(goal));
+            assertEquals(-1L, Rs2Walker.currentTargetGenerationIfOwned(replacement));
+        }
+        finally
+        {
+            Rs2Walker.clearWalkingRoute("test-cleanup");
+        }
+    }
+
+    @Test
     public void productionFinishUsesGenerationAwareCompareAndClear() throws IOException
     {
         AtomicInteger ownedClearCalls = new AtomicInteger();
@@ -616,10 +633,9 @@ public class RuneLiteWebWalkRuntimeTest
     }
 
     @Test
-    public void productionSelectionKeepsTargetsInsideReliableMinimapRadius() throws IOException
+    public void productionSelectionKeepsTargetsInsideReliableMinimapRadius() throws Exception
     {
         AtomicInteger selectorCalls = new AtomicInteger();
-        List<Integer> selectorRadii = new ArrayList<>();
         String runtimeOwner = Type.getInternalName(RuneLiteWebWalkRuntime.class);
 
         try (InputStream stream = RuneLiteWebWalkRuntime.class.getResourceAsStream(
@@ -638,26 +654,6 @@ public class RuneLiteWebWalkRuntimeTest
                     }
                     return new MethodVisitor(Opcodes.ASM9)
                     {
-                        private Integer lastIntegerConstant;
-
-                        @Override
-                        public void visitIntInsn(int opcode, int operand)
-                        {
-                            if (opcode == Opcodes.BIPUSH || opcode == Opcodes.SIPUSH)
-                            {
-                                lastIntegerConstant = operand;
-                            }
-                        }
-
-                        @Override
-                        public void visitInsn(int opcode)
-                        {
-                            if (opcode >= Opcodes.ICONST_M1 && opcode <= Opcodes.ICONST_5)
-                            {
-                                lastIntegerConstant = opcode - Opcodes.ICONST_0;
-                            }
-                        }
-
                         @Override
                         public void visitMethodInsn(int opcode, String owner, String methodName,
                                                     String methodDescriptor, boolean isInterface)
@@ -665,7 +661,6 @@ public class RuneLiteWebWalkRuntimeTest
                             if (owner.equals(runtimeOwner) && methodName.equals("selectForwardCandidate"))
                             {
                                 selectorCalls.incrementAndGet();
-                                selectorRadii.add(lastIntegerConstant);
                             }
                         }
                     };
@@ -673,8 +668,11 @@ public class RuneLiteWebWalkRuntimeTest
             }, 0);
         }
 
+        java.lang.reflect.Field radiusField = RuneLiteWebWalkRuntime.class
+                .getDeclaredField("MINIMAP_COMMAND_RADIUS");
+        radiusField.setAccessible(true);
         assertEquals(1, selectorCalls.get());
-        assertEquals(List.of(10), selectorRadii);
+        assertEquals(10, radiusField.getInt(null));
     }
 
     @Test

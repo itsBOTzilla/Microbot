@@ -2,6 +2,8 @@ package net.runelite.client.plugins.microbot.util.walker;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.runelite.api.coords.WorldPoint;
@@ -294,9 +296,6 @@ public class WebWalkExecutorWiringTest
     public void checkpointReleasePolicyDoesNotDependOnRunState() throws IOException
     {
         AtomicBoolean readsRunState = new AtomicBoolean();
-        AtomicBoolean readsRunHandoffDistance = new AtomicBoolean();
-        AtomicBoolean readsWalkHandoffDistance = new AtomicBoolean();
-        String executorOwner = Type.getInternalName(WebWalkExecutor.class);
         String observationOwner = Type.getInternalName(WebWalkRuntime.Observation.class);
 
         try (InputStream stream = WebWalkExecutor.class.getResourceAsStream("WebWalkExecutor.class"))
@@ -315,22 +314,6 @@ public class WebWalkExecutorWiringTest
                     return new MethodVisitor(Opcodes.ASM9)
                     {
                         @Override
-                        public void visitFieldInsn(int opcode, String owner, String fieldName,
-                                                   String fieldDescriptor)
-                        {
-                            if (opcode == Opcodes.GETSTATIC && owner.equals(executorOwner)
-                                    && fieldName.equals("RUN_CHECKPOINT_HANDOFF_DISTANCE"))
-                            {
-                                readsRunHandoffDistance.set(true);
-                            }
-                            if (opcode == Opcodes.GETSTATIC && owner.equals(executorOwner)
-                                    && fieldName.equals("WALK_CHECKPOINT_HANDOFF_DISTANCE"))
-                            {
-                                readsWalkHandoffDistance.set(true);
-                            }
-                        }
-
-                        @Override
                         public void visitMethodInsn(int opcode, String owner, String methodName,
                                                     String methodDescriptor, boolean isInterface)
                         {
@@ -344,8 +327,14 @@ public class WebWalkExecutorWiringTest
             }, 0);
         }
 
+        Set<String> fieldNames = new HashSet<>();
+        for (java.lang.reflect.Field field : WebWalkExecutor.class.getDeclaredFields())
+        {
+            fieldNames.add(field.getName());
+        }
         assertFalse(readsRunState.get());
-        assertFalse(readsRunHandoffDistance.get());
-        assertFalse(readsWalkHandoffDistance.get());
+        assertFalse(fieldNames.contains("RUN_CHECKPOINT_HANDOFF_DISTANCE"));
+        assertFalse(fieldNames.contains("WALK_CHECKPOINT_HANDOFF_DISTANCE"));
+        assertTrue(fieldNames.contains("CHECKPOINT_HANDOFF_DISTANCE"));
     }
 }

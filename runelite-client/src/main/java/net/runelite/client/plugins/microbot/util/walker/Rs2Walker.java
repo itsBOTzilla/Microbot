@@ -132,6 +132,14 @@ public class Rs2Walker {
         return currentTargetGeneration.get();
     }
 
+    static long currentTargetGenerationIfOwned(WorldPoint expectedTarget) {
+        synchronized (currentTargetOwnershipMutex) {
+            return Objects.equals(currentTarget, expectedTarget)
+                    ? currentTargetGeneration.get()
+                    : -1L;
+        }
+    }
+
     static long updateCurrentTargetOwnership(WorldPoint target) {
         synchronized (currentTargetOwnershipMutex) {
             return updateCurrentTargetOwnershipLocked(target);
@@ -1539,8 +1547,8 @@ public class Rs2Walker {
             setTarget(null, "webwalk-executor:target-not-walkable");
             return WalkerState.UNREACHABLE;
         }
-        long targetGeneration = getCurrentTargetGeneration();
-        if (!Objects.equals(currentTarget, target)) {
+        long targetGeneration = currentTargetGenerationIfOwned(target);
+        if (targetGeneration < 0L) {
             return WalkerState.EXIT;
         }
         WebWalkSession session = new WebWalkSession(target, distance, targetGeneration);

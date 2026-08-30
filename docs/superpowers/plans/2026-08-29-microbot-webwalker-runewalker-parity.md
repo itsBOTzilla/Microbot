@@ -807,7 +807,7 @@ Run:
 ```powershell
 git status --short
 git diff --check
-git add -- docs/entity-guides/movement.md runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker runelite-client/src/test/java/net/runelite/client/plugins/microbot/util/walker
+git add -- docs/entity-guides/movement.md runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker runelite-client/src/test/java/net/runelite/client/plugins/microbot/util/walker runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/input/InputArbiter.java runelite-client/src/main/java/net/runelite/client/plugins/microbot/MicrobotConfig.java runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/input/InputDiagnostics.java runelite-client/src/test/java/net/runelite/client/plugins/microbot/util/input/InputArbiterTest.java runelite-client/src/test/java/net/runelite/client/plugins/microbot/util/input/YieldOnHumanTest.java
 git commit -m "fix(walker): restore RuneWalker checkpoint parity"
 ```
 
@@ -974,7 +974,7 @@ Expected: all identity fields match and every journey passes before cleanup or l
 **Files:**
 - Keep: `%USERPROFILE%\.microbot\microbot-local.jar`
 - Keep: `%USERPROFILE%\.microbot\microbot-2.6.21.jar`
-- Remove: obsolete 2.6.20 and hash-suffixed public JARs listed below
+- Remove: obsolete 2.6.20, local swap-backup, and every hash-suffixed public JAR
 
 **Interfaces:**
 - Consumes: passing live evidence from Task 10
@@ -988,16 +988,16 @@ Run:
 $launcher = Join-Path $env:USERPROFILE '.microbot'
 $removeNames = @(
   'microbot-2.6.20.18.jar',
-  'microbot-2.6.20.19.jar',
-  'microbot-2.6.21.public-0191261.jar',
-  'microbot-2.6.21.public-30cc09e.jar',
-  'microbot-2.6.21.public-433ee08.jar',
-  'microbot-2.6.21.public-89385d4.jar',
-  'microbot-2.6.21.public-966f1e7e78.jar',
-  'microbot-2.6.21.public-b3247e4.jar',
-  'microbot-2.6.21.public-f42b030.jar'
+  'microbot-2.6.20.19.jar'
 )
-$targets = $removeNames | ForEach-Object { Join-Path $launcher $_ }
+$discoveredNames = Get-ChildItem -LiteralPath $launcher -File |
+  Where-Object {
+    $_.Name -like 'microbot-2.6.21.public-*.jar' -or
+    $_.Name -like 'microbot-local.jar.swap-backup*'
+  } |
+  Select-Object -ExpandProperty Name
+$targets = @($removeNames + $discoveredNames) | Sort-Object -Unique |
+  ForEach-Object { Join-Path $launcher $_ }
 $targets | ForEach-Object {
     $resolvedParent = [IO.Path]::GetFullPath((Split-Path -Parent $_))
     if ($resolvedParent -ne [IO.Path]::GetFullPath($launcher)) {
@@ -1007,7 +1007,8 @@ $targets | ForEach-Object {
 }
 ```
 
-Expected: every target resolves directly under the launcher directory; no recursive path or wildcard is used.
+Expected: every discovered name is converted to an exact path directly under the launcher directory;
+no recursive path is used, and deletion receives no wildcard.
 
 - [ ] **Step 2: Remove only the verified obsolete files**
 
@@ -1021,7 +1022,7 @@ foreach ($target in $targets) {
 }
 ```
 
-Expected: only the explicitly listed obsolete files are removed. This cleanup is permanent except for copies recoverable elsewhere.
+Expected: only the verified obsolete files are removed. This cleanup is permanent except for copies recoverable elsewhere.
 
 - [ ] **Step 3: Verify final launcher state and selection**
 

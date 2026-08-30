@@ -46,6 +46,12 @@ public class Rs2Keyboard
 	 */
 	private static boolean dispatchKeyEvent(int id, int keyCode, char keyChar, int delay)
 	{
+		return dispatchKeyEvent(id, keyCode, keyChar, delay, null);
+	}
+
+	private static boolean dispatchKeyEvent(int id, int keyCode, char keyChar, int delay,
+		Runnable onAccepted)
+	{
 		// Keyboard emission never goes through InputLoop, so this is its only checkpoint. Without
 		// it a takeover mid-typeString sprays the rest of the string into whatever the human just
 		// took over. RELEASED is exempt: releaseHeldKeys runs while the human owns input, and
@@ -62,6 +68,10 @@ public class Rs2Keyboard
 		BotEventGuard.begin();
 		try
 		{
+			if (onAccepted != null)
+			{
+				onAccepted.run();
+			}
 			for (KeyListener l : listeners)
 			{
 				switch (id)
@@ -211,22 +221,28 @@ public class Rs2Keyboard
 			return;
 		}
 
-		// A suppressed press must not be followed by a release.
-		if (!dispatchKeyEvent(KeyEvent.KEY_PRESSED, key, typed, 0))
-		{
-			return;
-		}
+		boolean[] pressAccepted = {false};
 		try
 		{
+			// A suppressed press must not be followed by a release. Mark it accepted immediately
+			// before listener delivery so a throwing pressed listener still gets its release pair.
+			if (!dispatchKeyEvent(KeyEvent.KEY_PRESSED, key, typed, 0,
+				() -> pressAccepted[0] = true))
+			{
+				return;
+			}
 			int delay = Rs2Random.logNormalBounded(20, 200);
 			dispatchKeyEvent(KeyEvent.KEY_TYPED, KeyEvent.VK_UNDEFINED, typed, delay);
 		}
 		finally
 		{
-			// Unconditional: the press went out, so the release owes the client its pair even if the
-			// human took over or a typed-event listener threw in between.
-			int releaseDelay = Rs2Random.between(20, 200);
-			dispatchKeyEvent(KeyEvent.KEY_RELEASED, key, CHAR_UNDEFINED, releaseDelay);
+			if (pressAccepted[0])
+			{
+				// The accepted press owes the client its pair even if the human took over or any
+				// pressed/typed-event listener threw in between.
+				int releaseDelay = Rs2Random.between(20, 200);
+				dispatchKeyEvent(KeyEvent.KEY_RELEASED, key, CHAR_UNDEFINED, releaseDelay);
+			}
 		}
 	}
 

@@ -17,6 +17,7 @@ import java.util.List;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -208,6 +209,7 @@ public class Rs2KeyboardHeldKeysTest
 		try
 		{
 			Rs2Keyboard.keyPress(KeyEvent.VK_A);
+			fail("expected typed listener failure");
 		}
 		catch (IllegalStateException expected)
 		{
@@ -217,6 +219,32 @@ public class Rs2KeyboardHeldKeysTest
 		assertEquals(KeyEvent.KEY_PRESSED, received.get(0).getID());
 		assertEquals(KeyEvent.KEY_TYPED, received.get(1).getID());
 		assertEquals(KeyEvent.KEY_RELEASED, received.get(2).getID());
+	}
+
+	@Test
+	public void printablePressReleasesEvenWhenPressedListenerThrows()
+	{
+		canvas.addKeyListener(new KeyAdapter()
+		{
+			@Override
+			public void keyPressed(KeyEvent event)
+			{
+				throw new IllegalStateException("pressed listener failed");
+			}
+		});
+
+		try
+		{
+			Rs2Keyboard.keyPress(KeyEvent.VK_A);
+			fail("expected pressed listener failure");
+		}
+		catch (IllegalStateException expected)
+		{
+			assertEquals("pressed listener failed", expected.getMessage());
+		}
+
+		assertEquals(KeyEvent.KEY_PRESSED, received.get(0).getID());
+		assertEquals(KeyEvent.KEY_RELEASED, received.get(1).getID());
 	}
 
 	@Test
