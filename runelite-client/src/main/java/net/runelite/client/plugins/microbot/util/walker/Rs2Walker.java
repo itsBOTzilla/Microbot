@@ -655,10 +655,12 @@ public class Rs2Walker {
         WorldPoint endpoint = walkPath == null || walkPath.isEmpty()
                 ? null : walkPath.get(walkPath.size() - 1);
         int configuredDistance = Math.max(0, configuredChebyshev);
+        int finishDistance = tightFinishThreshold(target, endpoint, configuredDistance);
         boolean endpointArrival = endpoint != null
                 && endpoint.getPlane() == target.getPlane()
                 && endpoint.distanceTo2D(target) <= configuredDistance
-                && player.distanceTo2D(target) <= configuredDistance;
+                && player.distanceTo2D(endpoint) <= 1
+                && player.distanceTo2D(target) <= finishDistance;
         boolean pendingTransport = hasPendingExplicitTransportStepBeforeArrival(
                 rawPath, target, configuredDistance)
                 || hasPendingExplicitTransportStepBeforeArrival(
@@ -666,7 +668,6 @@ public class Rs2Walker {
         if (endpointArrival && !pendingTransport) {
             return true;
         }
-        int finishDistance = tightFinishThreshold(target, endpoint, configuredDistance);
         return player.distanceTo2D(target) <= finishDistance && !pendingTransport;
     }
 

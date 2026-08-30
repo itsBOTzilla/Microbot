@@ -22,7 +22,7 @@ The behavior comes from the run-specific early-handoff policy added after the in
 - each replacement performs another minimap dispatch;
 - rejected far targets cause additional commands on following observations.
 
-RuneWalker 2.0 does not use the run-specific early-handoff rule. It retains the accepted checkpoint until the player passes its path index or comes within one tile. Run energy affects player speed, not checkpoint ownership.
+RuneWalker 2.0 does not use a run-specific early-handoff rule. An accepted checkpoint releases when the player passes its path index, reaches within one tile, or makes a genuine same-plane approach from outside five tiles to within five. Run energy affects player speed, not checkpoint ownership.
 
 ## Goals
 
@@ -101,17 +101,15 @@ An accepted minimap dispatch creates one active checkpoint containing:
 While a checkpoint is active, the executor does not select or dispatch another ordinary forward target. The checkpoint is cleared only when one of these conditions is true:
 
 - the observed path index has passed the checkpoint index;
-- the player is on the same plane and within one Chebyshev tile of the checkpoint;
+- the player is on the checkpoint's plane and within one Chebyshev tile of it;
+- the player has genuinely approached a checkpoint that was initially farther than five tiles and
+  is now on the same plane within five Chebyshev tiles of it;
 - a route edge becomes actionable, which transfers ownership to route-action handling;
 - the command makes no progress for the bounded grace period and enters redispatch or replan recovery;
 - cancellation, target replacement, logout expiry, interruption, or terminal arrival ends the session.
 
 Walking and running use the same checkpoint lifecycle. The following current concepts are removed from the active contract:
 
-- `RUN_CHECKPOINT_HANDOFF_DISTANCE`;
-- `WALK_CHECKPOINT_HANDOFF_DISTANCE`;
-- checkpoint initial-distance tracking used solely for early handoff;
-- `isCheckpointReadyForHandoff`;
 - `runEnabled` as an input to checkpoint-release decisions.
 
 ## Route observation and forward selection
@@ -214,7 +212,7 @@ Tests are organized around behavior rather than private helper implementation.
 
 ### State-machine sequences
 
-- Running checkpoint distances 11, 8, 5, 2 remain `WAIT`; distance 1 releases the checkpoint.
+- A checkpoint first dispatched from outside five tiles releases at distance 5 with `handoff`; a checkpoint first dispatched inside that band remains `WAIT` until distance 1.
 - Passing the checkpoint path index releases it immediately.
 - Walking and running produce identical checkpoint decisions.
 - Player movement resets progress timers without clearing the checkpoint early.
@@ -255,7 +253,7 @@ The exact built and staged JAR must be tested with run enabled on at least:
 Open-ground acceptance requires:
 
 - no walker-caused stationary gap while an unobstructed route remains;
-- no ordinary checkpoint replacement before it is reached or passed;
+- no ordinary checkpoint replacement before it is reached, passed, or makes the guarded outside-five-to-within-five handoff;
 - no route pause, cancellation, dispatch rejection, or cadence change caused only by cursor motion;
 - no repeated 1-5-tile command churn on a clear segment;
 - no off-route or through-wall click;

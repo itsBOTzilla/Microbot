@@ -14,8 +14,10 @@ New movement fixes must preserve these boundaries:
 - the pathfinder and transport catalog remain the route-planning source;
 - the runtime selects the furthest collision-reachable forward point without crossing a transport;
 - an accepted click owns its actual fallback destination as the checkpoint;
-- an accepted checkpoint remains owned until the player passes its raw-path index or comes within
-  one Chebyshev tile; run speed never releases it early;
+- an accepted checkpoint remains owned until the player passes its raw-path index, reaches within
+  one Chebyshev tile, or, after a genuine approach from outside the five-tile band, comes within
+  five Chebyshev tiles; run speed
+  never releases it early;
 - a rejected dispatch with `actual=null` never creates a checkpoint, and the bounded rejection
   budget replans instead of spinning on the same unusable target;
 - doors, transports, and dynamic blockers outrank forward minimap movement;
@@ -409,9 +411,11 @@ dialogue; an open dialogue by itself does not create a route-progress exit.
 
 ## 17. Keep one strict owner for every accepted movement checkpoint
 
-An accepted minimap or canvas checkpoint remains owned until the player passes its raw-path index
-or comes within one Chebyshev tile. Run speed does not release ownership early. Door and transport
-actions preempt the checkpoint and require a fresh route observation before movement resumes.
+An accepted minimap or canvas checkpoint remains owned until the player passes its raw-path index,
+reaches within one Chebyshev tile, or genuinely approaches it from outside the five-tile band to
+within five Chebyshev tiles. A checkpoint accepted inside that band remains owned until it reaches
+within one tile, has index progress, or enters bounded recovery. Run speed does not release ownership early. Door and transport actions preempt
+the checkpoint and require a fresh route observation before movement resumes.
 
 **Why this matters:** Releasing a checkpoint merely because a running player entered a larger
 overlap radius allowed repeated decisions from stale route state. That caused extra clicks, visible
@@ -423,8 +427,11 @@ stop/start cadence, and competing movement while the first command was still act
 boolean passed = observation.getPathIndex() > checkpointPathIndex;
 boolean reached = player.getPlane() == checkpoint.getPlane()
         && player.distanceTo2D(checkpoint) <= 1;
-if (passed || reached) {
-    WebWalkLog.checkpointReleased(passed ? "passed" : "reached",
+boolean handoff = checkpointStartedOutsideFiveTiles
+        && player.getPlane() == checkpoint.getPlane()
+        && player.distanceTo2D(checkpoint) <= 5;
+if (passed || reached || handoff) {
+    WebWalkLog.checkpointReleased(passed ? "passed" : reached ? "reached" : "handoff",
             checkpoint, checkpointPathIndex, player, observation.getTick());
     session.clearCheckpoint();
 }
@@ -439,7 +446,9 @@ the bounded rejection budget instead.
 door or transport implementation behind `RuneLiteWebWalkRuntime`.
 
 **Defensive check:** The executor sequence must be movement, wait, route action, wait, new movement,
-wait. Walking and running must keep the same checkpoint until it is reached or passed.
+wait. Walking and running must keep the same checkpoint until it is passed or reaches the five-tile
+handoff after beginning outside that band, except that any accepted checkpoint releases once it is
+within one tile.
 
 ## 18. Exit a walk when the local player disappears
 

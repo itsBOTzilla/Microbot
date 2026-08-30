@@ -17,6 +17,7 @@ public final class WebWalkSession
     private int lastProgressTick = Integer.MIN_VALUE;
     private WorldPoint checkpoint;
     private int checkpointPathIndex = -1;
+    private int checkpointInitialDistance = -1;
     private int commandTick = Integer.MIN_VALUE;
     private int redispatchCount;
     private int rejectedDispatchCount;
@@ -64,6 +65,21 @@ public final class WebWalkSession
     public int getCheckpointPathIndex()
     {
         return checkpointPathIndex;
+    }
+
+    boolean isCheckpointReached(WorldPoint player, int reachedDistance)
+    {
+        return checkpoint != null && player != null
+                && checkpoint.getPlane() == player.getPlane()
+                && player.distanceTo2D(checkpoint) <= reachedDistance;
+    }
+
+    boolean hasApproachedCheckpointForHandoff(WorldPoint player, int handoffDistance)
+    {
+        return checkpoint != null && player != null
+                && checkpoint.getPlane() == player.getPlane()
+                && checkpointInitialDistance > handoffDistance
+                && player.distanceTo2D(checkpoint) <= handoffDistance;
     }
 
     public int getRedispatchCount()
@@ -135,6 +151,8 @@ public final class WebWalkSession
         Objects.requireNonNull(requestedTarget, "requestedTarget");
         checkpoint = Objects.requireNonNull(actualTarget, "actualTarget");
         checkpointPathIndex = pathIndex;
+        checkpointInitialDistance = lastPlayer == null || lastPlayer.getPlane() != checkpoint.getPlane()
+                ? -1 : lastPlayer.distanceTo2D(checkpoint);
         commandTick = tick;
         if (lastProgressTick == Integer.MIN_VALUE)
         {
@@ -256,6 +274,7 @@ public final class WebWalkSession
     {
         checkpoint = null;
         checkpointPathIndex = -1;
+        checkpointInitialDistance = -1;
         commandTick = Integer.MIN_VALUE;
         redispatchCount = 0;
     }

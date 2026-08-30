@@ -45,11 +45,68 @@ public class WebWalkExecutorTest
     }
 
     @Test
-    public void runningAndWalkingRetainCheckpointUntilReachedOrPassed()
+    public void checkpointApproachHandsOffAtFiveForWalkingAndRunning()
     {
         for (boolean runEnabled : new boolean[] {false, true})
         {
-            for (int playerX : new int[] {2, 5, 8})
+            WebWalkSession session = new WebWalkSession(GOAL, 0);
+            session.installRoute(route(1));
+            session.observe(100, START, 0);
+            session.recordMinimapDispatch(100, point(12), point(12), 4, false);
+            WebWalkExecutor executor = new WebWalkExecutor();
+
+            assertEquals(WebWalkExecutor.DecisionType.WAIT,
+                    executor.decide(session, ready(101, point(6), 1, 2, point(14), 5,
+                            false, runEnabled)).getType());
+
+            WebWalkExecutor.Decision handoff = executor.decide(session,
+                    ready(102, point(7), 1, 2, point(14), 5, false, runEnabled));
+
+            assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, handoff.getType());
+            assertEquals(point(14), handoff.getTarget());
+        }
+    }
+
+    @Test
+    public void checkpointWithoutInitialPlayerDistanceDoesNotHandoff()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.recordMinimapDispatch(100, point(12), point(12), 4, false);
+
+        WebWalkExecutor.Decision decision = new WebWalkExecutor().decide(session,
+                ready(101, point(7), 1, 2, point(14), 5, false));
+
+        assertEquals(WebWalkExecutor.DecisionType.WAIT, decision.getType());
+        assertEquals(point(12), session.getCheckpoint());
+    }
+
+    @Test
+    public void checkpointStartedInsideFiveTilesReleasesWhenReached()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(100, point(8), 2);
+        session.recordMinimapDispatch(100, point(10), point(10), 3, false);
+        WebWalkExecutor executor = new WebWalkExecutor();
+
+        assertEquals(WebWalkExecutor.DecisionType.WAIT,
+                executor.decide(session, ready(101, point(8), 1, 2, point(12), 4,
+                        false)).getType());
+
+        WebWalkExecutor.Decision reached = executor.decide(session,
+                ready(102, point(9), 1, 2, point(12), 4, false));
+
+        assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, reached.getType());
+        assertEquals(point(12), reached.getTarget());
+    }
+
+    @Test
+    public void runningAndWalkingRetainCheckpointUntilFiveTileHandoffOrPassed()
+    {
+        for (boolean runEnabled : new boolean[] {false, true})
+        {
+            for (int playerX : new int[] {2, 4})
             {
                 WebWalkSession session = new WebWalkSession(GOAL, 0);
                 session.installRoute(route(1));
@@ -241,8 +298,8 @@ public class WebWalkExecutorTest
     private static WebWalkRuntime.RouteSnapshot route(long generation)
     {
         return new WebWalkRuntime.RouteSnapshot(generation,
-                Arrays.asList(point(0), point(1), point(2), point(10), point(12)),
-                Arrays.asList(point(0), point(12)));
+                Arrays.asList(point(0), point(1), point(2), point(10), point(12), point(14)),
+                Arrays.asList(point(0), point(14)));
     }
 
     private static WorldPoint point(int x)

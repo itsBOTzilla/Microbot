@@ -90,6 +90,20 @@ public class Rs2WalkerUnitTest {
     }
 
     @Test
+    public void runtimeArrival_doesNotBypassTightEndpointFinishThreshold() throws Exception {
+        WorldPoint target = new WorldPoint(3164, 3466, 0);
+        Rs2PlayerStateCache playerState = playerStateAt(new WorldPoint(3164, 3461, 0));
+        Object previousPlayerState = swapMicrobotStatic("rs2PlayerStateCache", playerState);
+        try {
+            assertFalse("an endpoint at the target must not bypass the short-approach finish cap",
+                    Rs2Walker.runtimeArrived(target, 5,
+                            Collections.singletonList(target), Collections.singletonList(target)));
+        } finally {
+            swapMicrobotStatic("rs2PlayerStateCache", previousPlayerState);
+        }
+    }
+
+    @Test
     public void interimDoorScanMayRunDuringApproachButRecoveryScanStillWaits() {
         assertFalse(Rs2Walker.shouldDeferPendingDoorRawScan(true, true));
         assertTrue(Rs2Walker.shouldDeferPendingDoorRawScan(true, false));

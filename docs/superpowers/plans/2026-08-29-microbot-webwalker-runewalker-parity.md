@@ -148,7 +148,7 @@ Expected: a documentation-only commit after the nightly merge.
 
 ---
 
-### Task 2: Pin Strict RuneWalker 2.0 Checkpoint Ownership with Failing Tests
+### Task 2: Pin RuneWalker 2.0 Checkpoint Ownership with Failing Tests
 
 **Files:**
 - Modify: `runelite-client/src/test/java/net/runelite/client/plugins/microbot/util/walker/WebWalkExecutorTest.java`
@@ -156,7 +156,7 @@ Expected: a documentation-only commit after the nightly merge.
 
 **Interfaces:**
 - Consumes: existing `WebWalkExecutor.decide(WebWalkSession, Observation)` and `WebWalkRuntime.Observation`
-- Produces: red tests requiring reached-or-passed checkpoint release regardless of run state
+- Produces: red tests requiring reached, passed, or guarded outside-five-to-within-five checkpoint release regardless of run state
 
 - [ ] **Step 1: Replace early-handoff expectations with a run/walk parity sequence**
 
@@ -164,11 +164,11 @@ Replace tests that expect an eight-tile running handoff with a table-driven test
 
 ```java
 @Test
-public void runningAndWalkingRetainCheckpointUntilReachedOrPassed()
+public void runningAndWalkingRetainCheckpointUntilFiveTileHandoffOrPassed()
 {
     for (boolean runEnabled : new boolean[] {false, true})
     {
-        for (int playerX : new int[] {2, 5, 8})
+        for (int playerX : new int[] {2, 4})
         {
             WebWalkSession session = new WebWalkSession(GOAL, 0);
             session.installRoute(route(1));
@@ -234,11 +234,11 @@ Run:
   --rerun-tasks
 ```
 
-Expected: FAIL because the current `f42b030` behavior clears a running checkpoint inside the eight-tile handoff radius and reads run state in the decision.
+Expected: FAIL because the current `f42b030` behavior has a run-specific eight-tile handoff rather than a shared, guarded five-tile approach policy.
 
 ---
 
-### Task 3: Implement Strict Checkpoint Ownership
+### Task 3: Implement Nonblocking Checkpoint Ownership
 
 **Files:**
 - Modify: `runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker/WebWalkExecutor.java`
@@ -248,32 +248,30 @@ Expected: FAIL because the current `f42b030` behavior clears a running checkpoin
 - Test: `runelite-client/src/test/java/net/runelite/client/plugins/microbot/util/walker/WebWalkExecutorWiringTest.java`
 
 **Interfaces:**
-- Consumes: the red reached-or-passed tests from Task 2
+- Consumes: the red checkpoint-handoff tests from Task 2
 - Produces: one active checkpoint whose release policy is independent of run state
 
-- [ ] **Step 1: Remove the early-handoff state from `WebWalkSession`**
+- [ ] **Step 1: Track only the guarded initial distance in `WebWalkSession`**
 
-Delete only the state and behavior introduced for early handoff:
+Record a known initial same-plane checkpoint distance when an accepted dispatch creates the checkpoint. Use an unavailable sentinel when no player distance is known; it must not qualify for handoff:
 
 ```java
-private int checkpointInitialDistance = Integer.MAX_VALUE;
-public boolean isCheckpointReadyForHandoff(WorldPoint player, int handoffDistance)
-private int distanceToCheckpoint(WorldPoint player)
+private int checkpointInitialDistance = -1;
+boolean hasApproachedCheckpointForHandoff(WorldPoint player, int handoffDistance)
 ```
 
-Remove the associated assignments from `recordMinimapDispatch` and `clearCheckpoint`. Keep checkpoint point, path index, command tick, redispatch count, and rejection count.
+Set the value in `recordMinimapDispatch` and reset it in `clearCheckpoint`. Keep the helper package-private and retain checkpoint point, path index, command tick, redispatch count, and rejection count.
 
-- [ ] **Step 2: Restore reached-or-passed logic in `WebWalkExecutor`**
+- [ ] **Step 2: Apply reached, passed, or guarded handoff logic in `WebWalkExecutor`**
 
 Replace the run-aware branch with:
 
 ```java
 boolean passedCheckpoint = session.getCheckpointPathIndex() >= 0
         && observation.getPathIndex() > session.getCheckpointPathIndex();
-boolean reachedCheckpoint = player != null
-        && player.getPlane() == checkpoint.getPlane()
-        && player.distanceTo2D(checkpoint) <= CHECKPOINT_ARRIVAL_DISTANCE;
-if (passedCheckpoint || reachedCheckpoint)
+boolean reachedCheckpoint = session.isCheckpointReached(player, 1);
+boolean handoffCheckpoint = session.hasApproachedCheckpointForHandoff(player, 5);
+if (passedCheckpoint || reachedCheckpoint || handoffCheckpoint)
 {
     session.clearCheckpoint();
 }
@@ -292,7 +290,7 @@ Run:
   --rerun-tasks
 ```
 
-Expected: PASS with both walking and running retaining checkpoints until reached or passed.
+Expected: PASS with both walking and running retaining checkpoints until passed, reached within one tile, or the shared guarded handoff at five tiles.
 
 - [ ] **Step 4: Run checkstyle and commit the parity change**
 
@@ -302,7 +300,7 @@ Run:
 .\gradlew.bat :client:checkstyleMain :client:checkstyleTest
 git diff --check
 git add -- runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker/WebWalkExecutor.java runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker/WebWalkSession.java runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker/WebWalkRuntime.java runelite-client/src/test/java/net/runelite/client/plugins/microbot/util/walker/WebWalkExecutorTest.java runelite-client/src/test/java/net/runelite/client/plugins/microbot/util/walker/WebWalkExecutorWiringTest.java
-git commit -m "fix(walker): restore strict checkpoint ownership"
+git commit -m "fix(walker): restore nonblocking checkpoint handoff"
 ```
 
 Expected: a narrowly scoped checkpoint-policy commit.
@@ -670,7 +668,7 @@ public static void checkpointReleased(String reason, WorldPoint checkpoint,
 }
 ```
 
-Call it only when the executor clears an accepted checkpoint because it was reached, passed, or preempted by a route action. Do not log every `checkpoint-progress` wait.
+Call it only when the executor clears an accepted checkpoint because it was reached, passed, handed off after a guarded approach, or preempted by a route action. Use `handoff`, not `reached`, for the five-tile anticipatory case. Do not log every `checkpoint-progress` wait.
 
 - [ ] **Step 2: Pin diagnostic wiring without capturing production logs**
 
@@ -681,9 +679,11 @@ Extend `WebWalkExecutorWiringTest` to assert that the compiled executor invokes 
 Document this exact ownership rule:
 
 ```markdown
-An accepted minimap checkpoint remains owned until the player passes its raw-path index or
-comes within one Chebyshev tile. Run speed does not release ownership early. Door and transport
-actions preempt the checkpoint and require a fresh route observation before movement resumes.
+An accepted minimap checkpoint remains owned until the player passes its raw-path index, comes
+within one Chebyshev tile, or approaches from a known initial distance above five tiles to within
+five. A checkpoint initially inside that band still requires one-tile arrival, index progress, or
+recovery. Run speed does not release ownership early. Door and transport actions preempt the
+checkpoint and require a fresh route observation before movement resumes.
 ```
 
 Also document bounded `actual=null` rejection and the stable `microbot-local.jar` runtime-proof requirement.
@@ -913,7 +913,7 @@ Expected log contract:
 ```text
 one accepted checkpoint
 checkpoint-progress waits while approaching
-next click only when checkpoint is reached or its index is passed
+next click when checkpoint is reached, its index is passed, or guarded outside-five-to-within-five handoff occurs
 ```
 
 Reject the build if ordinary clear-path logs show repeated 1-5-index replacement commands, repeated `actual=null` churn, an off-route click, or a walker-caused stationary gap.
