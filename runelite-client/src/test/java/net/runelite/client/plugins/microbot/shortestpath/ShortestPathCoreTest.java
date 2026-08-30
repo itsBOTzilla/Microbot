@@ -836,6 +836,7 @@ public class ShortestPathCoreTest {
 				createConfigWithCustomTransports(shortcut), dungeonEntrance, surfaceLadderDestination);
 		exitPathfinder.run();
 		List<WorldPoint> exitPath = exitPathfinder.getPath();
+		assertFalse("The requested exit route should not be empty", exitPath.isEmpty());
 		assertEquals("The Edgeville return ladder must remain usable when it is the requested route",
 				surfaceLadderDestination, exitPath.get(exitPath.size() - 1));
 		assertTrue("The requested exit path should contain the surface landing", exitPath.contains(surfaceLadderDestination));

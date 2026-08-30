@@ -72,7 +72,7 @@ public class RuneLiteWebWalkRuntimeTest
     }
 
     @Test
-    public void nearbyVisibleRouteEdgePreemptsFinalGroundClick() throws Exception
+    public void nearbyVisibleRouteEdgePreemptsFinalGroundClick()
     {
         WorldPoint player = new WorldPoint(3094, 3472, 0);
         WorldPoint approach1 = new WorldPoint(3094, 3471, 0);
@@ -94,7 +94,7 @@ public class RuneLiteWebWalkRuntimeTest
         {
             ShortestPathPlugin.pathfinderConfig = config;
             assertEquals("a catalog transport five raw-path nodes ahead must preempt a ground click",
-                    5, routeActionIndex(path, 0, player,
+                    5, RuneLiteWebWalkRuntime.routeActionIndex(path, 0, player,
                             Set.of(player, approach1, approach2, approach3, approach4, trapdoor)));
         }
         finally
@@ -104,7 +104,7 @@ public class RuneLiteWebWalkRuntimeTest
     }
 
     @Test
-    public void distantGenericRouteEdgeStillAllowsCloserApproach() throws Exception
+    public void distantGenericRouteEdgeStillAllowsCloserApproach()
     {
         WorldPoint player = new WorldPoint(3094, 3472, 0);
         WorldPoint approach = new WorldPoint(3094, 3471, 0);
@@ -117,7 +117,8 @@ public class RuneLiteWebWalkRuntimeTest
         try
         {
             ShortestPathPlugin.pathfinderConfig = config;
-            assertEquals(-1, routeActionIndex(path, 0, player, Set.of(approach, blockedEdge)));
+            assertEquals(-1, RuneLiteWebWalkRuntime.routeActionIndex(
+                    path, 0, player, Set.of(approach, blockedEdge)));
         }
         finally
         {
@@ -126,7 +127,7 @@ public class RuneLiteWebWalkRuntimeTest
     }
 
     @Test
-    public void unresolvedGenericFrontierPreventsLookaheadToLaterTransport() throws Exception
+    public void unresolvedGenericFrontierPreventsLookaheadToLaterTransport()
     {
         WorldPoint player = new WorldPoint(3094, 3472, 0);
         WorldPoint approach1 = new WorldPoint(3094, 3471, 0);
@@ -148,7 +149,7 @@ public class RuneLiteWebWalkRuntimeTest
         {
             ShortestPathPlugin.pathfinderConfig = config;
             assertEquals("a later transport must not preempt an earlier unresolved route frontier",
-                    -1, routeActionIndex(path, 0, player,
+                    -1, RuneLiteWebWalkRuntime.routeActionIndex(path, 0, player,
                             Set.of(player, approach1, approach2, approach3, blockedFrontier)));
         }
         finally
@@ -158,7 +159,7 @@ public class RuneLiteWebWalkRuntimeTest
     }
 
     @Test
-    public void foldedGenericFrontierOutsideLegacyIndexHorizonDoesNotPreempt() throws Exception
+    public void foldedGenericFrontierOutsideLegacyIndexHorizonDoesNotPreempt()
     {
         WorldPoint player = new WorldPoint(3200, 3200, 0);
         WorldPoint first = new WorldPoint(3201, 3200, 0);
@@ -173,7 +174,7 @@ public class RuneLiteWebWalkRuntimeTest
         {
             ShortestPathPlugin.pathfinderConfig = config;
             assertEquals("the catalog horizon must not expand generic edge dispatch",
-                    -1, routeActionIndex(path, 0, player,
+                    -1, RuneLiteWebWalkRuntime.routeActionIndex(path, 0, player,
                             Set.of(player, first, second, foldedFrom)));
         }
         finally
@@ -621,15 +622,6 @@ public class RuneLiteWebWalkRuntimeTest
             points.add(point(x));
         }
         return points;
-    }
-
-    private static int routeActionIndex(List<WorldPoint> path, int currentIndex,
-                                        WorldPoint player, Set<WorldPoint> reachable) throws Exception
-    {
-        java.lang.reflect.Method method = RuneLiteWebWalkRuntime.class.getDeclaredMethod(
-                "routeActionIndex", List.class, int.class, WorldPoint.class, Set.class);
-        method.setAccessible(true);
-        return (int) method.invoke(null, path, currentIndex, player, reachable);
     }
 
     private static WorldPoint point(int x)

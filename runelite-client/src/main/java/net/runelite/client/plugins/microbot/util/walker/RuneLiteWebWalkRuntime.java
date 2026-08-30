@@ -388,8 +388,8 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
                 .orElse(-1);
     }
 
-    private static int routeActionIndex(List<WorldPoint> path, int currentIndex,
-                                        WorldPoint player, Set<WorldPoint> reachable)
+    static int routeActionIndex(List<WorldPoint> path, int currentIndex,
+                                WorldPoint player, Set<WorldPoint> reachable)
     {
         int lastEdge = Math.min(path.size() - 2,
                 currentIndex + CATALOG_ROUTE_EDGE_ACTION_DISTANCE);
