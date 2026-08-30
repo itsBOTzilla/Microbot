@@ -356,7 +356,6 @@ For adjacent same-plane shortcuts, do not treat any movement away from the origi
 Transport rows do not all represent scene-object clicks, and related networks can use different widget groups. Before admitting new transport data, verify that the walker has an execution branch for the row's actual interaction and selects the interface from the origin object ID. Fail closed for unknown object IDs and tightly identify object-less item actions by their exact origin, destination, action, target, and item requirement.
 
 **Why this matters:** Barrows mound entries use a spade inventory action and therefore have object ID `0`; the generic object executor skips them. River Lum and River Dougne canoe stations open different map interfaces, so waiting unconditionally for the Lum map makes every Dougne route time out.
-
 **Pattern to follow:**
 
 ```java
@@ -449,6 +448,26 @@ door or transport implementation behind `RuneLiteWebWalkRuntime`.
 wait. Walking and running must keep the same checkpoint until it is passed or reaches the five-tile
 handoff after beginning outside that band, except that any accepted checkpoint releases once it is
 within one tile.
+
+### Match checkpoint handoff geometry to minimap selection
+
+Minimap route targets are selected inside a circular Euclidean radius, so the early-handoff check must use that same Euclidean radius. Do not use `WorldPoint.distanceTo2D` for this check: its Chebyshev (maximum-axis) distance can classify a diagonal checkpoint as close before the player has made meaningful progress toward it. Keep the separate close/arrival threshold unchanged.
+
+**Why this matters:** A checkpoint seven tiles away on both axes is within eight tiles by Chebyshev distance but almost ten tiles away geometrically. Releasing that checkpoint immediately defeats sticky-target pacing and causes repeated route processing and visible stop-start movement.
+
+**Pattern to follow:**
+
+```java
+long dx = (long) player.getX() - checkpoint.getX();
+long dy = (long) player.getY() - checkpoint.getY();
+boolean readyForHandoff = dx * dx + dy * dy <= (long) radius * radius;
+```
+
+**Where this applies:** `Rs2Walker` interim waits, active-route yield decisions, and any future minimap checkpoint handoff logic.
+
+**Defensive check:** For a running handoff radius of eight, `(7, 7)` must remain in flight while `(8, 0)` may hand off. Recovery and the five-tile checkpoint-clear contract must remain unchanged.
+
+Apply the route handoff at the start of the next walk pass, before collision, door, and transport scans, and apply the same decision if the path loop revisits the checkpoint in the same pass that issued it. Waking the pass at the larger pre-click radius without releasing the route-owned checkpoint there still lets those scans consume the remaining movement time and produces a stop before the continuation click. Require observed distance progress before this early release so a newly issued seven-tile checkpoint is not immediately replaced by an eight-tile running handoff. Tag recovery-owned checkpoints separately and keep them on the five-tile clear threshold.
 
 ## 18. Exit a walk when the local player disappears
 

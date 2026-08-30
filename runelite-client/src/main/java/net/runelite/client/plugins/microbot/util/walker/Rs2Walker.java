@@ -1472,6 +1472,16 @@ public class Rs2Walker {
         Rs2PathApi.setReachedDistance(distance);
         routeState.stuckCount = 0;
         routeState.lastMovedTimeMs = System.currentTimeMillis();
+		routeState.interimTargetWp = null;
+		routeState.interimTargetIdx = -1;
+		routeState.interimSetAtMs = 0L;
+        routeState.interimLastProgressAtMs = 0L;
+        routeState.interimLastBestPathIdx = -1;
+        routeState.interimLastDistanceToTarget = Integer.MAX_VALUE;
+        routeState.interimInitialDistanceToTarget = Integer.MAX_VALUE;
+        routeState.interimLastObservedPlayerPosition = null;
+        routeState.interimLastRetargetAtMs = 0L;
+        routeState.interimTargetRecovery = false;
         routeState.lastPartialTransRecalcMs = 0L;
         routeState.idleNudgeLastObservedLocation = playerLocWalk;
         routeState.idleNudgeStationarySinceMs = System.currentTimeMillis();
