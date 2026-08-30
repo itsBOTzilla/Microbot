@@ -34,28 +34,47 @@ public class WebWalkExecutorTest
         WebWalkSession session = new WebWalkSession(GOAL, 0);
         session.installRoute(route(1));
         session.observe(100, START, 0);
-        session.recordMinimapDispatch(100, point(1), point(1), 1, false);
+        session.recordMinimapDispatch(100, point(10), point(10), 10, false);
 
         WebWalkExecutor.Decision decision = new WebWalkExecutor().decide(session,
-                ready(101, point(2), 1, 2, point(12), 12, false));
+                ready(101, point(2), 1, 11, point(12), 12, false));
 
         assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, decision.getType());
         assertEquals(point(12), decision.getTarget());
     }
 
     @Test
-    public void approachingCheckpointWithinRunOverlapHandsOffBeforeArrival()
+    public void runningAndWalkingRetainCheckpointUntilReachedOrPassed()
     {
-        WebWalkSession session = new WebWalkSession(GOAL, 0);
-        session.installRoute(route(1));
-        session.observe(100, START, 0);
-        session.recordMinimapDispatch(100, point(10), point(10), 10, false);
+        for (boolean runEnabled : new boolean[] {false, true})
+        {
+            for (int playerX : new int[] {2, 5, 8})
+            {
+                WebWalkSession session = new WebWalkSession(GOAL, 0);
+                session.installRoute(route(1));
+                session.observe(100, START, 0);
+                session.recordMinimapDispatch(100, point(10), point(10), 10, false);
 
-        WebWalkExecutor.Decision decision = new WebWalkExecutor().decide(session,
-                ready(101, point(2), 1, 2, point(12), 12, false, true));
+                WebWalkExecutor.Decision decision = new WebWalkExecutor().decide(session,
+                        ready(101, point(playerX), 1, 2, point(12), 12,
+                                false, runEnabled));
 
-        assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, decision.getType());
-        assertEquals(point(12), decision.getTarget());
+                assertEquals(WebWalkExecutor.DecisionType.WAIT, decision.getType());
+                assertEquals(point(10), session.getCheckpoint());
+            }
+
+            WebWalkSession reached = new WebWalkSession(GOAL, 0);
+            reached.installRoute(route(1));
+            reached.observe(100, START, 0);
+            reached.recordMinimapDispatch(100, point(10), point(10), 10, false);
+
+            WebWalkExecutor.Decision next = new WebWalkExecutor().decide(reached,
+                    ready(101, point(9), 1, 2, point(12), 12,
+                            false, runEnabled));
+
+            assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, next.getType());
+            assertEquals(point(12), next.getTarget());
+        }
     }
 
     @Test

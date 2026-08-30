@@ -162,4 +162,63 @@ public class WebWalkExecutorWiringTest
         assertEquals(0, legacyConstructors.get());
         assertEquals(4, runAwareConstructors.get());
     }
+
+    @Test
+    public void checkpointReleasePolicyDoesNotDependOnRunState() throws IOException
+    {
+        AtomicBoolean readsRunState = new AtomicBoolean();
+        AtomicBoolean readsRunHandoffDistance = new AtomicBoolean();
+        AtomicBoolean readsWalkHandoffDistance = new AtomicBoolean();
+        String executorOwner = Type.getInternalName(WebWalkExecutor.class);
+        String observationOwner = Type.getInternalName(WebWalkRuntime.Observation.class);
+
+        try (InputStream stream = WebWalkExecutor.class.getResourceAsStream("WebWalkExecutor.class"))
+        {
+            assertTrue(stream != null);
+            new ClassReader(stream).accept(new ClassVisitor(Opcodes.ASM9)
+            {
+                @Override
+                public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                 String signature, String[] exceptions)
+                {
+                    if (!name.equals("decide"))
+                    {
+                        return null;
+                    }
+                    return new MethodVisitor(Opcodes.ASM9)
+                    {
+                        @Override
+                        public void visitFieldInsn(int opcode, String owner, String fieldName,
+                                                   String fieldDescriptor)
+                        {
+                            if (opcode == Opcodes.GETSTATIC && owner.equals(executorOwner)
+                                    && fieldName.equals("RUN_CHECKPOINT_HANDOFF_DISTANCE"))
+                            {
+                                readsRunHandoffDistance.set(true);
+                            }
+                            if (opcode == Opcodes.GETSTATIC && owner.equals(executorOwner)
+                                    && fieldName.equals("WALK_CHECKPOINT_HANDOFF_DISTANCE"))
+                            {
+                                readsWalkHandoffDistance.set(true);
+                            }
+                        }
+
+                        @Override
+                        public void visitMethodInsn(int opcode, String owner, String methodName,
+                                                    String methodDescriptor, boolean isInterface)
+                        {
+                            if (owner.equals(observationOwner) && methodName.equals("isRunEnabled"))
+                            {
+                                readsRunState.set(true);
+                            }
+                        }
+                    };
+                }
+            }, 0);
+        }
+
+        assertFalse(readsRunState.get());
+        assertFalse(readsRunHandoffDistance.get());
+        assertFalse(readsWalkHandoffDistance.get());
+    }
 }
