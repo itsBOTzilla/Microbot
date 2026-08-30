@@ -19,6 +19,16 @@ import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.InsnNode;
+import org.objectweb.asm.tree.IntInsnNode;
+import org.objectweb.asm.tree.MethodInsnNode;
+import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.analysis.Analyzer;
+import org.objectweb.asm.tree.analysis.Frame;
+import org.objectweb.asm.tree.analysis.SourceInterpreter;
+import org.objectweb.asm.tree.analysis.SourceValue;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -635,44 +645,68 @@ public class RuneLiteWebWalkRuntimeTest
     @Test
     public void productionSelectionKeepsTargetsInsideReliableMinimapRadius() throws Exception
     {
-        AtomicInteger selectorCalls = new AtomicInteger();
         String runtimeOwner = Type.getInternalName(RuneLiteWebWalkRuntime.class);
+        ClassNode classNode = new ClassNode();
 
         try (InputStream stream = RuneLiteWebWalkRuntime.class.getResourceAsStream(
                 "RuneLiteWebWalkRuntime.class"))
         {
             assertTrue(stream != null);
-            new ClassReader(stream).accept(new ClassVisitor(Opcodes.ASM9)
+            new ClassReader(stream).accept(classNode, 0);
+        }
+
+        MethodNode observe = null;
+        for (MethodNode method : classNode.methods)
+        {
+            if (method.name.equals("observe"))
             {
-                @Override
-                public MethodVisitor visitMethod(int access, String name, String descriptor,
-                                                 String signature, String[] exceptions)
+                observe = method;
+                break;
+            }
+        }
+        assertTrue(observe != null);
+
+        Frame<SourceValue>[] frames = new Analyzer<SourceValue>(new SourceInterpreter())
+                .analyze(classNode.name, observe);
+        int selectorCalls = 0;
+        Integer passedRadius = null;
+        for (int i = 0; i < observe.instructions.size(); i++)
+        {
+            AbstractInsnNode instruction = observe.instructions.get(i);
+            if (!(instruction instanceof MethodInsnNode))
+            {
+                continue;
+            }
+            MethodInsnNode call = (MethodInsnNode) instruction;
+            if (!call.owner.equals(runtimeOwner) || !call.name.equals("selectForwardCandidate"))
+            {
+                continue;
+            }
+
+            selectorCalls++;
+            Frame<SourceValue> frame = frames[i];
+            // The static selector's last three arguments are radius, predicate, and currentIndex.
+            SourceValue radiusValue = frame.getStack(frame.getStackSize() - 3);
+            for (AbstractInsnNode source : radiusValue.insns)
+            {
+                if (source instanceof IntInsnNode)
                 {
-                    if (!name.equals("observe"))
-                    {
-                        return null;
-                    }
-                    return new MethodVisitor(Opcodes.ASM9)
-                    {
-                        @Override
-                        public void visitMethodInsn(int opcode, String owner, String methodName,
-                                                    String methodDescriptor, boolean isInterface)
-                        {
-                            if (owner.equals(runtimeOwner) && methodName.equals("selectForwardCandidate"))
-                            {
-                                selectorCalls.incrementAndGet();
-                            }
-                        }
-                    };
+                    passedRadius = ((IntInsnNode) source).operand;
                 }
-            }, 0);
+                else if (source instanceof InsnNode
+                        && source.getOpcode() >= Opcodes.ICONST_M1
+                        && source.getOpcode() <= Opcodes.ICONST_5)
+                {
+                    passedRadius = source.getOpcode() - Opcodes.ICONST_0;
+                }
+            }
         }
 
         java.lang.reflect.Field radiusField = RuneLiteWebWalkRuntime.class
                 .getDeclaredField("MINIMAP_COMMAND_RADIUS");
         radiusField.setAccessible(true);
-        assertEquals(1, selectorCalls.get());
-        assertEquals(10, radiusField.getInt(null));
+        assertEquals(1, selectorCalls);
+        assertEquals(radiusField.getInt(null), passedRadius.intValue());
     }
 
     @Test
