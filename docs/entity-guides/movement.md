@@ -508,3 +508,36 @@ InputArbiter.onRealKeyPressed(keyCode);
 **Defensive check:** Dispatch repeated real `MOUSE_MOVED` events over the canvas and assert the
 pointer changes while `InputArbiter.isHuman()` stays false and a real `Global.sleepUntil` continues
 polling. Keep separate tests proving real button/key gestures still yield.
+
+## 21. Scan the full actionable transport horizon and trust exact arrival
+
+See [Transport Handoff: Preventing Immediate Reverse Traversal](../transport-handoff-fix.md) for
+the complete Edgeville failure analysis, one-shot inverse-edge suppression design, regression
+coverage, and live acceptance criteria.
+
+The route-action scan must inspect every raw-path edge within the catalog transport interaction
+radius, not only the next one or two list entries. After a transport lands, an exact player-target
+match is authoritative even if a superseded path snapshot still contains the inverse transport.
+Keep the wider scan limited to catalog-backed transports; generic blocked edges retain their
+smaller interaction radius.
+
+**Why this matters:** At the Edgeville trapdoor, the transport origin can be five raw-path indices
+ahead while only four tiles from the player. A two-index scan ground-clicks the trapdoor tile first.
+After climbing down, a stale reverse-ladder edge can then reject exact arrival and send the player
+straight back to the surface.
+
+**Pattern to follow:**
+
+```java
+int lastEdge = Math.min(path.size() - 2, currentIndex + CATALOG_ACTION_DISTANCE);
+if (player.equals(target)) {
+    return ARRIVED;
+}
+```
+
+**Where this applies:** `RuneLiteWebWalkRuntime.routeActionIndex`, `Rs2Walker.runtimeArrived`, and
+transport handoff/replan boundaries.
+
+**Defensive check:** Model a catalog transport five raw-path indices ahead and assert it preempts
+movement. Separately assert that exact physical arrival succeeds despite a stale inverse edge,
+while non-exact configured-distance arrival still honors pending route interactions.

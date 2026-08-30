@@ -8,6 +8,11 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.client.plugins.microbot.shortestpath.ShortestPathPlugin;
+import net.runelite.client.plugins.microbot.shortestpath.Transport;
+import net.runelite.client.plugins.microbot.shortestpath.TransportType;
+import net.runelite.client.plugins.microbot.shortestpath.pathfinder.PathfinderConfig;
+import net.runelite.client.plugins.microbot.shortestpath.pathfinder.Pathfinder;
 import org.junit.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
@@ -19,9 +24,26 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 public class RuneLiteWebWalkRuntimeTest
 {
+    @Test
+    public void completedPathfinderForPreviousGoalRemainsWaiting()
+    {
+        WorldPoint previousGoal = new WorldPoint(3096, 9867, 0);
+        WorldPoint brassKeyGoal = new WorldPoint(3131, 9862, 0);
+        Pathfinder previousPathfinder = mock(Pathfinder.class);
+        when(previousPathfinder.isDone()).thenReturn(true);
+        when(previousPathfinder.getTargets()).thenReturn(Set.of(previousGoal));
+
+        assertTrue(RuneLiteWebWalkRuntime.shouldWaitForPathfinder(
+                previousPathfinder, null, brassKeyGoal));
+        assertFalse(RuneLiteWebWalkRuntime.shouldWaitForPathfinder(
+                previousPathfinder, null, previousGoal));
+    }
+
     @Test
     public void selectsFurthestReachableForwardTileInsideMinimapRange()
     {
@@ -47,6 +69,117 @@ public class RuneLiteWebWalkRuntimeTest
 
         assertEquals(point(6), candidate.getTarget());
         assertEquals(6, candidate.getPathIndex());
+    }
+
+    @Test
+    public void nearbyVisibleRouteEdgePreemptsFinalGroundClick() throws Exception
+    {
+        WorldPoint player = new WorldPoint(3094, 3472, 0);
+        WorldPoint approach1 = new WorldPoint(3094, 3471, 0);
+        WorldPoint approach2 = new WorldPoint(3094, 3470, 0);
+        WorldPoint approach3 = new WorldPoint(3095, 3469, 0);
+        WorldPoint approach4 = new WorldPoint(3095, 3468, 0);
+        WorldPoint trapdoor = new WorldPoint(3096, 3468, 0);
+        WorldPoint dungeonLanding = new WorldPoint(3096, 9867, 0);
+        List<WorldPoint> path = List.of(player, approach1, approach2, approach3,
+                approach4, trapdoor, dungeonLanding);
+        PathfinderConfig previousConfig = ShortestPathPlugin.pathfinderConfig;
+        PathfinderConfig config = mock(PathfinderConfig.class);
+        java.util.concurrent.ConcurrentHashMap<WorldPoint, Set<Transport>> transports =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        transports.put(trapdoor, Set.of(new Transport(trapdoor, dungeonLanding,
+                "Edgeville trapdoor", TransportType.TRANSPORT, false, 0)));
+        when(config.getTransports()).thenReturn(transports);
+        try
+        {
+            ShortestPathPlugin.pathfinderConfig = config;
+            assertEquals("a catalog transport five raw-path nodes ahead must preempt a ground click",
+                    5, routeActionIndex(path, 0, player,
+                            Set.of(player, approach1, approach2, approach3, approach4, trapdoor)));
+        }
+        finally
+        {
+            ShortestPathPlugin.pathfinderConfig = previousConfig;
+        }
+    }
+
+    @Test
+    public void distantGenericRouteEdgeStillAllowsCloserApproach() throws Exception
+    {
+        WorldPoint player = new WorldPoint(3094, 3472, 0);
+        WorldPoint approach = new WorldPoint(3094, 3471, 0);
+        WorldPoint blockedEdge = new WorldPoint(3096, 3468, 0);
+        WorldPoint beyondEdge = new WorldPoint(3096, 3467, 0);
+        List<WorldPoint> path = List.of(approach, blockedEdge, beyondEdge);
+        PathfinderConfig previousConfig = ShortestPathPlugin.pathfinderConfig;
+        PathfinderConfig config = mock(PathfinderConfig.class);
+        when(config.getTransports()).thenReturn(new java.util.concurrent.ConcurrentHashMap<>());
+        try
+        {
+            ShortestPathPlugin.pathfinderConfig = config;
+            assertEquals(-1, routeActionIndex(path, 0, player, Set.of(approach, blockedEdge)));
+        }
+        finally
+        {
+            ShortestPathPlugin.pathfinderConfig = previousConfig;
+        }
+    }
+
+    @Test
+    public void unresolvedGenericFrontierPreventsLookaheadToLaterTransport() throws Exception
+    {
+        WorldPoint player = new WorldPoint(3094, 3472, 0);
+        WorldPoint approach1 = new WorldPoint(3094, 3471, 0);
+        WorldPoint approach2 = new WorldPoint(3094, 3470, 0);
+        WorldPoint approach3 = new WorldPoint(3094, 3469, 0);
+        WorldPoint blockedFrontier = new WorldPoint(3095, 3468, 0);
+        WorldPoint trapdoor = new WorldPoint(3096, 3468, 0);
+        WorldPoint dungeonLanding = new WorldPoint(3096, 9867, 0);
+        List<WorldPoint> path = List.of(player, approach1, approach2, approach3,
+                blockedFrontier, trapdoor, dungeonLanding);
+        PathfinderConfig previousConfig = ShortestPathPlugin.pathfinderConfig;
+        PathfinderConfig config = mock(PathfinderConfig.class);
+        java.util.concurrent.ConcurrentHashMap<WorldPoint, Set<Transport>> transports =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        transports.put(trapdoor, Set.of(new Transport(trapdoor, dungeonLanding,
+                "Edgeville trapdoor", TransportType.TRANSPORT, false, 0)));
+        when(config.getTransports()).thenReturn(transports);
+        try
+        {
+            ShortestPathPlugin.pathfinderConfig = config;
+            assertEquals("a later transport must not preempt an earlier unresolved route frontier",
+                    -1, routeActionIndex(path, 0, player,
+                            Set.of(player, approach1, approach2, approach3, blockedFrontier)));
+        }
+        finally
+        {
+            ShortestPathPlugin.pathfinderConfig = previousConfig;
+        }
+    }
+
+    @Test
+    public void foldedGenericFrontierOutsideLegacyIndexHorizonDoesNotPreempt() throws Exception
+    {
+        WorldPoint player = new WorldPoint(3200, 3200, 0);
+        WorldPoint first = new WorldPoint(3201, 3200, 0);
+        WorldPoint second = new WorldPoint(3201, 3201, 0);
+        WorldPoint foldedFrom = new WorldPoint(3202, 3200, 0);
+        WorldPoint foldedTo = new WorldPoint(3203, 3200, 0);
+        List<WorldPoint> path = List.of(player, first, second, foldedFrom, foldedTo);
+        PathfinderConfig previousConfig = ShortestPathPlugin.pathfinderConfig;
+        PathfinderConfig config = mock(PathfinderConfig.class);
+        when(config.getTransports()).thenReturn(new java.util.concurrent.ConcurrentHashMap<>());
+        try
+        {
+            ShortestPathPlugin.pathfinderConfig = config;
+            assertEquals("the catalog horizon must not expand generic edge dispatch",
+                    -1, routeActionIndex(path, 0, player,
+                            Set.of(player, first, second, foldedFrom)));
+        }
+        finally
+        {
+            ShortestPathPlugin.pathfinderConfig = previousConfig;
+        }
     }
 
     @Test
@@ -488,6 +621,15 @@ public class RuneLiteWebWalkRuntimeTest
             points.add(point(x));
         }
         return points;
+    }
+
+    private static int routeActionIndex(List<WorldPoint> path, int currentIndex,
+                                        WorldPoint player, Set<WorldPoint> reachable) throws Exception
+    {
+        java.lang.reflect.Method method = RuneLiteWebWalkRuntime.class.getDeclaredMethod(
+                "routeActionIndex", List.class, int.class, WorldPoint.class, Set.class);
+        method.setAccessible(true);
+        return (int) method.invoke(null, path, currentIndex, player, reachable);
     }
 
     private static WorldPoint point(int x)

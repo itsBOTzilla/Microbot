@@ -652,6 +652,12 @@ public class Rs2Walker {
         if (player == null || target == null || player.getPlane() != target.getPlane()) {
             return false;
         }
+        // Exact observed arrival is authoritative. A superseded path snapshot can still contain
+        // the inverse of a transport that just landed; do not let that stale edge pull the player
+        // back through the transport after they are already standing on the requested target.
+        if (player.equals(target)) {
+            return true;
+        }
         WorldPoint endpoint = walkPath == null || walkPath.isEmpty()
                 ? null : walkPath.get(walkPath.size() - 1);
         int configuredDistance = Math.max(0, configuredChebyshev);
@@ -8966,6 +8972,13 @@ public class Rs2Walker {
         return Rs2WalkerLifecycleRuntime.restartPathfinding(start, ends);
     }
 
+    static boolean restartPathfinding(WorldPoint start, WorldPoint end,
+                                      WorldPoint suppressedTransportOrigin,
+                                      WorldPoint suppressedTransportDestination) {
+        return Rs2WalkerLifecycleRuntime.restartPathfinding(
+                start, Set.of(end), suppressedTransportOrigin, suppressedTransportDestination);
+    }
+
     /**
      * @param point
      * @return
@@ -10184,7 +10197,17 @@ public class Rs2Walker {
                             + " precomputed=" + hasPrecomputedContinuation
                             + " type=" + (transport != null ? transport.getType() : "null"));
         }
-        if ((expectedTransport || hasPrecomputedContinuation) && goal != null) {
+        WorldPoint currentLocation = Rs2Player.getWorldLocation();
+        boolean landedAtDestination = isConfirmedTransportLanding(currentLocation, transportDest);
+        WorldPoint transportOrigin = transport != null ? transport.getOrigin() : null;
+        boolean distinctTransportFamily = transportFamilyEndpointsAreDistinct(
+                transportDest, transportOrigin, 3);
+        boolean continuationContainsReverse = landedAtDestination
+                && precomputedContinuationContainsEdge(transportDest,
+                transportOrigin);
+        if (shouldKeepPrecomputedTransportContinuation(
+                expectedTransport, hasPrecomputedContinuation, landedAtDestination,
+                continuationContainsReverse) && goal != null) {
             WebWalkLog.tmark(expectedTransport ? "transport_handoff_expected_hit" : "transport_handoff_precomputed_hit",
                     System.currentTimeMillis() - handoffStartedAt,
                     goal,
@@ -10193,13 +10216,39 @@ public class Rs2Walker {
             return true;
         }
         if (goal != null && transportDest != null) {
-            // Destination-aware handoff: prepare next path from known landing tile.
-            boolean queued = restartPathfinding(transportDest, goal);
+            if (landedAtDestination && sameOrNearTransportDestination(goal, transportDest)) {
+                if (distinctTransportFamily) {
+                    Rs2WalkerLifecycleRuntime.suppressReverseTransportOnNextPath(
+                            transportDest, transportOrigin);
+                }
+                WebWalkLog.tmark(distinctTransportFamily
+                                ? "transport_handoff_suppress_next_path"
+                                : "transport_handoff_terminal",
+                        System.currentTimeMillis() - handoffStartedAt,
+                        goal,
+                        currentLocation,
+                        distinctTransportFamily
+                                ? "suppressed=" + compactWorldPoint(transportDest)
+                                + "->" + compactWorldPoint(transportOrigin)
+                                : "local_transport_family=false");
+                return true;
+            }
+            // Once a non-local landing is confirmed, re-path from it while suppressing the
+            // inverse catalog family. Nearby same-plane endpoints are not directionally distinct
+            // at the family radius; their existing handled-point mechanism remains authoritative.
+            WorldPoint suppressedOrigin = landedAtDestination && distinctTransportFamily
+                    ? transportDest : null;
+            WorldPoint suppressedDestination = landedAtDestination && distinctTransportFamily
+                    ? transportOrigin : null;
+            boolean queued = restartPathfinding(
+                    transportDest, goal, suppressedOrigin, suppressedDestination);
             WebWalkLog.tmark("transport_handoff_restart",
                     System.currentTimeMillis() - handoffStartedAt,
                     goal,
                     Rs2Player.getWorldLocation(),
-                    "queued=" + queued + " dest=" + compactWorldPoint(transportDest));
+                    "queued=" + queued + " dest=" + compactWorldPoint(transportDest)
+                            + " suppressed=" + compactWorldPoint(suppressedOrigin)
+                            + "->" + compactWorldPoint(suppressedDestination));
             if (!queued && shouldRecalculatePathAfterTransport(transport)) {
                 recalculatePath();
                 WebWalkLog.tmark("transport_handoff_recalc_fallback",
@@ -10217,6 +10266,69 @@ public class Rs2Walker {
                     "dest=" + compactWorldPoint(transportDest));
         }
         return true;
+    }
+
+    static boolean shouldKeepPrecomputedTransportContinuation(boolean expectedTransport,
+                                                               boolean hasPrecomputedContinuation,
+                                                               boolean landedAtDestination,
+                                                               boolean continuationContainsReverse) {
+        if (!landedAtDestination) {
+            return expectedTransport || hasPrecomputedContinuation;
+        }
+        return hasPrecomputedContinuation && !continuationContainsReverse;
+    }
+
+    static boolean isConfirmedTransportLanding(WorldPoint currentLocation, WorldPoint transportDestination) {
+        // Object transports may settle a couple of tiles from their catalog destination. This is
+        // evaluated only after the transport handler has reported success, so the wider tolerance
+        // confirms the landing without making transport discovery or path selection permissive.
+        return isNearSamePlane(currentLocation, transportDestination, 3);
+    }
+
+    static boolean pathContainsEdge(List<WorldPoint> path, WorldPoint origin, WorldPoint destination) {
+        if (path == null || path.size() < 2 || origin == null || destination == null) {
+            return false;
+        }
+        for (int i = 0; i < path.size() - 1; i++) {
+            if (origin.equals(path.get(i)) && destination.equals(path.get(i + 1))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean precomputedContinuationContainsEdge(WorldPoint origin, WorldPoint destination) {
+        Pathfinder pathfinder = Rs2PathApi.getPathfinder();
+        return pathfinder != null
+                && pathfinder.isDone()
+                && pathContainsTransportFamily(pathfinder.getPath(), origin, destination);
+    }
+
+    static boolean pathContainsTransportFamily(List<WorldPoint> path,
+                                               WorldPoint origin,
+                                               WorldPoint destination) {
+        if (path == null || path.size() < 2 || origin == null || destination == null) {
+            return false;
+        }
+        if (!transportFamilyEndpointsAreDistinct(origin, destination, 3)) {
+            return pathContainsEdge(path, origin, destination);
+        }
+        for (int i = 0; i < path.size() - 1; i++) {
+            if (isNearSamePlane(path.get(i), origin, 3)
+                    && isNearSamePlane(path.get(i + 1), destination, 3)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean transportFamilyEndpointsAreDistinct(WorldPoint origin,
+                                                                WorldPoint destination,
+                                                                int endpointRadius) {
+        return origin != null
+                && destination != null
+                && (origin.getPlane() != destination.getPlane()
+                || origin.distanceTo2D(destination) > endpointRadius * 2);
     }
 
     private static void primeExpectedTransportDestinations(List<WorldPoint> path, int startIdx) {

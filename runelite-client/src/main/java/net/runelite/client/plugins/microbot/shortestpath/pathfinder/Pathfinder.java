@@ -49,6 +49,8 @@ public class Pathfinder implements Runnable {
     private final PathfinderConfig config;
     private CollisionMap map;
     private final boolean targetInWilderness;
+    private final Integer suppressedTransportOrigin;
+    private final Integer suppressedTransportDestination;
 
     // Walking subgraph uses A* (boundary is a PQ keyed on f = g + Chebyshev heuristic),
     // so among walking nodes the search picks the most promising direction first.
@@ -94,10 +96,19 @@ public class Pathfinder implements Runnable {
     private int wildernessLevel;
 
     public Pathfinder(PathfinderConfig config, int start, Set<Integer> targets) {
+        this(config, start, targets, null, null);
+    }
+
+    private Pathfinder(PathfinderConfig config, int start, Set<Integer> targets,
+                       WorldPoint suppressedTransportOrigin, WorldPoint suppressedTransportDestination) {
         stats = new PathfinderStats();
         this.config = config;
         this.start = start;
         this.targets = targets;
+        this.suppressedTransportOrigin = suppressedTransportOrigin == null
+                ? null : WorldPointUtil.packWorldPoint(suppressedTransportOrigin);
+        this.suppressedTransportDestination = suppressedTransportDestination == null
+                ? null : WorldPointUtil.packWorldPoint(suppressedTransportDestination);
         this.targetsPacked = new int[targets.size()];
         int idx = 0;
         for (Integer t : targets) {
@@ -116,8 +127,20 @@ public class Pathfinder implements Runnable {
         this(config, WorldPointUtil.packWorldPoint(start), targets.stream().map(WorldPointUtil::packWorldPoint).collect(Collectors.toSet()));
     }
 
+    public Pathfinder(PathfinderConfig config, WorldPoint start, Set<WorldPoint> targets,
+                      WorldPoint suppressedTransportOrigin, WorldPoint suppressedTransportDestination) {
+        this(config, WorldPointUtil.packWorldPoint(start),
+                targets.stream().map(WorldPointUtil::packWorldPoint).collect(Collectors.toSet()),
+                suppressedTransportOrigin, suppressedTransportDestination);
+    }
+
     public Pathfinder(PathfinderConfig config, WorldPoint start, WorldPoint target) {
         this(config, start, Set.of(target));
+    }
+
+    public Pathfinder(PathfinderConfig config, WorldPoint start, WorldPoint target,
+                      WorldPoint suppressedTransportOrigin, WorldPoint suppressedTransportDestination) {
+        this(config, start, Set.of(target), suppressedTransportOrigin, suppressedTransportDestination);
     }
 
     public WorldPoint getStart() {
@@ -202,7 +225,8 @@ public class Pathfinder implements Runnable {
     }
 
     private void addNeighbors(Node node) {
-        List<Node> nodes = map.getNeighbors(node, visited, config, targets);
+        List<Node> nodes = map.getNeighbors(node, visited, config, targets,
+                suppressedTransportOrigin, suppressedTransportDestination);
         boolean afterTransport = node instanceof TransportNode;
         for (Node neighbor : nodes) {
             if (config.avoidWilderness(node.packedPosition, neighbor.packedPosition, targetInWilderness)) {
@@ -444,7 +468,8 @@ public class Pathfinder implements Runnable {
 
     private void addNeighborsForwardWithMeet(Node node, Map<Integer, Node> forwardAt, Map<Integer, Node> backwardAt,
             long[] bestMeetingCost, Node[] meetF, Node[] meetB) {
-        List<Node> nodes = map.getNeighbors(node, visited, config, targets);
+        List<Node> nodes = map.getNeighbors(node, visited, config, targets,
+                suppressedTransportOrigin, suppressedTransportDestination);
         boolean afterTransport = node instanceof TransportNode;
         for (Node neighbor : nodes) {
             if (config.avoidWilderness(node.packedPosition, neighbor.packedPosition, targetInWilderness)) {
@@ -471,7 +496,8 @@ public class Pathfinder implements Runnable {
     private void addNeighborsBackwardWithMeet(Node node, VisitedTiles visitedB, Map<Integer, Set<Transport>> incoming,
             Set<Integer> puzzleAllow, Map<Integer, Node> forwardAt, Map<Integer, Node> backwardAt,
             long[] bestMeetingCost, Node[] meetF, Node[] meetB) {
-        List<Node> nodes = map.getReverseNeighbors(node, visitedB, config, puzzleAllow, incoming);
+        List<Node> nodes = map.getReverseNeighbors(node, visitedB, config, puzzleAllow, incoming,
+                suppressedTransportOrigin, suppressedTransportDestination);
         boolean afterTransport = node instanceof TransportNode;
         for (Node pred : nodes) {
             if (config.avoidWilderness(pred.packedPosition, node.packedPosition, targetInWilderness)) {

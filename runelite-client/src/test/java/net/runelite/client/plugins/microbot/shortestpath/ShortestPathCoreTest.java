@@ -799,6 +799,49 @@ public class ShortestPathCoreTest {
 	}
 
 	@Test
+	public void testEdgevilleDungeonPathToBrassKeyDoesNotImmediatelyClimbBackUp() {
+		WorldPoint dungeonEntrance = new WorldPoint(3096, 9867, 0);
+		WorldPoint brassKeySpawn = new WorldPoint(3131, 9862, 0);
+		WorldPoint surfaceLadderDestination = new WorldPoint(3096, 3468, 0);
+		Map<WorldPoint, Set<Transport>> shortcut = new HashMap<>();
+		shortcut.put(dungeonEntrance, Set.of(new Transport(
+				dungeonEntrance, surfaceLadderDestination, "Reverse entrance ladder",
+				TransportType.TRANSPORT, false, 1)));
+		WorldPoint adjacentLadderOrigin = new WorldPoint(3097, 9868, 0);
+		shortcut.put(adjacentLadderOrigin, Set.of(new Transport(
+				adjacentLadderOrigin, surfaceLadderDestination, "Adjacent reverse entrance ladder",
+				TransportType.TRANSPORT, false, 1)));
+		shortcut.put(surfaceLadderDestination, Set.of(new Transport(
+				surfaceLadderDestination, brassKeySpawn, "Re-enter dungeon",
+				TransportType.TRANSPORT, false, 1)));
+		for (WorldPoint dungeonStart : List.of(dungeonEntrance, new WorldPoint(3096, 9869, 0))) {
+			PathfinderConfig config = createConfigWithCustomTransports(shortcut);
+			Pathfinder pathfinder = new Pathfinder(
+					config, dungeonStart, brassKeySpawn, dungeonEntrance, surfaceLadderDestination);
+			pathfinder.run();
+
+			assertTrue("Pathfinder should complete", pathfinder.isDone());
+			List<WorldPoint> path = pathfinder.getPath();
+			assertFalse("Path to the brass key should not be empty", path.isEmpty());
+			assertEquals("Path should reach the brass key spawn", brassKeySpawn, path.get(path.size() - 1));
+			assertFalse("An underground route to the key must not reverse the entrance ladder: " + path,
+					path.contains(surfaceLadderDestination));
+			assertTrue("The first edge should be an ordinary same-layer walking step", path.size() > 1
+					&& path.get(1).getPlane() == dungeonStart.getPlane()
+					&& Math.floorDiv(path.get(1).getY(), 6400) == Math.floorDiv(dungeonStart.getY(), 6400)
+					&& dungeonStart.distanceTo2D(path.get(1)) <= 1);
+		}
+
+		Pathfinder exitPathfinder = new Pathfinder(
+				createConfigWithCustomTransports(shortcut), dungeonEntrance, surfaceLadderDestination);
+		exitPathfinder.run();
+		List<WorldPoint> exitPath = exitPathfinder.getPath();
+		assertEquals("The Edgeville return ladder must remain usable when it is the requested route",
+				surfaceLadderDestination, exitPath.get(exitPath.size() - 1));
+		assertTrue("The requested exit path should contain the surface landing", exitPath.contains(surfaceLadderDestination));
+	}
+
+	@Test
 	public void testVarrockSewerPathAvoidsDisabledPalaceTrellisShortcut() {
 		PathfinderConfig config = createConfigWithUnavailableShortcutEdges(TransportType.AGILITY_SHORTCUT);
 		WorldPoint src = new WorldPoint(3203, 3501, 0);
@@ -885,6 +928,33 @@ public class ShortestPathCoreTest {
 			}
 		} catch (Exception e) {
 			throw new RuntimeException("Failed to configure transports", e);
+		}
+		return config;
+	}
+
+	private PathfinderConfig createConfigWithCustomTransports(Map<WorldPoint, Set<Transport>> customTransports) {
+		PathfinderConfig config = new PathfinderConfig(
+				collisionMap,
+				customTransports,
+				Collections.emptyList(),
+				null,
+				null
+		);
+		try {
+			java.lang.reflect.Field f = PathfinderConfig.class.getDeclaredField("calculationCutoffMillis");
+			f.setAccessible(true);
+			f.setLong(config, 10000);
+
+			for (Map.Entry<WorldPoint, Set<Transport>> entry : customTransports.entrySet()) {
+				if (entry.getKey() == null) {
+					continue;
+				}
+				config.getTransports().put(entry.getKey(), entry.getValue());
+				config.getTransportsPacked().put(
+						WorldPointUtil.packWorldPoint(entry.getKey()), entry.getValue());
+			}
+		} catch (Exception e) {
+			throw new RuntimeException("Failed to configure custom transports", e);
 		}
 		return config;
 	}
