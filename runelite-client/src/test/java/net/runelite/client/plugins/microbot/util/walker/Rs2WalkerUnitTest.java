@@ -7,6 +7,8 @@ import net.runelite.client.plugins.microbot.util.walker.state.WalkerRouteState;
 
 import net.runelite.api.WallObject;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.ItemID;
 import net.runelite.client.plugins.microbot.shortestpath.Transport;
 import net.runelite.client.plugins.microbot.shortestpath.TransportType;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.Pathfinder;
@@ -133,6 +135,38 @@ public class Rs2WalkerUnitTest {
                 133);
 
         assertTrue(Rs2Walker.adjacentSamePlaneTransportSuppressionPoints(ladder, null).isEmpty());
+    }
+
+    @Test
+    public void canoeStationsSelectTheirOwnMapInterfaceAndUnknownIdsFailClosed() {
+        assertEquals(InterfaceID.CanoeMapLum.MAIN_MAP, Rs2Walker.canoeMapMainComponentId(12163));
+        assertEquals(InterfaceID.CanoeMapLum.DESTINATIONS,
+                Rs2Walker.canoeMapDestinationsComponentId(39638));
+        assertEquals(InterfaceID.CanoeMapDougne.MAIN_MAP, Rs2Walker.canoeMapMainComponentId(60845));
+        assertEquals(InterfaceID.CanoeMapDougne.DESTINATIONS,
+                Rs2Walker.canoeMapDestinationsComponentId(60849));
+        assertEquals(-1, Rs2Walker.canoeMapMainComponentId(99999));
+        assertEquals(-1, Rs2Walker.canoeMapDestinationsComponentId(99999));
+    }
+
+    @Test
+    public void barrowsDigExecutorRequiresExactMoundMappingAndSpade() {
+        WorldPoint origin = new WorldPoint(3564, 3291, 0);
+        WorldPoint destination = new WorldPoint(3559, 9703, 3);
+        Transport valid = new Transport(origin, destination, "Ahrim's Barrow",
+                TransportType.TRANSPORT, true, "Dig", "Barrow", 0);
+        valid.setItemIdRequirements(Set.of(Set.of(ItemID.SPADE)));
+
+        assertTrue(Rs2Walker.isBarrowsDigTransport(valid));
+
+        Transport wrongDestination = new Transport(origin, new WorldPoint(3558, 9718, 3), "Wrong crypt",
+                TransportType.TRANSPORT, true, "Dig", "Barrow", 0);
+        wrongDestination.setItemIdRequirements(Set.of(Set.of(ItemID.SPADE)));
+        Transport missingSpade = new Transport(origin, destination, "Missing spade",
+                TransportType.TRANSPORT, true, "Dig", "Barrow", 0);
+
+        assertFalse(Rs2Walker.isBarrowsDigTransport(wrongDestination));
+        assertFalse(Rs2Walker.isBarrowsDigTransport(missingSpade));
     }
 
     @Test

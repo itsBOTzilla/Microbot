@@ -19,10 +19,14 @@ public class ShortestPathCoreTest {
 	private static final WorldPoint AL_KHARID_GATE_WEST_NORTH = new WorldPoint(3267, 3228, 0);
 	private static final WorldPoint AL_KHARID_GATE_EAST_SOUTH = new WorldPoint(3268, 3227, 0);
 	private static final WorldPoint AL_KHARID_GATE_EAST_NORTH = new WorldPoint(3268, 3228, 0);
-	private static final int AL_KHARID_MINE_MIN_X = 3281;
-	private static final int AL_KHARID_MINE_MAX_X = 3300;
-	private static final int AL_KHARID_MINE_MIN_Y = 3151;
-	private static final int AL_KHARID_MINE_MAX_Y = 3178;
+	private static final WorldPoint AL_KHARID_PALACE_NORTH = new WorldPoint(3293, 3180, 0);
+	private static final WorldPoint AL_KHARID_GLORY_DESTINATION = new WorldPoint(3293, 3163, 0);
+	private static final WorldPoint AL_KHARID_HASSAN = new WorldPoint(3298, 3163, 0);
+	private static final WorldPoint AL_KHARID_MINE_MAP_CLUE = new WorldPoint(3300, 3291, 0);
+	private static final int FORMER_MINE_MIN_X = 3281;
+	private static final int FORMER_MINE_MAX_X = 3300;
+	private static final int FORMER_MINE_MIN_Y = 3151;
+	private static final int FORMER_MINE_MAX_Y = 3178;
 
 	@BeforeClass
 	public static void loadCollisionMap() {
@@ -203,6 +207,53 @@ public class ShortestPathCoreTest {
 	}
 
 	@Test
+	public void testReviewedItemRequirementTransportsActuallyLoad() {
+		HashMap<WorldPoint, Set<Transport>> transports = Transport.loadAllFromResources();
+
+		assertTransportLoadsWithItems(transports, new WorldPoint(3246, 3179, 0),
+				new WorldPoint(3259, 3179, 0), "", 9419);
+		assertTransportLoadsWithItems(transports, new WorldPoint(2766, 3665, 0),
+				new WorldPoint(2766, 3663, 0), "", 954);
+		assertTransportLoadsWithItems(transports, null, new WorldPoint(2952, 3224, 0),
+				"Max cape: POH Portals: Rimmington", 13280, 13342);
+		assertTransportLoadsWithItems(transports, null, new WorldPoint(1389, 2901, 0),
+				"Quetzal whistle: Aldarin", 29271, 29273, 29275);
+		assertTransportLoadsWithItems(transports, null, new WorldPoint(1389, 2901, 0),
+				"Quetzal whistle: Aldarin", 33120);
+		assertTransportLoadsWithItems(transports, new WorldPoint(2709, 3495, 0),
+				new WorldPoint(2709, 3496, 0), "", 2887);
+		assertTransportLoadsWithItems(transports, new WorldPoint(3564, 3291, 0),
+				new WorldPoint(3559, 9703, 3), "Ahrim's Barrow", 952);
+	}
+
+	@Test
+	public void testCanoeRoutesRetainAxeRequirements() {
+		HashMap<WorldPoint, Set<Transport>> transports = Transport.loadAllFromResources();
+		Integer[] axeIds = {1351, 1349, 1361, 1353, 1355, 1357, 1359};
+
+		assertTransportLoadsWithItems(transports, new WorldPoint(3132, 3510, 0),
+				new WorldPoint(3109, 3415, 0), "Barbarian Village", axeIds);
+		assertTransportLoadsWithItems(transports, new WorldPoint(2439, 3135, 0),
+				new WorldPoint(2483, 3188, 0), "Tree Gnome Village", axeIds);
+	}
+
+	@Test
+	public void testQuetzalOriginsRetainVarplayerUnlockRequirements() {
+		HashMap<WorldPoint, Set<Transport>> transports = Transport.loadAllFromResources();
+		WorldPoint origin = new WorldPoint(1779, 3111, 0);
+
+		Optional<Transport> fortisToAldarin = transports.getOrDefault(origin, Collections.emptySet()).stream()
+				.filter(t -> new WorldPoint(1389, 2901, 0).equals(t.getDestination()))
+				.findFirst();
+
+		assertTrue("Fortis Colosseum Quetzal origin should load", fortisToAldarin.isPresent());
+		assertTrue("Fortis Colosseum Quetzal origin should retain its unlock bit",
+				fortisToAldarin.get().getVarplayers().stream().anyMatch(v -> v.getVarplayerId() == 4182
+						&& v.getOperator() == TransportVarPlayer.Operator.BIT_SET
+						&& v.getValue() == 256));
+	}
+
+	@Test
 	public void testAlKharidTollGateTransportsLoaded() {
 		HashMap<WorldPoint, Set<Transport>> transports = Transport.loadAllFromResources();
 
@@ -249,42 +300,28 @@ public class ShortestPathCoreTest {
 	}
 
 	@Test
-	public void testAlKharidMinePerimeterBlocksBothDirections() {
-		PathfinderConfig config = createMinimalConfig();
+	public void testPathfinderEntersAlKharidPalaceFromNorth() {
+		for (WorldPoint target : Arrays.asList(AL_KHARID_GLORY_DESTINATION, AL_KHARID_HASSAN)) {
+			Pathfinder pathfinder = new Pathfinder(createMinimalConfig(), AL_KHARID_PALACE_NORTH, target);
 
-		for (int x = AL_KHARID_MINE_MIN_X; x <= AL_KHARID_MINE_MAX_X; x++) {
-			assertBlockedBothDirections(config,
-					new WorldPoint(x, AL_KHARID_MINE_MIN_Y, 0),
-					new WorldPoint(x, AL_KHARID_MINE_MIN_Y - 1, 0));
-			assertBlockedBothDirections(config,
-					new WorldPoint(x, AL_KHARID_MINE_MAX_Y, 0),
-					new WorldPoint(x, AL_KHARID_MINE_MAX_Y + 1, 0));
-		}
+			pathfinder.run();
 
-		for (int y = AL_KHARID_MINE_MIN_Y; y <= AL_KHARID_MINE_MAX_Y; y++) {
-			assertBlockedBothDirections(config,
-					new WorldPoint(AL_KHARID_MINE_MIN_X, y, 0),
-					new WorldPoint(AL_KHARID_MINE_MIN_X - 1, y, 0));
-			assertBlockedBothDirections(config,
-					new WorldPoint(AL_KHARID_MINE_MAX_X, y, 0),
-					new WorldPoint(AL_KHARID_MINE_MAX_X + 1, y, 0));
+			List<WorldPoint> path = pathfinder.getPath();
+			assertTrue("Route into Al Kharid Palace should complete for " + target, pathfinder.isDone());
+			assertFalse("Route into Al Kharid Palace should not be empty for " + target, path.isEmpty());
+			assertEquals("Route should reach the palace target", target, path.get(path.size() - 1));
 		}
 	}
 
 	@Test
-	public void testPathfinderRoutesAroundAlKharidMine() {
-		WorldPoint start = new WorldPoint(AL_KHARID_MINE_MIN_X - 1, 3164, 0);
-		WorldPoint target = new WorldPoint(AL_KHARID_MINE_MAX_X + 5, 3164, 0);
-		Pathfinder pathfinder = new Pathfinder(createMinimalConfig(), start, target);
-
-		pathfinder.run();
-
-		List<WorldPoint> path = pathfinder.getPath();
-		assertTrue("Route around Al Kharid mine should complete", pathfinder.isDone());
-		assertFalse("Route around Al Kharid mine should not be empty", path.isEmpty());
-		assertEquals("Route should reach the target", target, path.get(path.size() - 1));
-		assertFalse("Route must not enter the open pit",
-				path.stream().anyMatch(ShortestPathCoreTest::isInsideAlKharidMine));
+	public void testRemovedPerimeterCoordinatesDescribeThePalaceNotTheMine() {
+		// RuneLite's canonical Al Kharid mine map-clue tile is (3300,3291,0). The removed
+		// 3281..3300 x 3151..3178 perimeter is over 100 tiles south and contains Hassan and
+		// the palace glory destination. Restoring it as a "mine" boundary necessarily seals
+		// the palace again, so keep this coordinate sanity check beside the access regression.
+		assertTrue(isInsideFormerMinePerimeter(AL_KHARID_GLORY_DESTINATION));
+		assertTrue(isInsideFormerMinePerimeter(AL_KHARID_HASSAN));
+		assertFalse(isInsideFormerMinePerimeter(AL_KHARID_MINE_MAP_CLUE));
 	}
 
 	@Test
@@ -398,6 +435,31 @@ public class ShortestPathCoreTest {
 		}
 		assertEquals("Unexpected Prince Ali Rescue requirement on gate transport",
 				princeAliRequired, transport.getQuests().containsKey(Quest.PRINCE_ALI_RESCUE));
+	}
+
+	private static void assertTransportLoadsWithItems(HashMap<WorldPoint, Set<Transport>> transports,
+			WorldPoint origin, WorldPoint destination, String displayInfo, Integer... expectedItemIds) {
+		Set<Integer> expected = new HashSet<>(Arrays.asList(expectedItemIds));
+		Optional<Transport> match = transports.getOrDefault(origin, Collections.emptySet()).stream()
+				.filter(t -> destination.equals(t.getDestination()))
+				.filter(t -> displayInfo.isEmpty() || displayInfo.equals(t.getDisplayInfo()))
+				.filter(t -> {
+					Set<Integer> loaded = new HashSet<>();
+					t.getItemIdRequirements().forEach(loaded::addAll);
+					return loaded.containsAll(expected);
+				})
+				.findFirst();
+
+		assertTrue("Missing item-gated transport from " + origin + " to " + destination
+				+ " display=" + displayInfo + " items=" + expected, match.isPresent());
+	}
+
+	private static boolean isInsideFormerMinePerimeter(WorldPoint point) {
+		return point.getPlane() == 0
+				&& point.getX() >= FORMER_MINE_MIN_X
+				&& point.getX() <= FORMER_MINE_MAX_X
+				&& point.getY() >= FORMER_MINE_MIN_Y
+				&& point.getY() <= FORMER_MINE_MAX_Y;
 	}
 
 	@Test
@@ -907,23 +969,6 @@ public class ShortestPathCoreTest {
 
 	private static boolean isEitherDirection(WorldPoint from, WorldPoint to, WorldPoint a, WorldPoint b) {
 		return (from.equals(a) && to.equals(b)) || (from.equals(b) && to.equals(a));
-	}
-
-	private static void assertBlockedBothDirections(PathfinderConfig config, WorldPoint a, WorldPoint b) {
-		int packedA = WorldPointUtil.packWorldPoint(a);
-		int packedB = WorldPointUtil.packWorldPoint(b);
-		assertTrue("Expected blocked edge " + a + " -> " + b,
-				config.isBlockedTransportStep(packedA, packedB));
-		assertTrue("Expected blocked edge " + b + " -> " + a,
-				config.isBlockedTransportStep(packedB, packedA));
-	}
-
-	private static boolean isInsideAlKharidMine(WorldPoint point) {
-		return point.getPlane() == 0
-				&& point.getX() >= AL_KHARID_MINE_MIN_X
-				&& point.getX() <= AL_KHARID_MINE_MAX_X
-				&& point.getY() >= AL_KHARID_MINE_MIN_Y
-				&& point.getY() <= AL_KHARID_MINE_MAX_Y;
 	}
 
 	private static boolean hasFenceCrossing(List<WorldPoint> path, int minX, int maxX, int northY, int southY, int plane) {
