@@ -60,6 +60,18 @@ import static org.mockito.Mockito.when;
 public class Rs2WalkerUnitTest {
 
     @Test
+    public void shipNpcActionFallsBackToTravelWhenDestinationLabelIsNotAnNpcAction() {
+        String[] captainTobiasActions = {"Talk-to", null, "Travel"};
+
+        assertEquals("Travel", Rs2Walker.resolveShipNpcAction(
+                "Musa Point", captainTobiasActions));
+        assertEquals("Brimhaven", Rs2Walker.resolveShipNpcAction(
+                "Brimhaven", new String[]{"Talk-to", "Brimhaven", "Travel"}));
+        assertEquals("Musa Point", Rs2Walker.resolveShipNpcAction(
+                "Musa Point", new String[]{"Talk-to"}));
+    }
+
+    @Test
     public void confirmedTransportLandingDoesNotKeepPotentialReverseContinuation() {
         assertFalse("an expected landing must still restart through reverse-edge suppression",
                 Rs2Walker.shouldKeepPrecomputedTransportContinuation(true, false, true, false));
@@ -77,6 +89,21 @@ public class Rs2WalkerUnitTest {
                 new WorldPoint(3096, 9869, 0), new WorldPoint(3096, 9867, 0)));
         assertFalse(Rs2Walker.isConfirmedTransportLanding(
                 new WorldPoint(3096, 3468, 0), new WorldPoint(3096, 9867, 0)));
+    }
+
+    @Test
+    public void nearbyTransportObjectRemainsActionableWhileDoorCollisionRefreshes() {
+        WorldPoint justInsideLockedDoor = new WorldPoint(3115, 3450, 0);
+        WorldPoint ladderOrigin = new WorldPoint(3115, 3452, 0);
+
+        assertTrue(Rs2Walker.shouldAttemptTransportObject(
+                false, justInsideLockedDoor, ladderOrigin));
+        assertFalse(Rs2Walker.shouldAttemptTransportObject(
+                false, justInsideLockedDoor, new WorldPoint(3115, 3453, 0)));
+        assertFalse(Rs2Walker.shouldAttemptTransportObject(
+                false, justInsideLockedDoor, new WorldPoint(3115, 3452, 1)));
+        assertTrue(Rs2Walker.shouldAttemptTransportObject(
+                true, justInsideLockedDoor, new WorldPoint(3115, 3453, 0)));
     }
 
     @Test

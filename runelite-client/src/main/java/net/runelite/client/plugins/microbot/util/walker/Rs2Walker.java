@@ -9148,9 +9148,10 @@ public class Rs2Walker {
                         if (transport.getType() == TransportType.SHIP || transport.getType() == TransportType.NPC || transport.getType() == TransportType.BOAT) {
 
                             Rs2NpcModel npc = Rs2Npc.getNpc(transport.getName());
+                            String npcAction = resolveNpcTransportAction(transport, npc);
 
                             // Wrap with observation so Leagues blocked-region chat can attribute this attempt.
-                            if (attemptObserved(transport, () -> npc != null && Rs2Npc.canWalkTo(npc, 20) && Rs2Npc.interact(npc, transport.getAction()))) {
+                            if (attemptObserved(transport, () -> npc != null && Rs2Npc.canWalkTo(npc, 20) && Rs2Npc.interact(npc, npcAction))) {
                                 Rs2Player.waitForWalking();
                                 sleepUntil(Rs2Dialogue::isInDialogue,600*2);
 
@@ -9451,7 +9452,9 @@ public class Rs2Walker {
                     if (object != null) {
                         // Skip reachability check for GroundObjects and Magic Mushtrees
                         if (!(object instanceof GroundObject) && !MagicMushtree.isMagicMushtree(transport.getObjectId())) {
-                            if (!Rs2Tile.isTileReachable(transport.getOrigin())) {
+                            boolean originReachable = Rs2Tile.isTileReachable(transport.getOrigin());
+                            if (!shouldAttemptTransportObject(
+                                    originReachable, Rs2Player.getWorldLocation(), transport.getOrigin())) {
                                 break;
                             }
                         }
@@ -10293,6 +10296,47 @@ public class Rs2Walker {
         // evaluated only after the transport handler has reported success, so the wider tolerance
         // confirms the landing without making transport discovery or path selection permissive.
         return isNearSamePlane(currentLocation, transportDestination, 3);
+    }
+
+    static boolean shouldAttemptTransportObject(boolean originReachable,
+                                                WorldPoint playerLoc,
+                                                WorldPoint transportOrigin) {
+        // Opening a door updates the live collision map asynchronously. During that short window,
+        // the next catalog object can be directly clickable even though the origin tile is still
+        // reported unreachable. Keep the bypass as tight as the normal raw-transport handoff.
+        return originReachable || isNearSamePlane(
+                playerLoc, transportOrigin, RAW_TRANSPORT_DISPATCH_MAX_DISTANCE);
+    }
+
+    private static String resolveNpcTransportAction(Transport transport, Rs2NpcModel npc) {
+        String requestedAction = transport.getAction();
+        if (transport.getType() != TransportType.SHIP || npc == null) {
+            return requestedAction;
+        }
+
+        NPCComposition composition = Microbot.getClientThread().runOnClientThreadOptional(
+                () -> Microbot.getClient().getNpcDefinition(npc.getId())).orElse(null);
+        return composition == null
+                ? requestedAction
+                : resolveShipNpcAction(requestedAction, composition.getActions());
+    }
+
+    static String resolveShipNpcAction(String requestedAction, String[] availableActions) {
+        if (availableActions == null) {
+            return requestedAction;
+        }
+        for (String availableAction : availableActions) {
+            if (availableAction != null && requestedAction != null
+                    && availableAction.equalsIgnoreCase(requestedAction)) {
+                return availableAction;
+            }
+        }
+        for (String availableAction : availableActions) {
+            if (availableAction != null && availableAction.equalsIgnoreCase("Travel")) {
+                return availableAction;
+            }
+        }
+        return requestedAction;
     }
 
     static boolean pathContainsEdge(List<WorldPoint> path, WorldPoint origin, WorldPoint destination) {
