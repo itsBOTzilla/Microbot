@@ -280,7 +280,7 @@ After each nightly merge:
 
 The launcher uses one stable custom artifact:
 
-- file: `C:\Users\clanb\.microbot\microbot-local.jar`;
+- file: `%USERPROFILE%\.microbot\microbot-local.jar`;
 - launcher `version_pref`: `local`;
 - embedded Microbot version and Git commit remain the authoritative identity;
 - the filename never contains a commit hash or random suffix.

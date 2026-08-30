@@ -24,7 +24,7 @@
 - Keep the shared randomized inclusive 50-100 percent auto-run threshold and reroll only after successful activation.
 - Do not push private iBOT scripts, credentials, proxy values, absolute private paths, or session identifiers.
 - Pull requests, if later authorized, target only `itsBOTzilla/Microbot`, never `chsami/Microbot`.
-- The permanent local artifact is `C:\Users\clanb\.microbot\microbot-local.jar`; launcher `version_pref` is `local`.
+- The permanent local artifact is `%USERPROFILE%\.microbot\microbot-local.jar`; launcher `version_pref` is `local`.
 - Keep `microbot-2.6.21.jar` as the only official rollback artifact after cleanup.
 - Treat source, automated tests, built JAR, staged JAR, selected launcher preference, and loaded runtime as separate evidence.
 
@@ -793,8 +793,8 @@ Expected: no private material, no whitespace errors, and no active early-handoff
 
 **Files:**
 - Build: `runelite-client/build/libs/microbot-*.jar`
-- Replace after verification: `C:\Users\clanb\.microbot\microbot-local.jar`
-- Modify only `version_pref`: `C:\Users\clanb\.microbot\resource_versions.json`
+- Replace after verification: `%USERPROFILE%\.microbot\microbot-local.jar`
+- Modify only `version_pref`: `%USERPROFILE%\.microbot\resource_versions.json`
 
 **Interfaces:**
 - Consumes: clean verified Git commit from Task 8
@@ -849,7 +849,7 @@ Expected: embedded commit equals `git rev-parse HEAD`, dirty is `false`, and a s
 Run after the normal Microbot client has been closed:
 
 ```powershell
-$launcher = 'C:\Users\clanb\.microbot'
+$launcher = Join-Path $env:USERPROFILE '.microbot'
 $temporaryJar = Join-Path $launcher 'microbot-local.jar.pending'
 $stableJar = Join-Path $launcher 'microbot-local.jar'
 Copy-Item -LiteralPath $sourceJar.FullName -Destination $temporaryJar -Force
@@ -861,7 +861,7 @@ if (Test-Path -LiteralPath $stableJar) {
 Get-FileHash -Algorithm SHA256 -LiteralPath $sourceJar.FullName,$stableJar
 ```
 
-Expected: the two hashes are identical. Before removal/replacement, verify both resolved destinations equal the two explicit paths under `C:\Users\clanb\.microbot`.
+Expected: the two hashes are identical. Before removal/replacement, verify both resolved destinations equal the two explicit paths under `%USERPROFILE%\.microbot`.
 
 - [ ] **Step 5: Point the launcher permanently at `local`**
 
@@ -875,7 +875,8 @@ Use `apply_patch` to change only the existing JSON value:
 Then verify without printing credential fields:
 
 ```powershell
-$prefs = Get-Content -Raw -LiteralPath 'C:\Users\clanb\.microbot\resource_versions.json' | ConvertFrom-Json
+$prefsPath = Join-Path $env:USERPROFILE '.microbot\resource_versions.json'
+$prefs = Get-Content -Raw -LiteralPath $prefsPath | ConvertFrom-Json
 $prefs.version_pref
 ```
 
@@ -887,7 +888,7 @@ Expected: output is exactly `local`.
 
 **Files:**
 - Observe: fresh RuneLite/Microbot logs
-- Verify: `C:\Users\clanb\.microbot\microbot-local.jar`
+- Verify: `%USERPROFILE%\.microbot\microbot-local.jar`
 
 **Interfaces:**
 - Consumes: staged stable JAR and recorded commit/hash from Task 9
@@ -954,8 +955,8 @@ Expected: all identity fields match and every journey passes before cleanup or l
 ### Task 11: Remove Obsolete Launcher JARs After Stable Live Acceptance
 
 **Files:**
-- Keep: `C:\Users\clanb\.microbot\microbot-local.jar`
-- Keep: `C:\Users\clanb\.microbot\microbot-2.6.21.jar`
+- Keep: `%USERPROFILE%\.microbot\microbot-local.jar`
+- Keep: `%USERPROFILE%\.microbot\microbot-2.6.21.jar`
 - Remove: obsolete 2.6.20 and hash-suffixed public JARs listed below
 
 **Interfaces:**
@@ -967,7 +968,7 @@ Expected: all identity fields match and every journey passes before cleanup or l
 Run:
 
 ```powershell
-$launcher = 'C:\Users\clanb\.microbot'
+$launcher = Join-Path $env:USERPROFILE '.microbot'
 $removeNames = @(
   'microbot-2.6.20.18.jar',
   'microbot-2.6.20.19.jar',
@@ -1010,9 +1011,10 @@ Expected: only the explicitly listed obsolete files are removed. This cleanup is
 Run:
 
 ```powershell
-Get-ChildItem -LiteralPath 'C:\Users\clanb\.microbot' -File -Filter '*.jar' |
+Get-ChildItem -LiteralPath (Join-Path $env:USERPROFILE '.microbot') -File -Filter '*.jar' |
     Sort-Object Name | Select-Object Name,Length,LastWriteTime
-$prefs = Get-Content -Raw -LiteralPath 'C:\Users\clanb\.microbot\resource_versions.json' | ConvertFrom-Json
+$prefsPath = Join-Path $env:USERPROFILE '.microbot\resource_versions.json'
+$prefs = Get-Content -Raw -LiteralPath $prefsPath | ConvertFrom-Json
 $prefs.version_pref
 ```
 
