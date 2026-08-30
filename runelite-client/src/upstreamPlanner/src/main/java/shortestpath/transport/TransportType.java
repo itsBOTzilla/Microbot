@@ -41,7 +41,7 @@ public enum TransportType
 				return QUETZAL_WHISTLE;
 			}
 		},
-	QUETZAL_WHISTLE("/transports/quetzal_whistle.tsv", "useQuetzals", ShortestPathConfig::useQuetzals, "costQuetzalWhistle", ShortestPathConfig::costQuetzals)
+	QUETZAL_WHISTLE("/transports/quetzal_whistle.tsv", "useQuetzals", ShortestPathConfig::useQuetzals, "costQuetzalWhistle", ShortestPathConfig::costQuetzalWhistle)
 		{
 			@Override
 			public boolean isTeleport()

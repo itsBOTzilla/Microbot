@@ -29,6 +29,7 @@ public class DrakanClockSolver extends DetailedOwnerStep
 	ClockRotationStep rotateBigHandAntiClockwise;
 	ClockRotationStep rotateSmallHandClockwise;
 	ClockRotationStep rotateSmallHandAntiClockwise;
+	DetailedQuestStep puzzleComplete;
 
 	public DrakanClockSolver(QuestHelper questHelper, int bigHandVarbit, int bigHandTarget, int smallHandVarbit, int smallHandTarget)
 	{
@@ -54,6 +55,7 @@ public class DrakanClockSolver extends DetailedOwnerStep
 		rotateBigHandAntiClockwise = new ClockRotationStep(this.getQuestHelper(), 963, 11);
 		rotateSmallHandClockwise = new ClockRotationStep(this.getQuestHelper(), 963, 14);
 		rotateSmallHandAntiClockwise = new ClockRotationStep(this.getQuestHelper(), 963, 15);
+		puzzleComplete = new DetailedQuestStep(this.getQuestHelper(), "You're done with the clock puzzle!");
 	}
 
 	@Override
@@ -116,8 +118,7 @@ public class DrakanClockSolver extends DetailedOwnerStep
 		}
 
 
-		var done = new DetailedQuestStep(this.getQuestHelper(), "You're done with the clock puzzle!");
-		startUpStep(done);
+		startUpStep(puzzleComplete);
 	}
 
 	@Override
@@ -127,7 +128,8 @@ public class DrakanClockSolver extends DetailedOwnerStep
 			rotateBigHandClockwise,
 			rotateBigHandAntiClockwise,
 			rotateSmallHandClockwise,
-			rotateSmallHandAntiClockwise
+			rotateSmallHandAntiClockwise,
+			puzzleComplete
 		);
 	}
 

@@ -290,7 +290,6 @@ clickAndSettle(PAYBUTTON);
 int fee = getGraveFee();
 if (fee > 0) {
     if (fee > budget) return false;
-    if (coinsCarried() < fee) return false;
 }
 clickAndSettle(PAYBUTTON);
 ```
@@ -388,7 +387,7 @@ it. The legacy alias is `net.runelite.api.ObjectID.DEATHS_DOMAIN`.
 the object auto-walks the player to Death and starts the conversation, so there is no "Collect"/"Talk-to"
 click to make. Advance Death's lines, then choose **`Yes, have you got anything for me?`** (group 219):
 
-```
+```text
 219.1 idx=1  'How does that work?'
 219.1 idx=2  'What is this place?'
 219.1 idx=3  'Yes, have you got anything for me?'   <- the reclaim option

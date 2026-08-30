@@ -12,8 +12,8 @@ import java.util.StringJoiner;
  * Live arbiter state, for verifying the yield against a running client. Off unless
  * {@code -Dmicrobot.inputDebug=true}.
  *
- * <p>A yield fault has one visible symptom and three causes: the listener never attached, the
-	 * listener never attached, a press was never recorded, or the waits never observed the flag.
+	 * <p>A yield fault has one visible symptom and three causes: the listener never attached, a press
+	 * was never recorded, or the waits never observed the flag.
 	 * This separates them.
  */
 public final class InputDiagnostics

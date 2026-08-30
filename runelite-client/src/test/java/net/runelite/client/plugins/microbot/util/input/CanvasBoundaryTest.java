@@ -90,8 +90,8 @@ public class CanvasBoundaryTest
 		when(client.isStretchedEnabled()).thenReturn(false);
 		// Without a size the emitter cannot tell an edge exit from a covered one and falls back to
 		// exact re-entry, which would let these pass without exercising anything.
-		when(client.getCanvasWidth()).thenReturn(765);
-		when(client.getCanvasHeight()).thenReturn(503);
+		when(client.getCanvasWidth()).thenReturn(W);
+		when(client.getCanvasHeight()).thenReturn(H);
 
 		previousClient = swapStatic("client", client);
 		previousNaturalMouse = swapStatic("naturalMouse", null);
@@ -127,6 +127,18 @@ public class CanvasBoundaryTest
 		assertEquals(412, PointerState.getX());
 		assertEquals(318, PointerState.getY());
 		assertFalse("leaving the canvas is not an intent to take over", InputArbiter.isHuman());
+	}
+
+	@Test
+	public void humanOwnershipDoesNotSynthesizeReentryOrClearOutsideState()
+	{
+		PointerState.markOutside();
+		InputArbiter.onRealButtonPressed(MouseEvent.BUTTON1);
+
+		AwtEmitter.pressed(100, 100, MouseEvent.BUTTON1);
+
+		assertTrue(PointerState.isOutside());
+		assertFalse(received.stream().anyMatch(event -> event.getID() == MouseEvent.MOUSE_ENTERED));
 	}
 
 	@Test

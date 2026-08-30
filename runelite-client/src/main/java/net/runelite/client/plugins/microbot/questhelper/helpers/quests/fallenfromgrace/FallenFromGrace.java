@@ -293,7 +293,7 @@ public class FallenFromGrace extends BasicQuestHelper
 
 		ConditionalStep goReturnToCormac = new ConditionalStep(this, travelToWyrmscraig);
 		goReturnToCormac.addStep(onIsland, returnToCormac);
-		steps.put(6, returnToCormac);
+		steps.put(6, goReturnToCormac);
 
 		ConditionalStep goTalkToMortimer = new ConditionalStep(this, goMakeCore);
 		goTalkToMortimer.addStep(inWyrmscraigCavern, talkToMortimer);

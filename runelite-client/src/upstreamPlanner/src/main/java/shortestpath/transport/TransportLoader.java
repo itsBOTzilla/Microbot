@@ -1,6 +1,7 @@
 package shortestpath.transport;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
@@ -27,11 +28,9 @@ public class TransportLoader
 		Map<Integer, Set<Transport>> transports, String path, TransportType transportType,
 		int radiusThreshold)
 	{
-		try
+		try (InputStream input = Objects.requireNonNull(ShortestPathPlugin.class.getResourceAsStream(path)))
 		{
-			String s = new String(
-				Util.readAllBytes(Objects.requireNonNull(ShortestPathPlugin.class.getResourceAsStream(path))),
-				StandardCharsets.UTF_8);
+			String s = new String(Util.readAllBytes(input), StandardCharsets.UTF_8);
 			addTransportsFromContents(transports, s, transportType, radiusThreshold);
 		}
 		catch (IOException e)

@@ -194,6 +194,32 @@ public class Rs2KeyboardHeldKeysTest
 	}
 
 	@Test
+	public void printablePressReleasesEvenWhenTypedListenerThrows()
+	{
+		canvas.addKeyListener(new KeyAdapter()
+		{
+			@Override
+			public void keyTyped(KeyEvent event)
+			{
+				throw new IllegalStateException("typed listener failed");
+			}
+		});
+
+		try
+		{
+			Rs2Keyboard.keyPress(KeyEvent.VK_A);
+		}
+		catch (IllegalStateException expected)
+		{
+			assertEquals("typed listener failed", expected.getMessage());
+		}
+
+		assertEquals(KeyEvent.KEY_PRESSED, received.get(0).getID());
+		assertEquals(KeyEvent.KEY_TYPED, received.get(1).getID());
+		assertEquals(KeyEvent.KEY_RELEASED, received.get(2).getID());
+	}
+
+	@Test
 	public void aSuppressedHoldIsNotFollowedByARelease()
 	{
 		net.runelite.client.plugins.microbot.util.input.PointerState.setFromBot(100, 100);

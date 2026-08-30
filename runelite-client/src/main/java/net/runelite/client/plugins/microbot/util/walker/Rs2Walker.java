@@ -1517,7 +1517,8 @@ public class Rs2Walker {
      * <p>Return values: {@link WalkerState#ARRIVED} when within {@code distance} of {@code target};
      * {@link WalkerState#MOVING} while still approaching (path computing, in transit, or a click issued);
      * {@link WalkerState#UNREACHABLE} when no walkable path reaches within {@code distance};
-     * {@link WalkerState#EXIT} on a bad call (null target / client thread / no config).
+     * {@link WalkerState#EXIT} on a bad call (null target / client thread / no config) or while the
+     * human owns input. A human-owned exit preserves the target so a later caller can resume it.
      *
      * <p>Scope: plain approach-walking. It reuses the shared pathfinder + minimap machinery but NOT the
      * full {@link #processWalk} transport/door/stuck-recovery pipeline, so a route that needs a transport
@@ -4273,8 +4274,7 @@ public class Rs2Walker {
     }
 
     private static boolean walkFastCanvasOnScreenOnly(WorldPoint worldPoint, Runnable beforeDispatch) {
-        Rectangle dispatchBounds = Microbot.getClientThread().runOnClientThreadOptional(
-                () -> canvasWalkDispatchBounds(worldPoint)).orElse(null);
+        Rectangle dispatchBounds = canvasWalkDispatchBounds(worldPoint);
         if (dispatchBounds == null) {
             return false;
         }
@@ -4293,22 +4293,24 @@ public class Rs2Walker {
     }
 
     private static Rectangle canvasWalkDispatchBounds(WorldPoint worldPoint) {
-        LocalPoint localPoint = localPointForWorld(worldPoint);
-        if (localPoint == null || !Rs2Camera.isTileOnScreen(localPoint)) {
-            return null;
-        }
-        Point canvasPoint = Perspective.localToCanvas(
-                Microbot.getClient(),
-                localPoint,
-                Microbot.getClient().getTopLevelWorldView().getPlane());
-        if (canvasPoint == null || canvasPoint.getX() < 0 || canvasPoint.getY() < 0) {
-            return null;
-        }
-        return new Rectangle(
-                canvasPoint.getX(),
-                canvasPoint.getY(),
-                Microbot.getClient().getCanvasWidth(),
-                Microbot.getClient().getCanvasHeight());
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            LocalPoint localPoint = localPointForWorld(worldPoint);
+            if (localPoint == null || !Rs2Camera.isTileOnScreen(localPoint)) {
+                return null;
+            }
+            Point canvasPoint = Perspective.localToCanvas(
+                    Microbot.getClient(),
+                    localPoint,
+                    Microbot.getClient().getTopLevelWorldView().getPlane());
+            if (canvasPoint == null || canvasPoint.getX() < 0 || canvasPoint.getY() < 0) {
+                return null;
+            }
+            return new Rectangle(
+                    canvasPoint.getX(),
+                    canvasPoint.getY(),
+                    Microbot.getClient().getCanvasWidth(),
+                    Microbot.getClient().getCanvasHeight());
+        }).orElse(null);
     }
 
     private static LocalPoint localPointForWorld(WorldPoint worldPoint) {

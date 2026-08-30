@@ -258,7 +258,8 @@ public class NodeGraph
 		{
 			return new ArrayList<>();
 		}
-		final int len = prev.length;
+		final int len = Math.min(Math.min(prev.length, packed.length),
+			Math.min(flg.length, selectedTransports.length));
 
 		int node = id;
 		int n = 0;
@@ -306,7 +307,7 @@ public class NodeGraph
 		{
 			return WorldPointUtil.UNDEFINED;
 		}
-		final int len = prev.length;
+		final int len = Math.min(prev.length, Math.min(packed.length, flg.length));
 		int node = id;
 		while (node != NO_NODE && node < len && (flg[node] & FLAG_ABSTRACT) != 0)
 		{

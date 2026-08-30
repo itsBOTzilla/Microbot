@@ -69,10 +69,18 @@ public class VirtualMouse extends Mouse {
      * happen on the client thread. Every gesture goes through here so none can forget.
      */
     private void runGesture(Runnable gesture) {
+        Runnable observedGesture = () -> {
+            try {
+                gesture.run();
+            } catch (RuntimeException | Error failure) {
+                log.error("Virtual mouse gesture failed", failure);
+                throw failure;
+            }
+        };
         if (Microbot.getClient().isClientThread()) {
-            scheduledExecutorService.schedule(gesture, 0, TimeUnit.MILLISECONDS);
+            scheduledExecutorService.schedule(observedGesture, 0, TimeUnit.MILLISECONDS);
         } else {
-            gesture.run();
+            observedGesture.run();
         }
     }
 

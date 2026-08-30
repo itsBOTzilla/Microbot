@@ -30,12 +30,15 @@ public class GildedBookPuzzle extends QuestStep
 	@Override
 	public void startUp()
 	{
+		super.startUp();
 		updateSolvedPositionState();
 	}
 
 	@Subscribe
+	@Override
 	public void onVarbitChanged(VarbitChanged varbitChanged)
 	{
+		super.onVarbitChanged(varbitChanged);
 		updateSolvedPositionState();
 	}
 

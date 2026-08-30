@@ -263,8 +263,10 @@ public class DetailedQuestStep extends QuestStep
 	}
 
 	@Subscribe
+	@Override
 	public void onVarbitChanged(final VarbitChanged event)
 	{
+		super.onVarbitChanged(event);
 		if (worldPointVarp != null && event.getVarpId() == worldPointVarp)
 		{
 			updateWorldPointFromVarpValue(event.getValue());

@@ -216,12 +216,18 @@ public class Rs2Keyboard
 		{
 			return;
 		}
-		int delay = Rs2Random.logNormalBounded(20, 200);
-		dispatchKeyEvent(KeyEvent.KEY_TYPED, KeyEvent.VK_UNDEFINED, typed, delay);
-		// Unconditional: the press went out, so the release owes the client its pair even if the
-		// human took over in between.
-		int releaseDelay = Rs2Random.between(20, 200);
-		dispatchKeyEvent(KeyEvent.KEY_RELEASED, key, CHAR_UNDEFINED, releaseDelay);
+		try
+		{
+			int delay = Rs2Random.logNormalBounded(20, 200);
+			dispatchKeyEvent(KeyEvent.KEY_TYPED, KeyEvent.VK_UNDEFINED, typed, delay);
+		}
+		finally
+		{
+			// Unconditional: the press went out, so the release owes the client its pair even if the
+			// human took over or a typed-event listener threw in between.
+			int releaseDelay = Rs2Random.between(20, 200);
+			dispatchKeyEvent(KeyEvent.KEY_RELEASED, key, CHAR_UNDEFINED, releaseDelay);
+		}
 	}
 
 	/**

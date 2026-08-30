@@ -356,7 +356,7 @@ public class NpcStep extends DetailedQuestStep
 				var iconToUse = this.icon;
 				for (var customIcon : customIcons)
 				{
-					if (customIcon.getTargetId() == npc.getId())
+					if (customIcon.getTargetId() == npc.getId() && customIcon.getIcon() != null)
 					{
 						iconToUse = customIcon.getIcon();
 						break;

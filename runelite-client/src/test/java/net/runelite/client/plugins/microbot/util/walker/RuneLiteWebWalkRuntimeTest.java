@@ -176,9 +176,13 @@ public class RuneLiteWebWalkRuntimeTest
     {
         AtomicInteger clientThreadCalls = new AtomicInteger();
         AtomicInteger directProjectionCalls = new AtomicInteger();
+        AtomicInteger clientThreadProjectionCalls = new AtomicInteger();
+        AtomicInteger boundsHelperCalls = new AtomicInteger();
         String clientThreadOwner = "net/runelite/client/callback/ClientThread";
         String perspectiveOwner = "net/runelite/api/Perspective";
+        String walkerOwner = Type.getInternalName(Rs2Walker.class);
         String wrapperDescriptor = "(Lnet/runelite/api/coords/WorldPoint;Ljava/lang/Runnable;)Z";
+        String boundsDescriptor = "(Lnet/runelite/api/coords/WorldPoint;)Ljava/awt/Rectangle;";
 
         try (InputStream stream = Rs2Walker.class.getResourceAsStream("Rs2Walker.class"))
         {
@@ -189,8 +193,12 @@ public class RuneLiteWebWalkRuntimeTest
                 public MethodVisitor visitMethod(int access, String name, String descriptor,
                                                  String signature, String[] exceptions)
                 {
-                    if (!name.equals("walkFastCanvasOnScreenOnly")
-                            || !descriptor.equals(wrapperDescriptor))
+                    boolean wrapper = name.equals("walkFastCanvasOnScreenOnly")
+                            && descriptor.equals(wrapperDescriptor);
+                    boolean boundsHelper = name.equals("canvasWalkDispatchBounds")
+                            && descriptor.equals(boundsDescriptor);
+                    boolean boundsLambda = name.startsWith("lambda$canvasWalkDispatchBounds$");
+                    if (!wrapper && !boundsHelper && !boundsLambda)
                     {
                         return null;
                     }
@@ -200,15 +208,26 @@ public class RuneLiteWebWalkRuntimeTest
                         public void visitMethodInsn(int opcode, String owner, String methodName,
                                                     String methodDescriptor, boolean isInterface)
                         {
-                            if (owner.equals(clientThreadOwner)
+                            if (boundsHelper && owner.equals(clientThreadOwner)
                                     && methodName.equals("runOnClientThreadOptional"))
                             {
                                 clientThreadCalls.incrementAndGet();
                             }
-                            if (owner.equals(perspectiveOwner)
+                            if (wrapper && owner.equals(walkerOwner)
+                                    && methodName.equals("canvasWalkDispatchBounds")
+                                    && methodDescriptor.equals(boundsDescriptor))
+                            {
+                                boundsHelperCalls.incrementAndGet();
+                            }
+                            if (wrapper && owner.equals(perspectiveOwner)
                                     && methodName.equals("localToCanvas"))
                             {
                                 directProjectionCalls.incrementAndGet();
+                            }
+                            if (boundsLambda && owner.equals(perspectiveOwner)
+                                    && methodName.equals("localToCanvas"))
+                            {
+                                clientThreadProjectionCalls.incrementAndGet();
                             }
                         }
                     };
@@ -218,8 +237,12 @@ public class RuneLiteWebWalkRuntimeTest
 
         assertEquals("canvas state must be captured through the RuneLite client thread", 1,
                 clientThreadCalls.get());
+        assertEquals("canvas dispatch must call the client-thread bounds helper", 1,
+                boundsHelperCalls.get());
         assertEquals("the walker thread must not project live canvas state directly", 0,
                 directProjectionCalls.get());
+        assertEquals("canvas projection must remain inside the client-thread lambda", 1,
+                clientThreadProjectionCalls.get());
     }
 
     @Test
