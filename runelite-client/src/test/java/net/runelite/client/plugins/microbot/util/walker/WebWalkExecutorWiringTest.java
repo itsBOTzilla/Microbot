@@ -19,6 +19,55 @@ import static org.junit.Assert.assertTrue;
 public class WebWalkExecutorWiringTest
 {
     @Test
+    public void publicBlockingFacadeConvergesOnNewExecutorOwner() throws IOException
+    {
+        AtomicBoolean invokesInternalOwner = new AtomicBoolean();
+        AtomicBoolean invokesLegacyLoop = new AtomicBoolean();
+        String walkerOwner = Type.getInternalName(Rs2Walker.class);
+        String facadeDescriptor = Type.getMethodDescriptor(
+                Type.getType(WalkerState.class), Type.getType(WorldPoint.class), Type.INT_TYPE);
+        String internalDescriptor = facadeDescriptor;
+
+        try (InputStream stream = Rs2Walker.class.getResourceAsStream("Rs2Walker.class"))
+        {
+            assertTrue(stream != null);
+            new ClassReader(stream).accept(new ClassVisitor(Opcodes.ASM9)
+            {
+                @Override
+                public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                 String signature, String[] exceptions)
+                {
+                    if (!name.equals("walkWithState") || !descriptor.equals(facadeDescriptor))
+                    {
+                        return null;
+                    }
+                    return new MethodVisitor(Opcodes.ASM9)
+                    {
+                        @Override
+                        public void visitMethodInsn(int opcode, String owner, String methodName,
+                                                    String methodDescriptor, boolean isInterface)
+                        {
+                            if (owner.equals(walkerOwner)
+                                    && methodName.equals("walkWithStateInternal")
+                                    && methodDescriptor.equals(internalDescriptor))
+                            {
+                                invokesInternalOwner.set(true);
+                            }
+                            if (owner.equals(walkerOwner) && methodName.equals("processWalk"))
+                            {
+                                invokesLegacyLoop.set(true);
+                            }
+                        }
+                    };
+                }
+            }, 0);
+        }
+
+        assertTrue(invokesInternalOwner.get());
+        assertFalse(invokesLegacyLoop.get());
+    }
+
+    @Test
     public void blockingWalkerUsesSingleActionExecutorInsteadOfLegacyProcessLoop() throws IOException
     {
         AtomicBoolean createsSession = new AtomicBoolean();
