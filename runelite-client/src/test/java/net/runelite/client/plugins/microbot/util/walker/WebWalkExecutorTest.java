@@ -7,6 +7,7 @@ import net.runelite.api.coords.WorldPoint;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 
 public class WebWalkExecutorTest
 {
@@ -161,6 +162,22 @@ public class WebWalkExecutorTest
         assertEquals(WalkerState.ARRIVED, result);
         assertEquals(Arrays.asList("observe", "dispatch", "await", "observe", "finish"),
                 runtime.events);
+    }
+
+    @Test
+    public void routeActionPreemptsMovementThenResumesWithoutDoubleDispatch()
+    {
+        RouteActionRuntime runtime = new RouteActionRuntime();
+
+        WalkerState result = new WebWalkExecutor().walk(new WebWalkSession(GOAL, 0), runtime);
+
+        assertEquals(WalkerState.ARRIVED, result);
+        assertEquals(Arrays.asList(
+                "observe", "dispatch", "await",
+                "observe", "interact", "await",
+                "observe", "dispatch", "await",
+                "observe", "finish"), runtime.events);
+        assertEquals(2, runtime.dispatches);
     }
 
     @Test
@@ -329,6 +346,82 @@ public class WebWalkExecutorTest
         public void finish(WalkerState state, String reason)
         {
             finishedReason = reason;
+        }
+    }
+
+    private static final class RouteActionRuntime implements WebWalkRuntime
+    {
+        private final List<String> events = new ArrayList<>();
+        private int observations;
+        private int dispatches;
+        private WebWalkSession session;
+
+        @Override
+        public Observation observe(WebWalkSession currentSession)
+        {
+            events.add("observe");
+            session = currentSession;
+            switch (observations++)
+            {
+                case 0:
+                    return ready(100, START, 1, 0, point(10), 3, false);
+                case 1:
+                    assertEquals("the first accepted movement must establish ownership",
+                            point(10), currentSession.getCheckpoint());
+                    assertEquals(3, currentSession.getCheckpointPathIndex());
+                    return ready(101, START, 1, 0, point(12), 4, true);
+                case 2:
+                    return ready(102, point(1), 1, 1, point(12), 4, false);
+                default:
+                    return new Observation(103, point(2), Status.ARRIVED,
+                            route(1), 2, null, -1, false);
+            }
+        }
+
+        @Override
+        public DispatchResult dispatchMinimap(WorldPoint requestedTarget, int pathIndex,
+                                               boolean redispatch)
+        {
+            events.add("dispatch");
+            if (dispatches++ == 0)
+            {
+                assertEquals(point(10), requestedTarget);
+                assertEquals(3, pathIndex);
+            }
+            else
+            {
+                assertEquals(point(12), requestedTarget);
+                assertEquals(4, pathIndex);
+            }
+            assertEquals(false, redispatch);
+            return DispatchResult.accepted(requestedTarget);
+        }
+
+        @Override
+        public ActionResult interactRouteEdge(Observation observation)
+        {
+            events.add("interact");
+            assertNull("route actions must clear the active movement checkpoint before input",
+                    session.getCheckpoint());
+            return ActionResult.ACCEPTED;
+        }
+
+        @Override
+        public void replan(WebWalkSession currentSession, String reason)
+        {
+            throw new AssertionError("unexpected replan");
+        }
+
+        @Override
+        public void awaitChange(Observation observation)
+        {
+            events.add("await");
+        }
+
+        @Override
+        public void finish(WalkerState state, String reason)
+        {
+            events.add("finish");
         }
     }
 }
