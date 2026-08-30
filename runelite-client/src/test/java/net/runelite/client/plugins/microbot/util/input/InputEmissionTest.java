@@ -197,6 +197,7 @@ public class InputEmissionTest
 		assertEquals(100, StretchMapper.toCanvas(100, 50).getX());
 		assertEquals(50, StretchMapper.toCanvas(100, 50).getY());
 		assertEquals(100, StretchMapper.toComponent(100, 50).getX());
+		assertEquals(50, StretchMapper.toComponent(100, 50).getY());
 	}
 
 	@Test

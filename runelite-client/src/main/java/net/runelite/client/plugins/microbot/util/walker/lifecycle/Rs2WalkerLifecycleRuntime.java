@@ -7,6 +7,7 @@ import net.runelite.api.Player;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.Microbot;
+import net.runelite.client.plugins.microbot.shortestpath.WorldPointUtil;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.Pathfinder;
 import net.runelite.client.plugins.microbot.util.walker.Rs2PathApi;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
@@ -20,6 +21,21 @@ import java.util.concurrent.ThreadFactory;
 
 @Slf4j
 public final class Rs2WalkerLifecycleRuntime {
+
+    private static final long PENDING_TRANSPORT_SUPPRESSION_TTL_MS = 15_000L;
+    private static PendingTransportSuppression pendingTransportSuppression;
+
+    private static final class PendingTransportSuppression {
+        private final WorldPoint origin;
+        private final WorldPoint destination;
+        private final long createdAtMs;
+
+        private PendingTransportSuppression(WorldPoint origin, WorldPoint destination, long createdAtMs) {
+            this.origin = origin;
+            this.destination = destination;
+            this.createdAtMs = createdAtMs;
+        }
+    }
 
     private Rs2WalkerLifecycleRuntime() {
     }
@@ -87,6 +103,68 @@ public final class Rs2WalkerLifecycleRuntime {
     }
 
     public static boolean restartPathfinding(WorldPoint start, Set<WorldPoint> ends) {
+        PendingTransportSuppression suppression = consumePendingTransportSuppression(start, ends);
+        return restartPathfinding(start, ends,
+                suppression != null ? suppression.origin : null,
+                suppression != null ? suppression.destination : null);
+    }
+
+    public static synchronized void suppressReverseTransportOnNextPath(WorldPoint origin,
+                                                                        WorldPoint destination) {
+        if (origin == null || destination == null) {
+            pendingTransportSuppression = null;
+            return;
+        }
+        // Cross-route carryover is needed for terminal surface/underground handoffs such as
+        // Edgeville. Same coordinate-layer continuations are handled by the current route and are
+        // not retained, avoiding an unrelated later walk inheriting a stale boat/door edge.
+        if (sameCoordinateLayer(origin, destination)) {
+            pendingTransportSuppression = null;
+            return;
+        }
+        pendingTransportSuppression = new PendingTransportSuppression(
+                origin, destination, System.currentTimeMillis());
+    }
+
+    private static synchronized PendingTransportSuppression consumePendingTransportSuppression(
+            WorldPoint start, Set<WorldPoint> ends) {
+        PendingTransportSuppression suppression = pendingTransportSuppression;
+        if (suppression == null) {
+            return null;
+        }
+        long ageMs = System.currentTimeMillis() - suppression.createdAtMs;
+        if (ageMs < 0L || ageMs > PENDING_TRANSPORT_SUPPRESSION_TTL_MS
+                || !sameLayerAndNear(start, suppression.origin, 3)) {
+            pendingTransportSuppression = null;
+            return null;
+        }
+        if (ends != null && ends.contains(start)) {
+            return null;
+        }
+        boolean explicitReverseRequested = ends != null && ends.stream()
+                .anyMatch(end -> sameCoordinateLayer(end, suppression.destination));
+        pendingTransportSuppression = null;
+        return explicitReverseRequested ? null : suppression;
+    }
+
+    private static boolean sameLayerAndNear(WorldPoint a, WorldPoint b, int distance) {
+        return a != null
+                && b != null
+                && a.getPlane() == b.getPlane()
+                && a.distanceTo2D(b) <= distance;
+    }
+
+    private static boolean sameCoordinateLayer(WorldPoint a, WorldPoint b) {
+        return a != null
+                && b != null
+                && a.getPlane() == b.getPlane()
+                && Math.floorDiv(a.getY(), WorldPointUtil.UNDERGROUND_Y_OFFSET)
+                == Math.floorDiv(b.getY(), WorldPointUtil.UNDERGROUND_Y_OFFSET);
+    }
+
+    public static boolean restartPathfinding(WorldPoint start, Set<WorldPoint> ends,
+                                             WorldPoint suppressedTransportOrigin,
+                                             WorldPoint suppressedTransportDestination) {
         Pathfinder pathfinder = Rs2PathApi.getPathfinder();
         if (pathfinder != null) {
             pathfinder.cancel();
@@ -106,11 +184,13 @@ public final class Rs2WalkerLifecycleRuntime {
             // Cave pathfinding runs synchronously, so no Future represents the pathfinder installed below.
             // Clear the cancelled asynchronous handle instead of leaving stale "work in flight" state.
             Rs2PathApi.setPathfinderFuture(null);
-            pathfinder = new Pathfinder(Rs2PathApi.getPathfinderConfig(), start, ends);
+            pathfinder = new Pathfinder(Rs2PathApi.getPathfinderConfig(), start, ends,
+                    suppressedTransportOrigin, suppressedTransportDestination);
             pathfinder.run();
             try {
                 Rs2PathApi.getPathfinderConfig().setIgnoreTeleportAndItems(true);
-                Pathfinder pathfinderWithoutTeleports = new Pathfinder(Rs2PathApi.getPathfinderConfig(), start, ends);
+                Pathfinder pathfinderWithoutTeleports = new Pathfinder(Rs2PathApi.getPathfinderConfig(), start, ends,
+                        suppressedTransportOrigin, suppressedTransportDestination);
                 pathfinderWithoutTeleports.run();
 
                 boolean noTeleportPathAvailable = !pathfinderWithoutTeleports.getPath().isEmpty();
@@ -134,7 +214,8 @@ public final class Rs2WalkerLifecycleRuntime {
                 Rs2PathApi.getPathfinderConfig().setIgnoreTeleportAndItems(false);
             }
         } else {
-            Rs2PathApi.setPathfinder(new Pathfinder(Rs2PathApi.getPathfinderConfig(), start, ends));
+            Rs2PathApi.setPathfinder(new Pathfinder(Rs2PathApi.getPathfinderConfig(), start, ends,
+                    suppressedTransportOrigin, suppressedTransportDestination));
             Rs2PathApi.setPathfinderFuture(Rs2PathApi.getPathfindingExecutor().submit(Rs2PathApi.getPathfinder()));
         }
         return true;

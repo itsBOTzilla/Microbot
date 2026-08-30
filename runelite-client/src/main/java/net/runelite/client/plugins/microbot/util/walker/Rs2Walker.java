@@ -115,6 +115,8 @@ public class Rs2Walker {
     public static ShortestPathConfig config;
     // stuck/movement tracking state migrated to WalkerRouteState (see routeState)
     static volatile WorldPoint currentTarget;
+    private static final Object currentTargetOwnershipMutex = new Object();
+    private static final AtomicLong currentTargetGeneration = new AtomicLong();
     static int nextWalkingDistance = 10;
 
     /**
@@ -124,6 +126,30 @@ public class Rs2Walker {
      */
     public static WorldPoint getCurrentTarget() {
         return currentTarget;
+    }
+
+    public static long getCurrentTargetGeneration() {
+        return currentTargetGeneration.get();
+    }
+
+    static long currentTargetGenerationIfOwned(WorldPoint expectedTarget) {
+        synchronized (currentTargetOwnershipMutex) {
+            return Objects.equals(currentTarget, expectedTarget)
+                    ? currentTargetGeneration.get()
+                    : -1L;
+        }
+    }
+
+    static long updateCurrentTargetOwnership(WorldPoint target) {
+        synchronized (currentTargetOwnershipMutex) {
+            return updateCurrentTargetOwnershipLocked(target);
+        }
+    }
+
+    private static long updateCurrentTargetOwnershipLocked(WorldPoint target) {
+        long generation = currentTargetGeneration.incrementAndGet();
+        currentTarget = target;
+        return generation;
     }
 
 	/**
@@ -652,13 +678,21 @@ public class Rs2Walker {
         if (player == null || target == null || player.getPlane() != target.getPlane()) {
             return false;
         }
+        // Exact observed arrival is authoritative. A superseded path snapshot can still contain
+        // the inverse of a transport that just landed; do not let that stale edge pull the player
+        // back through the transport after they are already standing on the requested target.
+        if (player.equals(target)) {
+            return true;
+        }
         WorldPoint endpoint = walkPath == null || walkPath.isEmpty()
                 ? null : walkPath.get(walkPath.size() - 1);
         int configuredDistance = Math.max(0, configuredChebyshev);
+        int finishDistance = tightFinishThreshold(target, endpoint, configuredDistance);
         boolean endpointArrival = endpoint != null
                 && endpoint.getPlane() == target.getPlane()
                 && endpoint.distanceTo2D(target) <= configuredDistance
-                && player.distanceTo2D(endpoint) <= 1;
+                && player.distanceTo2D(endpoint) <= 1
+                && player.distanceTo2D(target) <= finishDistance;
         boolean pendingTransport = hasPendingExplicitTransportStepBeforeArrival(
                 rawPath, target, configuredDistance)
                 || hasPendingExplicitTransportStepBeforeArrival(
@@ -666,7 +700,6 @@ public class Rs2Walker {
         if (endpointArrival && !pendingTransport) {
             return true;
         }
-        int finishDistance = tightFinishThreshold(target, endpoint, configuredDistance);
         return player.distanceTo2D(target) <= finishDistance && !pendingTransport;
     }
 
@@ -963,6 +996,18 @@ public class Rs2Walker {
      */
     public static void clearWalkingRoute(String reason) {
         setTarget(null, reason != null && !reason.isBlank() ? reason : "unspecified");
+    }
+
+    static boolean clearWalkingRouteIfOwned(WorldPoint expectedTarget, long expectedGeneration,
+                                             String reason) {
+        synchronized (currentTargetOwnershipMutex) {
+            if (currentTargetGeneration.get() != expectedGeneration
+                    || !Objects.equals(currentTarget, expectedTarget)) {
+                return false;
+            }
+            clearTargetLocked(reason != null && !reason.isBlank() ? reason : "unspecified");
+            return true;
+        }
     }
 
     // lastRouteClearReason / lastRouteClearAtMs migrated to WalkerRouteState; the @Getter-generated
@@ -1460,11 +1505,21 @@ public class Rs2Walker {
         if (!hasCurrentPath) {
             setTarget(target);
         } else {
-            currentTarget = target;
+            updateCurrentTargetOwnership(target);
         }
         Rs2PathApi.setReachedDistance(distance);
         routeState.stuckCount = 0;
         routeState.lastMovedTimeMs = System.currentTimeMillis();
+		routeState.interimTargetWp = null;
+		routeState.interimTargetIdx = -1;
+		routeState.interimSetAtMs = 0L;
+        routeState.interimLastProgressAtMs = 0L;
+        routeState.interimLastBestPathIdx = -1;
+        routeState.interimLastDistanceToTarget = Integer.MAX_VALUE;
+        routeState.interimInitialDistanceToTarget = Integer.MAX_VALUE;
+        routeState.interimLastObservedPlayerPosition = null;
+        routeState.interimLastRetargetAtMs = 0L;
+        routeState.interimTargetRecovery = false;
         routeState.lastPartialTransRecalcMs = 0L;
         routeState.idleNudgeLastObservedLocation = playerLocWalk;
         routeState.idleNudgeStationarySinceMs = System.currentTimeMillis();
@@ -1492,11 +1547,16 @@ public class Rs2Walker {
             setTarget(null, "webwalk-executor:target-not-walkable");
             return WalkerState.UNREACHABLE;
         }
-        WebWalkSession session = new WebWalkSession(target, distance);
+        long targetGeneration = currentTargetGenerationIfOwned(target);
+        if (targetGeneration < 0L) {
+            return WalkerState.EXIT;
+        }
+        WebWalkSession session = new WebWalkSession(target, distance, targetGeneration);
         if (debug) {
             return WalkerState.EXIT;
         }
-        return new WebWalkExecutor().walk(session, new RuneLiteWebWalkRuntime(target, distance));
+        return new WebWalkExecutor().walk(session,
+                new RuneLiteWebWalkRuntime(target, distance, session.getTargetGeneration()));
     }
 
     /**
@@ -1517,7 +1577,8 @@ public class Rs2Walker {
      * <p>Return values: {@link WalkerState#ARRIVED} when within {@code distance} of {@code target};
      * {@link WalkerState#MOVING} while still approaching (path computing, in transit, or a click issued);
      * {@link WalkerState#UNREACHABLE} when no walkable path reaches within {@code distance};
-     * {@link WalkerState#EXIT} on a bad call (null target / client thread / no config).
+     * {@link WalkerState#EXIT} on a bad call (null target / client thread / no config) or while the
+     * human owns input. A human-owned exit preserves the target so a later caller can resume it.
      *
      * <p>Scope: plain approach-walking. It reuses the shared pathfinder + minimap machinery but NOT the
      * full {@link #processWalk} transport/door/stuck-recovery pipeline, so a route that needs a transport
@@ -4263,33 +4324,53 @@ public class Rs2Walker {
         return walkFastCanvas(worldPoint, true);
     }
 
+    /** Canvas-only movement for the WebWalker runtime; preserves the shared run-energy policy. */
+    static boolean walkFastCanvasOnScreenOnly(WorldPoint worldPoint) {
+        return walkFastCanvasOnScreenOnly(worldPoint, () -> { });
+    }
+
     private static boolean walkFastCanvasOnScreenOnly(WorldPoint worldPoint, boolean toggleRun) {
-        LocalPoint localPoint = localPointForWorld(worldPoint);
-        if (localPoint == null || !Rs2Camera.isTileOnScreen(localPoint)) {
-            return false;
-        }
-        Point canvasPoint = Perspective.localToCanvas(
-                Microbot.getClient(),
-                localPoint,
-                Microbot.getClient().getTopLevelWorldView().getPlane());
-        int canvasX = canvasPoint != null ? canvasPoint.getX() : -1;
-        int canvasY = canvasPoint != null ? canvasPoint.getY() : -1;
-        if (canvasX < 0 || canvasY < 0) {
+        return walkFastCanvasOnScreenOnly(worldPoint, () -> Rs2Player.toggleRunEnergy(toggleRun));
+    }
+
+    private static boolean walkFastCanvasOnScreenOnly(WorldPoint worldPoint, Runnable beforeDispatch) {
+        Rectangle dispatchBounds = canvasWalkDispatchBounds(worldPoint);
+        if (dispatchBounds == null) {
             return false;
         }
 
-        Rs2Player.toggleRunEnergy(toggleRun);
+        beforeDispatch.run();
         NewMenuEntry entry = new NewMenuEntry()
-                .param0(canvasX)
-                .param1(canvasY)
+                .param0(dispatchBounds.x)
+                .param1(dispatchBounds.y)
                 .type(MenuAction.WALK)
                 .identifier(0)
                 .itemId(0)
                 .option("Walk here");
 
-        Microbot.doInvoke(entry,
-                new Rectangle(canvasX, canvasY, Microbot.getClient().getCanvasWidth(), Microbot.getClient().getCanvasHeight()));
+        Microbot.doInvoke(entry, dispatchBounds);
         return true;
+    }
+
+    private static Rectangle canvasWalkDispatchBounds(WorldPoint worldPoint) {
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            LocalPoint localPoint = localPointForWorld(worldPoint);
+            if (localPoint == null || !Rs2Camera.isTileOnScreen(localPoint)) {
+                return null;
+            }
+            Point canvasPoint = Perspective.localToCanvas(
+                    Microbot.getClient(),
+                    localPoint,
+                    Microbot.getClient().getTopLevelWorldView().getPlane());
+            if (canvasPoint == null || canvasPoint.getX() < 0 || canvasPoint.getY() < 0) {
+                return null;
+            }
+            return new Rectangle(
+                    canvasPoint.getX(),
+                    canvasPoint.getY(),
+                    Microbot.getClient().getCanvasWidth(),
+                    Microbot.getClient().getCanvasHeight());
+        }).orElse(null);
     }
 
     private static LocalPoint localPointForWorld(WorldPoint worldPoint) {
@@ -8875,39 +8956,45 @@ public class Rs2Walker {
             }
         }
 
-        currentTarget = target;
-
         if (target == null) {
-            // A completed/cancelled route owns its transport handoff context. Keeping the
-            // timestamp alive made an unrelated walk started within 15 seconds inherit
-            // post-transport handler suppression and misleading elapsed-time markers.
-            clearRecentTransportContext();
-            resetRouteProgress();
-            logRouteClear(clearReasonWhenNull);
-            synchronized (Rs2PathApi.getPathfinderMutex()) {
-                final Pathfinder pathfinder = Rs2PathApi.getPathfinder();
-                if (pathfinder != null) {
-                    pathfinder.cancel();
-                }
-                Future<?> pathfinderFuture = Rs2PathApi.getPathfinderFuture();
-                if (pathfinderFuture != null && !pathfinderFuture.isDone()) {
-                    pathfinderFuture.cancel(true);
-                }
-                Rs2PathApi.setPathfinderFuture(null);
-                Rs2PathApi.setPathfinder(null);
+            synchronized (currentTargetOwnershipMutex) {
+                clearTargetLocked(clearReasonWhenNull);
             }
-
-            WorldMapPointManager wmm = Microbot.getWorldMapPointManager();
-            if (wmm != null) {
-                wmm.remove(Rs2PathApi.getMarker());
-            } else if (Rs2LogRateLimit.once(WORLD_MAP_REMOVE_NULL_LOGGED)) {
-                log.debug("[Walker] WorldMapPointManager null during route clear — marker may linger until teardown");
-            }
-            Rs2PathApi.setMarker(null);
-            Rs2PathApi.setStartPointSet(false);
         } else {
+            updateCurrentTargetOwnership(target);
             applyWalkerDestination(target);
         }
+    }
+
+    private static void clearTargetLocked(String clearReasonWhenNull) {
+        updateCurrentTargetOwnershipLocked(null);
+        // A completed/cancelled route owns its transport handoff context. Keeping the
+        // timestamp alive made an unrelated walk started within 15 seconds inherit
+        // post-transport handler suppression and misleading elapsed-time markers.
+        clearRecentTransportContext();
+        resetRouteProgress();
+        logRouteClear(clearReasonWhenNull);
+        synchronized (Rs2PathApi.getPathfinderMutex()) {
+            final Pathfinder pathfinder = Rs2PathApi.getPathfinder();
+            if (pathfinder != null) {
+                pathfinder.cancel();
+            }
+            Future<?> pathfinderFuture = Rs2PathApi.getPathfinderFuture();
+            if (pathfinderFuture != null && !pathfinderFuture.isDone()) {
+                pathfinderFuture.cancel(true);
+            }
+            Rs2PathApi.setPathfinderFuture(null);
+            Rs2PathApi.setPathfinder(null);
+        }
+
+        WorldMapPointManager wmm = Microbot.getWorldMapPointManager();
+        if (wmm != null) {
+            wmm.remove(Rs2PathApi.getMarker());
+        } else if (Rs2LogRateLimit.once(WORLD_MAP_REMOVE_NULL_LOGGED)) {
+                log.debug("[Walker] WorldMapPointManager null during route clear — marker may linger until teardown");
+        }
+        Rs2PathApi.setMarker(null);
+        Rs2PathApi.setStartPointSet(false);
     }
 
     private static void restoreTargetMarker(WorldPoint target) {
@@ -8942,6 +9029,13 @@ public class Rs2Walker {
 
     public static boolean restartPathfinding(WorldPoint start, Set<WorldPoint> ends) {
         return Rs2WalkerLifecycleRuntime.restartPathfinding(start, ends);
+    }
+
+    static boolean restartPathfinding(WorldPoint start, WorldPoint end,
+                                      WorldPoint suppressedTransportOrigin,
+                                      WorldPoint suppressedTransportDestination) {
+        return Rs2WalkerLifecycleRuntime.restartPathfinding(
+                start, Set.of(end), suppressedTransportOrigin, suppressedTransportDestination);
     }
 
     /**
@@ -9103,9 +9197,10 @@ public class Rs2Walker {
                         if (transport.getType() == TransportType.SHIP || transport.getType() == TransportType.NPC || transport.getType() == TransportType.BOAT) {
 
                             Rs2NpcModel npc = Rs2Npc.getNpc(transport.getName());
+                            String npcAction = resolveNpcTransportAction(transport, npc);
 
                             // Wrap with observation so Leagues blocked-region chat can attribute this attempt.
-                            if (attemptObserved(transport, () -> npc != null && Rs2Npc.canWalkTo(npc, 20) && Rs2Npc.interact(npc, transport.getAction()))) {
+                            if (attemptObserved(transport, () -> npc != null && Rs2Npc.canWalkTo(npc, 20) && Rs2Npc.interact(npc, npcAction))) {
                                 Rs2Player.waitForWalking();
                                 sleepUntil(Rs2Dialogue::isInDialogue,600*2);
 
@@ -9406,7 +9501,9 @@ public class Rs2Walker {
                     if (object != null) {
                         // Skip reachability check for GroundObjects and Magic Mushtrees
                         if (!(object instanceof GroundObject) && !MagicMushtree.isMagicMushtree(transport.getObjectId())) {
-                            if (!Rs2Tile.isTileReachable(transport.getOrigin())) {
+                            boolean originReachable = Rs2Tile.isTileReachable(transport.getOrigin());
+                            if (!shouldAttemptTransportObject(
+                                    originReachable, Rs2Player.getWorldLocation(), transport.getOrigin())) {
                                 break;
                             }
                         }
@@ -10162,7 +10259,17 @@ public class Rs2Walker {
                             + " precomputed=" + hasPrecomputedContinuation
                             + " type=" + (transport != null ? transport.getType() : "null"));
         }
-        if ((expectedTransport || hasPrecomputedContinuation) && goal != null) {
+        WorldPoint currentLocation = Rs2Player.getWorldLocation();
+        boolean landedAtDestination = isConfirmedTransportLanding(currentLocation, transportDest);
+        WorldPoint transportOrigin = transport != null ? transport.getOrigin() : null;
+        boolean distinctTransportFamily = transportFamilyEndpointsAreDistinct(
+                transportDest, transportOrigin, 3);
+        boolean continuationContainsReverse = landedAtDestination
+                && precomputedContinuationContainsEdge(transportDest,
+                transportOrigin);
+        if (shouldKeepPrecomputedTransportContinuation(
+                expectedTransport, hasPrecomputedContinuation, landedAtDestination,
+                continuationContainsReverse) && goal != null) {
             WebWalkLog.tmark(expectedTransport ? "transport_handoff_expected_hit" : "transport_handoff_precomputed_hit",
                     System.currentTimeMillis() - handoffStartedAt,
                     goal,
@@ -10171,13 +10278,39 @@ public class Rs2Walker {
             return true;
         }
         if (goal != null && transportDest != null) {
-            // Destination-aware handoff: prepare next path from known landing tile.
-            boolean queued = restartPathfinding(transportDest, goal);
+            if (landedAtDestination && sameOrNearTransportDestination(goal, transportDest)) {
+                if (distinctTransportFamily) {
+                    Rs2WalkerLifecycleRuntime.suppressReverseTransportOnNextPath(
+                            transportDest, transportOrigin);
+                }
+                WebWalkLog.tmark(distinctTransportFamily
+                                ? "transport_handoff_suppress_next_path"
+                                : "transport_handoff_terminal",
+                        System.currentTimeMillis() - handoffStartedAt,
+                        goal,
+                        currentLocation,
+                        distinctTransportFamily
+                                ? "suppressed=" + compactWorldPoint(transportDest)
+                                + "->" + compactWorldPoint(transportOrigin)
+                                : "local_transport_family=false");
+                return true;
+            }
+            // Once a non-local landing is confirmed, re-path from it while suppressing the
+            // inverse catalog family. Nearby same-plane endpoints are not directionally distinct
+            // at the family radius; their existing handled-point mechanism remains authoritative.
+            WorldPoint suppressedOrigin = landedAtDestination && distinctTransportFamily
+                    ? transportDest : null;
+            WorldPoint suppressedDestination = landedAtDestination && distinctTransportFamily
+                    ? transportOrigin : null;
+            boolean queued = restartPathfinding(
+                    transportDest, goal, suppressedOrigin, suppressedDestination);
             WebWalkLog.tmark("transport_handoff_restart",
                     System.currentTimeMillis() - handoffStartedAt,
                     goal,
                     Rs2Player.getWorldLocation(),
-                    "queued=" + queued + " dest=" + compactWorldPoint(transportDest));
+                    "queued=" + queued + " dest=" + compactWorldPoint(transportDest)
+                            + " suppressed=" + compactWorldPoint(suppressedOrigin)
+                            + "->" + compactWorldPoint(suppressedDestination));
             if (!queued && shouldRecalculatePathAfterTransport(transport)) {
                 recalculatePath();
                 WebWalkLog.tmark("transport_handoff_recalc_fallback",
@@ -10195,6 +10328,110 @@ public class Rs2Walker {
                     "dest=" + compactWorldPoint(transportDest));
         }
         return true;
+    }
+
+    static boolean shouldKeepPrecomputedTransportContinuation(boolean expectedTransport,
+                                                               boolean hasPrecomputedContinuation,
+                                                               boolean landedAtDestination,
+                                                               boolean continuationContainsReverse) {
+        if (!landedAtDestination) {
+            return expectedTransport || hasPrecomputedContinuation;
+        }
+        return hasPrecomputedContinuation && !continuationContainsReverse;
+    }
+
+    static boolean isConfirmedTransportLanding(WorldPoint currentLocation, WorldPoint transportDestination) {
+        // Object transports may settle a couple of tiles from their catalog destination. This is
+        // evaluated only after the transport handler has reported success, so the wider tolerance
+        // confirms the landing without making transport discovery or path selection permissive.
+        return isNearSamePlane(currentLocation, transportDestination, 3);
+    }
+
+    static boolean shouldAttemptTransportObject(boolean originReachable,
+                                                WorldPoint playerLoc,
+                                                WorldPoint transportOrigin) {
+        // Opening a door updates the live collision map asynchronously. During that short window,
+        // the next catalog object can be directly clickable even though the origin tile is still
+        // reported unreachable. Keep the bypass as tight as the normal raw-transport handoff.
+        return originReachable || isNearSamePlane(
+                playerLoc, transportOrigin, RAW_TRANSPORT_DISPATCH_MAX_DISTANCE);
+    }
+
+    private static String resolveNpcTransportAction(Transport transport, Rs2NpcModel npc) {
+        String requestedAction = transport.getAction();
+        if (transport.getType() != TransportType.SHIP || npc == null) {
+            return requestedAction;
+        }
+
+        String[] availableActions = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            NPCComposition composition = Microbot.getClient().getNpcDefinition(npc.getId());
+            return composition == null ? null : composition.getActions();
+        }).orElse(null);
+        return resolveShipNpcAction(requestedAction, availableActions);
+    }
+
+    static String resolveShipNpcAction(String requestedAction, String[] availableActions) {
+        if (availableActions == null) {
+            return requestedAction;
+        }
+        for (String availableAction : availableActions) {
+            if (availableAction != null && requestedAction != null
+                    && availableAction.equalsIgnoreCase(requestedAction)) {
+                return availableAction;
+            }
+        }
+        for (String availableAction : availableActions) {
+            if (availableAction != null && availableAction.equalsIgnoreCase("Travel")) {
+                return availableAction;
+            }
+        }
+        return requestedAction;
+    }
+
+    static boolean pathContainsEdge(List<WorldPoint> path, WorldPoint origin, WorldPoint destination) {
+        if (path == null || path.size() < 2 || origin == null || destination == null) {
+            return false;
+        }
+        for (int i = 0; i < path.size() - 1; i++) {
+            if (origin.equals(path.get(i)) && destination.equals(path.get(i + 1))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean precomputedContinuationContainsEdge(WorldPoint origin, WorldPoint destination) {
+        Pathfinder pathfinder = Rs2PathApi.getPathfinder();
+        return pathfinder != null
+                && pathfinder.isDone()
+                && pathContainsTransportFamily(pathfinder.getPath(), origin, destination);
+    }
+
+    static boolean pathContainsTransportFamily(List<WorldPoint> path,
+                                               WorldPoint origin,
+                                               WorldPoint destination) {
+        if (path == null || path.size() < 2 || origin == null || destination == null) {
+            return false;
+        }
+        if (!transportFamilyEndpointsAreDistinct(origin, destination, 3)) {
+            return pathContainsEdge(path, origin, destination);
+        }
+        for (int i = 0; i < path.size() - 1; i++) {
+            if (isNearSamePlane(path.get(i), origin, 3)
+                    && isNearSamePlane(path.get(i + 1), destination, 3)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean transportFamilyEndpointsAreDistinct(WorldPoint origin,
+                                                                WorldPoint destination,
+                                                                int endpointRadius) {
+        return origin != null
+                && destination != null
+                && (origin.getPlane() != destination.getPlane()
+                || origin.distanceTo2D(destination) > endpointRadius * 2);
     }
 
     private static void primeExpectedTransportDestinations(List<WorldPoint> path, int startIdx) {

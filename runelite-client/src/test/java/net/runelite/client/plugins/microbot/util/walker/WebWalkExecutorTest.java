@@ -7,6 +7,7 @@ import net.runelite.api.coords.WorldPoint;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 
 public class WebWalkExecutorTest
 {
@@ -34,28 +35,104 @@ public class WebWalkExecutorTest
         WebWalkSession session = new WebWalkSession(GOAL, 0);
         session.installRoute(route(1));
         session.observe(100, START, 0);
-        session.recordMinimapDispatch(100, point(1), point(1), 1, false);
+        session.recordMinimapDispatch(100, point(10), point(10), 10, false);
 
         WebWalkExecutor.Decision decision = new WebWalkExecutor().decide(session,
-                ready(101, point(2), 1, 2, point(12), 12, false));
+                ready(101, point(2), 1, 11, point(12), 12, false));
 
         assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, decision.getType());
         assertEquals(point(12), decision.getTarget());
     }
 
     @Test
-    public void approachingCheckpointWithinRunOverlapHandsOffBeforeArrival()
+    public void checkpointApproachHandsOffAtFiveForWalkingAndRunning()
+    {
+        for (boolean runEnabled : new boolean[] {false, true})
+        {
+            WebWalkSession session = new WebWalkSession(GOAL, 0);
+            session.installRoute(route(1));
+            session.observe(100, START, 0);
+            session.recordMinimapDispatch(100, point(12), point(12), 4, false);
+            WebWalkExecutor executor = new WebWalkExecutor();
+
+            assertEquals(WebWalkExecutor.DecisionType.WAIT,
+                    executor.decide(session, ready(101, point(6), 1, 2, point(14), 5,
+                            false, runEnabled)).getType());
+
+            WebWalkExecutor.Decision handoff = executor.decide(session,
+                    ready(102, point(7), 1, 2, point(14), 5, false, runEnabled));
+
+            assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, handoff.getType());
+            assertEquals(point(14), handoff.getTarget());
+        }
+    }
+
+    @Test
+    public void checkpointWithoutInitialPlayerDistanceDoesNotHandoff()
     {
         WebWalkSession session = new WebWalkSession(GOAL, 0);
         session.installRoute(route(1));
-        session.observe(100, START, 0);
-        session.recordMinimapDispatch(100, point(10), point(10), 10, false);
+        session.recordMinimapDispatch(100, point(12), point(12), 4, false);
 
         WebWalkExecutor.Decision decision = new WebWalkExecutor().decide(session,
-                ready(101, point(2), 1, 2, point(12), 12, false, true));
+                ready(101, point(7), 1, 2, point(14), 5, false));
 
-        assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, decision.getType());
-        assertEquals(point(12), decision.getTarget());
+        assertEquals(WebWalkExecutor.DecisionType.WAIT, decision.getType());
+        assertEquals(point(12), session.getCheckpoint());
+    }
+
+    @Test
+    public void checkpointStartedInsideFiveTilesReleasesWhenReached()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(100, point(8), 2);
+        session.recordMinimapDispatch(100, point(10), point(10), 3, false);
+        WebWalkExecutor executor = new WebWalkExecutor();
+
+        assertEquals(WebWalkExecutor.DecisionType.WAIT,
+                executor.decide(session, ready(101, point(8), 1, 2, point(12), 4,
+                        false)).getType());
+
+        WebWalkExecutor.Decision reached = executor.decide(session,
+                ready(102, point(9), 1, 2, point(12), 4, false));
+
+        assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, reached.getType());
+        assertEquals(point(12), reached.getTarget());
+    }
+
+    @Test
+    public void runningAndWalkingRetainCheckpointUntilFiveTileHandoffOrPassed()
+    {
+        for (boolean runEnabled : new boolean[] {false, true})
+        {
+            for (int playerX : new int[] {2, 4})
+            {
+                WebWalkSession session = new WebWalkSession(GOAL, 0);
+                session.installRoute(route(1));
+                session.observe(100, START, 0);
+                session.recordMinimapDispatch(100, point(10), point(10), 10, false);
+
+                WebWalkExecutor.Decision decision = new WebWalkExecutor().decide(session,
+                        ready(101, point(playerX), 1, 2, point(12), 12,
+                                false, runEnabled));
+
+                assertEquals(WebWalkExecutor.DecisionType.WAIT, decision.getType());
+                assertEquals(point(10), session.getCheckpoint());
+            }
+
+            WebWalkSession reached = new WebWalkSession(GOAL, 0);
+            reached.installRoute(route(1));
+            reached.observe(100, START, 0);
+            reached.recordMinimapDispatch(100, point(10), point(10), 10, false);
+
+            WebWalkExecutor.Decision next = new WebWalkExecutor().decide(reached,
+                    ready(101, point(9), 1, 2, point(12), 12,
+                            false, runEnabled));
+
+            assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, next.getType());
+            assertEquals(point(12), next.getTarget());
+        }
     }
 
     @Test
@@ -145,6 +222,51 @@ public class WebWalkExecutorTest
     }
 
     @Test
+    public void routeActionPreemptsMovementThenResumesWithoutDoubleDispatch()
+    {
+        RouteActionRuntime runtime = new RouteActionRuntime();
+
+        WalkerState result = new WebWalkExecutor().walk(new WebWalkSession(GOAL, 0), runtime);
+
+        assertEquals(WalkerState.ARRIVED, result);
+        assertEquals(Arrays.asList(
+                "observe", "dispatch", "await",
+                "observe", "interact", "await",
+                "observe", "dispatch", "await",
+                "observe", "finish"), runtime.events);
+        assertEquals(2, runtime.dispatches);
+    }
+
+    @Test
+    public void residualMovementDoesNotEraseRejectedDispatchBudget()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(10, START, 0);
+        session.recordRejectedDispatch();
+        session.observe(11, point(1), 1);
+        assertEquals(1, session.getRejectedDispatchCount());
+        session.recordRejectedDispatch();
+
+        WebWalkExecutor.Decision decision = new WebWalkExecutor().decide(session,
+                ready(12, point(1), 1, 1, point(12), 12, false));
+
+        assertEquals(WebWalkExecutor.DecisionType.REPLAN, decision.getType());
+    }
+
+    @Test
+    public void acceptedDispatchResetsRejectedDispatchBudget()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(10, START, 0);
+        session.recordRejectedDispatch();
+        session.recordMinimapDispatch(11, point(10), point(10), 10, false);
+
+        assertEquals(0, session.getRejectedDispatchCount());
+    }
+
+    @Test
     public void executorStopsAtIndependentIterationLimit()
     {
         WaitingRuntime runtime = new WaitingRuntime();
@@ -176,8 +298,8 @@ public class WebWalkExecutorTest
     private static WebWalkRuntime.RouteSnapshot route(long generation)
     {
         return new WebWalkRuntime.RouteSnapshot(generation,
-                Arrays.asList(point(0), point(1), point(2), point(10), point(12)),
-                Arrays.asList(point(0), point(12)));
+                Arrays.asList(point(0), point(1), point(2), point(10), point(12), point(14)),
+                Arrays.asList(point(0), point(14)));
     }
 
     private static WorldPoint point(int x)
@@ -281,6 +403,82 @@ public class WebWalkExecutorTest
         public void finish(WalkerState state, String reason)
         {
             finishedReason = reason;
+        }
+    }
+
+    private static final class RouteActionRuntime implements WebWalkRuntime
+    {
+        private final List<String> events = new ArrayList<>();
+        private int observations;
+        private int dispatches;
+        private WebWalkSession session;
+
+        @Override
+        public Observation observe(WebWalkSession currentSession)
+        {
+            events.add("observe");
+            session = currentSession;
+            switch (observations++)
+            {
+                case 0:
+                    return ready(100, START, 1, 0, point(10), 3, false);
+                case 1:
+                    assertEquals("the first accepted movement must establish ownership",
+                            point(10), currentSession.getCheckpoint());
+                    assertEquals(3, currentSession.getCheckpointPathIndex());
+                    return ready(101, START, 1, 0, point(12), 4, true);
+                case 2:
+                    return ready(102, point(1), 1, 1, point(12), 4, false);
+                default:
+                    return new Observation(103, point(2), Status.ARRIVED,
+                            route(1), 2, null, -1, false);
+            }
+        }
+
+        @Override
+        public DispatchResult dispatchMinimap(WorldPoint requestedTarget, int pathIndex,
+                                               boolean redispatch)
+        {
+            events.add("dispatch");
+            if (dispatches++ == 0)
+            {
+                assertEquals(point(10), requestedTarget);
+                assertEquals(3, pathIndex);
+            }
+            else
+            {
+                assertEquals(point(12), requestedTarget);
+                assertEquals(4, pathIndex);
+            }
+            assertEquals(false, redispatch);
+            return DispatchResult.accepted(requestedTarget);
+        }
+
+        @Override
+        public ActionResult interactRouteEdge(Observation observation)
+        {
+            events.add("interact");
+            assertNull("route actions must clear the active movement checkpoint before input",
+                    session.getCheckpoint());
+            return ActionResult.ACCEPTED;
+        }
+
+        @Override
+        public void replan(WebWalkSession currentSession, String reason)
+        {
+            throw new AssertionError("unexpected replan");
+        }
+
+        @Override
+        public void awaitChange(Observation observation)
+        {
+            events.add("await");
+        }
+
+        @Override
+        public void finish(WalkerState state, String reason)
+        {
+            events.add("finish");
         }
     }
 }

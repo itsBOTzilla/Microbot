@@ -1,6 +1,7 @@
 package shortestpath;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -57,12 +58,9 @@ public class Destination
 	 */
 	private static void addDestinations(Map<String, Set<Integer>> destinations, String path)
 	{
-		try
+		try (InputStream input = Objects.requireNonNull(ShortestPathPlugin.class.getResourceAsStream(path));
+			Scanner scanner = new Scanner(new String(Util.readAllBytes(input), StandardCharsets.UTF_8)))
 		{
-			String s = new String(Util.readAllBytes(Objects.requireNonNull(ShortestPathPlugin.class.getResourceAsStream(path))),
-				StandardCharsets.UTF_8);
-			Scanner scanner = new Scanner(s);
-
 			// Header line is the first line in the file and will start with either '#' or
 			// '# '
 			String[] headers = parse_header_line(scanner);
@@ -117,7 +115,6 @@ public class Destination
 					}
 				}
 			}
-			scanner.close();
 		}
 		catch (IOException e)
 		{
@@ -163,9 +160,9 @@ public class Destination
 		final String PREFIX_COMMENT = "#";
 		final String DELIM = " ";
 
-		try
+		try (InputStream input = Objects.requireNonNull(ShortestPathPlugin.class.getResourceAsStream(path)))
 		{
-			String s = new String(Util.readAllBytes(Objects.requireNonNull(ShortestPathPlugin.class.getResourceAsStream(path))), StandardCharsets.UTF_8);
+			String s = new String(Util.readAllBytes(input), StandardCharsets.UTF_8);
 			try (Scanner scanner = new Scanner(s))
 			{
 				String[] headers = parse_header_line(scanner);

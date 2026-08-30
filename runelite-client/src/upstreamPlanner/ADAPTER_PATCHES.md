@@ -15,12 +15,16 @@ land upstream:
 - materialize blocked-neighbour transport origins at the expanded neighbour tile;
 - aggregate duplicate item quantities across inventory, equipment, bank, and rune-pouch snapshots;
 - preserve multi-word special skill names when parsing requirements; and
-- preserve a region override when merging permutation transports.
+- preserve a region override when merging permutation transports;
+- bound progressive path-chain reads to the shortest captured backing-array snapshot;
+- reject collision queries outside the loaded region extents before flattening their index;
+- close destination and transport resource streams after loading; and
+- use the quetzal-whistle cost for ordinary whistle routes as well as differential costing.
 
 None of these hooks owns execution, reads Microbot globals, or changes queue ordering when its supplied
 policy returns the default value.
 
-The reviewed patch budget is nine modified upstream files and one adapter-added file. The offline vendored-core
+The reviewed patch budget is thirteen modified upstream files and one adapter-added file. The offline vendored-core
 checker rejects growth beyond that budget. Increasing either limit requires an ADR amendment that explains why
 the hook cannot remain outside the core or be contributed upstream; changing only the digest is not sufficient
 review for a larger long-lived fork.
