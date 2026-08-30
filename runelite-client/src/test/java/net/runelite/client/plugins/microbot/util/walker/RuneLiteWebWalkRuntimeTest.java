@@ -287,8 +287,8 @@ public class RuneLiteWebWalkRuntimeTest
                             {
                                 canvasCalls.incrementAndGet();
                             }
-                            if (dispatchLambda && owner.equals(walkerOwner)
-                                    && methodName.equals("dispatchMiniMapTarget"))
+                            if (dispatchLambda && owner.equals(runtimeOwner)
+                                    && methodName.equals("dispatchRouteMinimap"))
                             {
                                 minimapCalls.incrementAndGet();
                             }
@@ -301,6 +301,163 @@ public class RuneLiteWebWalkRuntimeTest
         assertEquals(1, policyCalls.get());
         assertEquals(1, canvasCalls.get());
         assertEquals(1, minimapCalls.get());
+    }
+
+    @Test
+    public void productionSelectionKeepsTargetsInsideReliableMinimapRadius() throws IOException
+    {
+        AtomicInteger selectorCalls = new AtomicInteger();
+        List<Integer> selectorRadii = new ArrayList<>();
+        String runtimeOwner = Type.getInternalName(RuneLiteWebWalkRuntime.class);
+
+        try (InputStream stream = RuneLiteWebWalkRuntime.class.getResourceAsStream(
+                "RuneLiteWebWalkRuntime.class"))
+        {
+            assertTrue(stream != null);
+            new ClassReader(stream).accept(new ClassVisitor(Opcodes.ASM9)
+            {
+                @Override
+                public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                 String signature, String[] exceptions)
+                {
+                    if (!name.equals("observe"))
+                    {
+                        return null;
+                    }
+                    return new MethodVisitor(Opcodes.ASM9)
+                    {
+                        private Integer lastIntegerConstant;
+
+                        @Override
+                        public void visitIntInsn(int opcode, int operand)
+                        {
+                            if (opcode == Opcodes.BIPUSH || opcode == Opcodes.SIPUSH)
+                            {
+                                lastIntegerConstant = operand;
+                            }
+                        }
+
+                        @Override
+                        public void visitInsn(int opcode)
+                        {
+                            if (opcode >= Opcodes.ICONST_M1 && opcode <= Opcodes.ICONST_5)
+                            {
+                                lastIntegerConstant = opcode - Opcodes.ICONST_0;
+                            }
+                        }
+
+                        @Override
+                        public void visitMethodInsn(int opcode, String owner, String methodName,
+                                                    String methodDescriptor, boolean isInterface)
+                        {
+                            if (owner.equals(runtimeOwner) && methodName.equals("selectForwardCandidate"))
+                            {
+                                selectorCalls.incrementAndGet();
+                                selectorRadii.add(lastIntegerConstant);
+                            }
+                        }
+                    };
+                }
+            }, 0);
+        }
+
+        assertEquals(1, selectorCalls.get());
+        assertEquals(List.of(10), selectorRadii);
+    }
+
+    @Test
+    public void rejectedMinimapTargetFallsBackWithoutReturningToEarlierFold()
+    {
+        List<WorldPoint> foldedPath = List.of(
+                point(1), point(2), point(3), point(4),
+                point(0), new WorldPoint(3200, 3201, 0),
+                new WorldPoint(3200, 3202, 0), new WorldPoint(3200, 3203, 0),
+                new WorldPoint(3200, 3204, 0));
+        List<WorldPoint> attempts = new ArrayList<>();
+        Set<WorldPoint> reachable = new HashSet<>(foldedPath.subList(0, 4));
+        reachable.add(foldedPath.get(8));
+
+        WebWalkRuntime.DispatchResult result = RuneLiteWebWalkRuntime.dispatchRouteMinimap(
+                foldedPath, foldedPath.get(8), point(0), reachable,
+                4, 8, 10, index -> false, candidate -> {
+                    attempts.add(candidate);
+                    return false;
+                });
+
+        assertFalse(result.isAccepted());
+        assertEquals(List.of(foldedPath.get(8)), attempts);
+    }
+
+    @Test
+    public void rejectedMinimapTargetFallbackStopsAtTransportOrigin()
+    {
+        List<WorldPoint> path = line(0, 10);
+        List<WorldPoint> attempts = new ArrayList<>();
+
+        WebWalkRuntime.DispatchResult result = RuneLiteWebWalkRuntime.dispatchRouteMinimap(
+                path, point(8), point(2), new HashSet<>(path),
+                2, 8, 10, index -> index == 4, candidate -> {
+                    attempts.add(candidate);
+                    return !candidate.equals(point(8));
+                });
+
+        assertTrue(result.isAccepted());
+        assertEquals(point(4), result.getActualTarget());
+        assertEquals(List.of(point(8), point(4)), attempts);
+    }
+
+    @Test
+    public void currentIndexTargetCanDispatchWithoutBackwardFallback()
+    {
+        List<WorldPoint> path = line(0, 5);
+        List<WorldPoint> attempts = new ArrayList<>();
+
+        WebWalkRuntime.DispatchResult result = RuneLiteWebWalkRuntime.dispatchRouteMinimap(
+                path, point(2), point(1), new HashSet<>(path),
+                2, 2, 10, index -> false, candidate -> {
+                    attempts.add(candidate);
+                    return true;
+                });
+
+        assertTrue(result.isAccepted());
+        assertEquals(point(2), result.getActualTarget());
+        assertEquals(List.of(point(2)), attempts);
+    }
+
+    @Test
+    public void dispatchRechecksReliableRadiusAgainstFreshPlayerPosition()
+    {
+        List<WorldPoint> path = line(0, 12);
+        List<WorldPoint> attempts = new ArrayList<>();
+
+        WebWalkRuntime.DispatchResult result = RuneLiteWebWalkRuntime.dispatchRouteMinimap(
+                path, point(11), point(0), new HashSet<>(path),
+                0, 11, 10, index -> false, candidate -> {
+                    attempts.add(candidate);
+                    return true;
+                });
+
+        assertTrue(result.isAccepted());
+        assertEquals(point(10), result.getActualTarget());
+        assertEquals(List.of(point(10)), attempts);
+    }
+
+    @Test
+    public void freshForwardAnchorPreventsFallbackBehindPlayerProgress()
+    {
+        List<WorldPoint> path = line(0, 9);
+        Set<WorldPoint> reachable = Set.of(point(3), point(5), point(8));
+        List<WorldPoint> attempts = new ArrayList<>();
+
+        WebWalkRuntime.DispatchResult result = RuneLiteWebWalkRuntime.dispatchRouteMinimap(
+                path, point(8), point(5), reachable,
+                1, 8, 10, index -> false, candidate -> {
+                    attempts.add(candidate);
+                    return candidate.equals(point(3));
+                });
+
+        assertFalse(result.isAccepted());
+        assertEquals(List.of(point(8)), attempts);
     }
 
     private static List<WorldPoint> line(int fromInclusive, int toExclusive)

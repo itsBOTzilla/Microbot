@@ -818,12 +818,12 @@ Expected: either a final scoped commit or `nothing to commit` because Tasks 3-7 
 Run:
 
 ```powershell
-.\gradlew.bat :client:processResources --rerun-tasks
-.\gradlew.bat :client:microbotReleaseJar
+$buildCommit = git rev-parse HEAD
+.\gradlew.bat :client:processResources :client:microbotReleaseJar --rerun-tasks "--project-prop=microbot.commit.sha=$buildCommit" --no-daemon --console=plain
 git status --short
 ```
 
-Expected: build succeeds and the tracked tree remains clean.
+Expected: build succeeds, the tracked tree remains clean, and the release JAR embeds the exact clean commit rather than the local-build default `nogit`. If the primary worktree contains protected concurrent WIP, run this command from a clean detached worktree at `$buildCommit` instead of modifying or stashing that WIP.
 
 - [ ] **Step 3: Verify embedded identity before staging**
 
@@ -852,16 +852,16 @@ Run after the normal Microbot client has been closed:
 $launcher = Join-Path $env:USERPROFILE '.microbot'
 $temporaryJar = Join-Path $launcher 'microbot-local.jar.pending'
 $stableJar = Join-Path $launcher 'microbot-local.jar'
+$backupJar = Join-Path $launcher 'microbot-local.jar.swap-backup'
 Copy-Item -LiteralPath $sourceJar.FullName -Destination $temporaryJar -Force
 if (Test-Path -LiteralPath $stableJar) {
-    [IO.File]::Replace($temporaryJar, $stableJar, $null)
-} else {
-    Move-Item -LiteralPath $temporaryJar -Destination $stableJar
+    Copy-Item -LiteralPath $stableJar -Destination $backupJar -Force
 }
+Move-Item -LiteralPath $temporaryJar -Destination $stableJar -Force
 Get-FileHash -Algorithm SHA256 -LiteralPath $sourceJar.FullName,$stableJar
 ```
 
-Expected: the two hashes are identical. Before removal/replacement, verify both resolved destinations equal the two explicit paths under `%USERPROFILE%\.microbot`.
+Expected: the source and stable hashes are identical. Before replacement, verify all resolved destinations equal the three explicit paths under `%USERPROFILE%\.microbot`. Retain `microbot-local.jar.swap-backup` until live acceptance passes; do not use `[IO.File]::Replace` with a null backup path because that is not portable across the supported Windows/.NET launcher environments.
 
 - [ ] **Step 5: Point the launcher permanently at `local`**
 
