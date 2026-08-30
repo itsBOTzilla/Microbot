@@ -19,6 +19,84 @@ import static org.junit.Assert.assertTrue;
 public class WebWalkExecutorWiringTest
 {
     @Test
+    public void checkpointReleaseDiagnosticsCoverPreemptionAndProgress() throws IOException
+    {
+        AtomicInteger releaseLogs = new AtomicInteger();
+        String logOwner = Type.getInternalName(WebWalkLog.class);
+
+        try (InputStream stream = WebWalkExecutor.class.getResourceAsStream("WebWalkExecutor.class"))
+        {
+            assertTrue(stream != null);
+            new ClassReader(stream).accept(new ClassVisitor(Opcodes.ASM9)
+            {
+                @Override
+                public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                 String signature, String[] exceptions)
+                {
+                    if (!name.equals("decide"))
+                    {
+                        return null;
+                    }
+                    return new MethodVisitor(Opcodes.ASM9)
+                    {
+                        @Override
+                        public void visitMethodInsn(int opcode, String owner, String methodName,
+                                                    String methodDescriptor, boolean isInterface)
+                        {
+                            if (owner.equals(logOwner) && methodName.equals("checkpointReleased"))
+                            {
+                                releaseLogs.incrementAndGet();
+                            }
+                        }
+                    };
+                }
+            }, 0);
+        }
+
+        assertEquals("route-action preemption and reached/passed release must both log", 2,
+                releaseLogs.get());
+    }
+
+    @Test
+    public void legacyProcessWalkHasNoActiveCaller() throws IOException
+    {
+        AtomicInteger activeLegacyCalls = new AtomicInteger();
+        String walkerOwner = Type.getInternalName(Rs2Walker.class);
+
+        try (InputStream stream = Rs2Walker.class.getResourceAsStream("Rs2Walker.class"))
+        {
+            assertTrue(stream != null);
+            new ClassReader(stream).accept(new ClassVisitor(Opcodes.ASM9)
+            {
+                @Override
+                public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                 String signature, String[] exceptions)
+                {
+                    if (name.equals("processWalk"))
+                    {
+                        return null;
+                    }
+                    return new MethodVisitor(Opcodes.ASM9)
+                    {
+                        @Override
+                        public void visitMethodInsn(int opcode, String owner, String methodName,
+                                                    String methodDescriptor, boolean isInterface)
+                        {
+                            if (owner.equals(walkerOwner) && methodName.equals("processWalk"))
+                            {
+                                activeLegacyCalls.incrementAndGet();
+                            }
+                        }
+                    };
+                }
+            }, 0);
+        }
+
+        assertEquals("legacy processWalk must have no active facade callers", 0,
+                activeLegacyCalls.get());
+    }
+
+    @Test
     public void publicBlockingFacadeConvergesOnNewExecutorOwner() throws IOException
     {
         AtomicBoolean invokesInternalOwner = new AtomicBoolean();

@@ -128,6 +128,13 @@ public final class WebWalkExecutor
 
         if (observation.isRouteActionAvailable())
         {
+            WorldPoint preemptedCheckpoint = session.getCheckpoint();
+            if (preemptedCheckpoint != null)
+            {
+                WebWalkLog.checkpointReleased("route-action", preemptedCheckpoint,
+                        session.getCheckpointPathIndex(), observation.getPlayer(),
+                        observation.getTick());
+            }
             session.clearCheckpoint();
             if (session.isRouteActionPending())
             {
@@ -158,6 +165,9 @@ public final class WebWalkExecutor
                     && player.distanceTo2D(checkpoint) <= CHECKPOINT_ARRIVAL_DISTANCE;
             if (passedCheckpoint || reachedCheckpoint)
             {
+                WebWalkLog.checkpointReleased(passedCheckpoint ? "passed" : "reached",
+                        checkpoint, session.getCheckpointPathIndex(), player,
+                        observation.getTick());
                 session.clearCheckpoint();
             }
             else if (progressed || session.ticksWithoutCommandProgress(observation.getTick())

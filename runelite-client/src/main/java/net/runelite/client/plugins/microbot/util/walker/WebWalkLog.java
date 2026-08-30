@@ -27,6 +27,12 @@ public final class WebWalkLog {
                 method, requested, actual, pathIndex, tick, redispatch);
     }
 
+    public static void checkpointReleased(String reason, WorldPoint checkpoint,
+                                          int pathIndex, WorldPoint player, int tick) {
+        LOG.info("[WebWalk] checkpoint | released={} target={} idx={} at={} tick={}",
+                reason, checkpoint, pathIndex, player, tick);
+    }
+
     public static void executorReplan(String reason, int attempt, WorldPoint player, WorldPoint goal) {
         LOG.info("[WebWalk] replan | reason={} attempt={} at={} goal={}", reason, attempt, player, goal);
     }
