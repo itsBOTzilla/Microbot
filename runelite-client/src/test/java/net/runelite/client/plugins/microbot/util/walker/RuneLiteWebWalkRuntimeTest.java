@@ -438,6 +438,95 @@ public class RuneLiteWebWalkRuntimeTest
     }
 
     @Test
+    public void clearedOrReplacedRouteOwnershipInvalidatesPendingActions()
+    {
+        WorldPoint goal = new WorldPoint(3200, 3200, 0);
+        WorldPoint replacement = new WorldPoint(3210, 3210, 0);
+        long observedGeneration = 41L;
+
+        assertTrue(RuneLiteWebWalkRuntime.isRouteOwnershipCurrent(
+                goal, observedGeneration, goal, observedGeneration));
+        assertFalse(RuneLiteWebWalkRuntime.isRouteOwnershipCurrent(
+                goal, observedGeneration, null, observedGeneration + 1));
+        assertFalse(RuneLiteWebWalkRuntime.isRouteOwnershipCurrent(
+                goal, observedGeneration, replacement, observedGeneration + 1));
+        assertFalse("restarting the same goal must still invalidate the old action",
+                RuneLiteWebWalkRuntime.isRouteOwnershipCurrent(
+                        goal, observedGeneration, goal, observedGeneration + 1));
+    }
+
+    @Test
+    public void rejectedRouteOwnershipDoesNotInvokePendingInput()
+    {
+        AtomicInteger dispatchCalls = new AtomicInteger();
+
+        WebWalkRuntime.DispatchResult result = RuneLiteWebWalkRuntime.dispatchWhenCurrent(
+                false,
+                () ->
+                {
+                    dispatchCalls.incrementAndGet();
+                    return WebWalkRuntime.DispatchResult.accepted(point(1));
+                });
+
+        assertFalse(result.isAccepted());
+        assertEquals(0, dispatchCalls.get());
+    }
+
+    @Test
+    public void productionActionBoundariesRevalidateRouteOwnership() throws IOException
+    {
+        AtomicInteger movementChecks = new AtomicInteger();
+        AtomicInteger routeActionChecks = new AtomicInteger();
+        String runtimeOwner = Type.getInternalName(RuneLiteWebWalkRuntime.class);
+
+        try (InputStream stream = RuneLiteWebWalkRuntime.class.getResourceAsStream(
+                "RuneLiteWebWalkRuntime.class"))
+        {
+            assertTrue(stream != null);
+            new ClassReader(stream).accept(new ClassVisitor(Opcodes.ASM9)
+            {
+                @Override
+                public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                 String signature, String[] exceptions)
+                {
+                    boolean movementBoundary = name.equals("dispatchMinimap")
+                            || name.startsWith("lambda$dispatchMinimap$");
+                    boolean routeActionBoundary = name.equals("interactRouteEdge");
+                    if (!movementBoundary && !routeActionBoundary)
+                    {
+                        return null;
+                    }
+                    return new MethodVisitor(Opcodes.ASM9)
+                    {
+                        @Override
+                        public void visitMethodInsn(int opcode, String owner, String methodName,
+                                                    String methodDescriptor, boolean isInterface)
+                        {
+                            if (owner.equals(runtimeOwner)
+                                    && methodName.equals("ownsCurrentRoute"))
+                            {
+                                if (movementBoundary)
+                                {
+                                    movementChecks.incrementAndGet();
+                                }
+                                if (routeActionBoundary)
+                                {
+                                    routeActionChecks.incrementAndGet();
+                                }
+                            }
+                        }
+                    };
+                }
+            }, 0);
+        }
+
+        assertTrue("movement input must revalidate immediately before dispatch",
+                movementChecks.get() >= 2);
+        assertTrue("route interactions must revalidate immediately before dispatch",
+                routeActionChecks.get() >= 1);
+    }
+
+    @Test
     public void productionSelectionKeepsTargetsInsideReliableMinimapRadius() throws IOException
     {
         AtomicInteger selectorCalls = new AtomicInteger();

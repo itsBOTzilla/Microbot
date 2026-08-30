@@ -115,6 +115,7 @@ public class Rs2Walker {
     public static ShortestPathConfig config;
     // stuck/movement tracking state migrated to WalkerRouteState (see routeState)
     static volatile WorldPoint currentTarget;
+    private static final AtomicLong currentTargetGeneration = new AtomicLong();
     static int nextWalkingDistance = 10;
 
     /**
@@ -124,6 +125,15 @@ public class Rs2Walker {
      */
     public static WorldPoint getCurrentTarget() {
         return currentTarget;
+    }
+
+    public static long getCurrentTargetGeneration() {
+        return currentTargetGeneration.get();
+    }
+
+    private static void updateCurrentTargetOwnership(WorldPoint target) {
+        currentTargetGeneration.incrementAndGet();
+        currentTarget = target;
     }
 
 	/**
@@ -1467,7 +1477,7 @@ public class Rs2Walker {
         if (!hasCurrentPath) {
             setTarget(target);
         } else {
-            currentTarget = target;
+            updateCurrentTargetOwnership(target);
         }
         Rs2PathApi.setReachedDistance(distance);
         routeState.stuckCount = 0;
@@ -1509,11 +1519,16 @@ public class Rs2Walker {
             setTarget(null, "webwalk-executor:target-not-walkable");
             return WalkerState.UNREACHABLE;
         }
-        WebWalkSession session = new WebWalkSession(target, distance);
+        long targetGeneration = getCurrentTargetGeneration();
+        if (!Objects.equals(currentTarget, target)) {
+            return WalkerState.EXIT;
+        }
+        WebWalkSession session = new WebWalkSession(target, distance, targetGeneration);
         if (debug) {
             return WalkerState.EXIT;
         }
-        return new WebWalkExecutor().walk(session, new RuneLiteWebWalkRuntime(target, distance));
+        return new WebWalkExecutor().walk(session,
+                new RuneLiteWebWalkRuntime(target, distance, session.getTargetGeneration()));
     }
 
     /**
@@ -8913,7 +8928,7 @@ public class Rs2Walker {
             }
         }
 
-        currentTarget = target;
+        updateCurrentTargetOwnership(target);
 
         if (target == null) {
             // A completed/cancelled route owns its transport handoff context. Keeping the

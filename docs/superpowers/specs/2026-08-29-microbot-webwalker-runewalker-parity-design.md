@@ -313,6 +313,6 @@ If live acceptance fails, the launcher can select the retained official release.
 ## Privacy and contribution boundaries
 
 - No iBOT or other private script source is included.
-- Quest changes may remain public as previously authorized.
+- Quest and death changes are excluded from this contribution.
 - Review and pull requests target only `itsBOTzilla/Microbot`.
 - No pull request is opened against `chsami/Microbot` unless separately and explicitly requested.

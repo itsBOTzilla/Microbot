@@ -10,6 +10,7 @@ public final class WebWalkSession
 {
     private final WorldPoint target;
     private final int arrivalDistance;
+    private final long targetGeneration;
     private long routeGeneration = Long.MIN_VALUE;
     private List<WorldPoint> rawPath = Collections.emptyList();
     private WorldPoint lastPlayer;
@@ -29,12 +30,18 @@ public final class WebWalkSession
 
     public WebWalkSession(WorldPoint target, int arrivalDistance)
     {
+        this(target, arrivalDistance, Long.MIN_VALUE);
+    }
+
+    public WebWalkSession(WorldPoint target, int arrivalDistance, long targetGeneration)
+    {
         this.target = Objects.requireNonNull(target, "target");
         if (arrivalDistance < 0)
         {
             throw new IllegalArgumentException("arrivalDistance must be >= 0");
         }
         this.arrivalDistance = arrivalDistance;
+        this.targetGeneration = targetGeneration;
     }
 
     public WorldPoint getTarget()
@@ -45,6 +52,11 @@ public final class WebWalkSession
     public int getArrivalDistance()
     {
         return arrivalDistance;
+    }
+
+    public long getTargetGeneration()
+    {
+        return targetGeneration;
     }
 
     public long getRouteGeneration()
