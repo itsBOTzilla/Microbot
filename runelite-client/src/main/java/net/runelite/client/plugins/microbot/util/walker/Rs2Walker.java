@@ -10314,11 +10314,11 @@ public class Rs2Walker {
             return requestedAction;
         }
 
-        NPCComposition composition = Microbot.getClientThread().runOnClientThreadOptional(
-                () -> Microbot.getClient().getNpcDefinition(npc.getId())).orElse(null);
-        return composition == null
-                ? requestedAction
-                : resolveShipNpcAction(requestedAction, composition.getActions());
+        String[] availableActions = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            NPCComposition composition = Microbot.getClient().getNpcDefinition(npc.getId());
+            return composition == null ? null : composition.getActions();
+        }).orElse(null);
+        return resolveShipNpcAction(requestedAction, availableActions);
     }
 
     static String resolveShipNpcAction(String requestedAction, String[] availableActions) {
