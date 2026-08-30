@@ -37,6 +37,7 @@ public class GestureAbortTest
 
 	private Object previousClient;
 	private Object previousNaturalMouse;
+	private long previousLockTimeoutMs;
 
 	@Before
 	public void before() throws Exception
@@ -78,6 +79,7 @@ public class GestureAbortTest
 
 		previousClient = swapStatic("client", client);
 		previousNaturalMouse = swapStatic("naturalMouse", null);
+		previousLockTimeoutMs = InputLoop.getLockTimeoutForTest();
 
 		PointerState.reset();
 		InputArbiter.resetForTest();
@@ -91,7 +93,7 @@ public class GestureAbortTest
 		swapStatic("naturalMouse", previousNaturalMouse);
 		PointerState.reset();
 		InputArbiter.resetForTest();
-		InputLoop.setLockTimeoutForTest(5_000L);
+		InputLoop.setLockTimeoutForTest(previousLockTimeoutMs);
 		Microbot.targetMenu = null;
 		while (BotEventGuard.isSynthetic())
 		{
@@ -257,7 +259,8 @@ public class GestureAbortTest
 	public void aSecondGestureGivesUpRatherThanBlockingForever() throws Exception
 	{
 		PointerState.setFromBot(100, 100);
-		InputLoop.setLockTimeoutForTest(150L);
+		final long configuredTimeoutMs = 150L;
+		InputLoop.setLockTimeoutForTest(configuredTimeoutMs);
 		CountDownLatch holding = new CountDownLatch(1);
 		CountDownLatch release = new CountDownLatch(1);
 
@@ -285,7 +288,8 @@ public class GestureAbortTest
 		hog.join(2_000);
 
 		assertEquals(InputLoop.Result.ABORTED, result);
-		assertTrue("must give up on a timeout, waited " + waitedMs + "ms", waitedMs < 5_000);
+		assertTrue("must give up on the configured timeout, waited " + waitedMs + "ms",
+			waitedMs < configuredTimeoutMs + 1_850L);
 	}
 
 	@Test

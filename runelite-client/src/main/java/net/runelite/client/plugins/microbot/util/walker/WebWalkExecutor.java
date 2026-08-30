@@ -12,9 +12,8 @@ import net.runelite.api.coords.WorldPoint;
  */
 public final class WebWalkExecutor
 {
-    static final int CHECKPOINT_ARRIVAL_DISTANCE = 1;
-    static final int WALK_CHECKPOINT_HANDOFF_DISTANCE = 6;
-    static final int RUN_CHECKPOINT_HANDOFF_DISTANCE = 8;
+    static final int CHECKPOINT_HANDOFF_DISTANCE = 5;
+    static final int CHECKPOINT_REACHED_DISTANCE = 1;
     static final int NO_PROGRESS_TICKS = 2;
     static final int MINIMAP_COMMAND_START_GRACE_TICKS = 4;
     static final int MAX_REDISPATCHES = 1;
@@ -130,6 +129,13 @@ public final class WebWalkExecutor
 
         if (observation.isRouteActionAvailable())
         {
+            WorldPoint preemptedCheckpoint = session.getCheckpoint();
+            if (preemptedCheckpoint != null)
+            {
+                WebWalkLog.checkpointReleased("route-action", preemptedCheckpoint,
+                        session.getCheckpointPathIndex(), observation.getPlayer(),
+                        observation.getTick());
+            }
             session.clearCheckpoint();
             if (session.isRouteActionPending())
             {
@@ -156,13 +162,15 @@ public final class WebWalkExecutor
             WorldPoint player = observation.getPlayer();
             boolean passedCheckpoint = session.getCheckpointPathIndex() >= 0
                     && observation.getPathIndex() > session.getCheckpointPathIndex();
-            boolean reachedCheckpoint = player != null && player.getPlane() == checkpoint.getPlane()
-                    && player.distanceTo2D(checkpoint) <= CHECKPOINT_ARRIVAL_DISTANCE;
-            int handoffDistance = observation.isRunEnabled()
-                    ? RUN_CHECKPOINT_HANDOFF_DISTANCE : WALK_CHECKPOINT_HANDOFF_DISTANCE;
-            if (passedCheckpoint || reachedCheckpoint
-                    || session.isCheckpointReadyForHandoff(player, handoffDistance))
+            boolean reachedCheckpoint = session.isCheckpointReached(player, CHECKPOINT_REACHED_DISTANCE);
+            boolean handoffCheckpoint = session.hasApproachedCheckpointForHandoff(player,
+                    CHECKPOINT_HANDOFF_DISTANCE);
+            if (passedCheckpoint || reachedCheckpoint || handoffCheckpoint)
             {
+                WebWalkLog.checkpointReleased(passedCheckpoint ? "passed"
+                                : reachedCheckpoint ? "reached" : "handoff",
+                        checkpoint, session.getCheckpointPathIndex(), player,
+                        observation.getTick());
                 session.clearCheckpoint();
             }
             else if (progressed || session.ticksWithoutCommandProgress(observation.getTick())

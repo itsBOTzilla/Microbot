@@ -7,12 +7,16 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import java.util.function.IntPredicate;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import net.runelite.api.Client;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.Pathfinder;
+import net.runelite.client.plugins.microbot.util.input.InputArbiter;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.tile.Rs2Tile;
 
@@ -22,7 +26,11 @@ import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
 public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
 {
     private static final int MINIMAP_ROUTE_RADIUS = 12;
-    private static final int ROUTE_EDGE_ACTION_DISTANCE = 3;
+    private static final int MINIMAP_COMMAND_RADIUS = 10;
+    private static final int CANVAS_ROUTE_RADIUS = 5;
+    private static final int CATALOG_ROUTE_EDGE_ACTION_DISTANCE = CANVAS_ROUTE_RADIUS;
+    private static final int GENERIC_ROUTE_EDGE_ACTION_DISTANCE = 3;
+    private static final int GENERIC_ROUTE_EDGE_INDEX_LOOKAHEAD = 2;
     private static final int STATE_WAIT_MS = 750;
     private static final long PATHFINDER_TIMEOUT_NANOS = 10_000_000_000L;
     private static final long LOGIN_GRACE_NANOS = 1_500_000_000L;
@@ -35,6 +43,7 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
     private long pathfinderWaitStartedNanos;
     private long loginMissingSinceNanos;
     private int routeActionIndex = -1;
+    private int lastObservedPathIndex = -1;
     private int lastObservedTick;
     private int pathRemaining;
     private List<WorldPoint> lastRawPath = Collections.emptyList();
@@ -48,10 +57,14 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
     @Override
     public Observation observe(WebWalkSession session)
     {
+        if (Thread.currentThread().isInterrupted() || InputArbiter.isHuman())
+        {
+            return new Observation(lastObservedTick, null, Status.CANCELLED,
+                    null, -1, null, -1, false, false);
+        }
         ClientSample sample = readClientSample();
         lastObservedTick = sample.tick;
-        if (Thread.currentThread().isInterrupted()
-                || Rs2Walker.getCurrentTarget() == null
+        if (Rs2Walker.getCurrentTarget() == null
                 || !target.equals(Rs2Walker.getCurrentTarget()))
         {
             return terminal(sample, Status.CANCELLED);
@@ -69,7 +82,7 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         loginMissingSinceNanos = 0L;
 
         Pathfinder pathfinder = Rs2PathApi.getPathfinder();
-        if (pathfinder == null || pathfinder == invalidatedPathfinder || !pathfinder.isDone())
+        if (shouldWaitForPathfinder(pathfinder, invalidatedPathfinder, target))
         {
             long now = System.nanoTime();
             if (pathfinderWaitStartedNanos == 0L)
@@ -93,6 +106,7 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         List<WorldPoint> rawPath = safePathCopy(pathfinder.getPath());
         List<WorldPoint> walkPath = safePathCopy(pathfinder.getWalkablePath());
         lastRawPath = rawPath;
+        lastObservedPathIndex = -1;
         RouteSnapshot route = new RouteSnapshot(routeGeneration, rawPath, walkPath);
         if (Rs2Walker.runtimeArrived(target, arrivalDistance, rawPath, walkPath))
         {
@@ -118,11 +132,12 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
             return new Observation(sample.tick, sample.player, Status.READY,
                     route, -1, null, -1, false, sample.runEnabled);
         }
+        lastObservedPathIndex = currentIndex;
         pathRemaining = Math.max(0, rawPath.size() - currentIndex - 1);
         routeActionIndex = routeActionIndex(rawPath, currentIndex, sample.player, reachable);
         boolean routeActionAvailable = routeActionIndex >= 0;
         ForwardCandidate candidate = selectForwardCandidate(rawPath, sample.player, reachable,
-                MINIMAP_ROUTE_RADIUS,
+                MINIMAP_COMMAND_RADIUS,
                 index -> Rs2Walker.isCatalogBackedTransportSegment(rawPath, index), currentIndex);
         if (routeActionAvailable)
         {
@@ -142,17 +157,115 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         {
             return DispatchResult.rejected();
         }
-        Rs2Walker.manageRunEnergy(pathRemaining);
-        DispatchResult result = Rs2Walker.dispatchMiniMapTarget(
-                lastRawPath, requestedTarget, player, pathIndex, MINIMAP_ROUTE_RADIUS - 1);
-        WebWalkLog.minimapDispatch(requestedTarget, result.getActualTarget(), pathIndex,
-                lastObservedTick, redispatch);
+        if (requestedTarget == null || player.getPlane() != requestedTarget.getPlane())
+        {
+            return DispatchResult.rejected();
+        }
+        DispatchResult result = dispatchMovementTarget(player, requestedTarget,
+                () -> Rs2Walker.manageRunEnergy(pathRemaining),
+                () -> Rs2Walker.walkFastCanvasOnScreenOnly(requestedTarget),
+                () -> dispatchRouteMinimap(lastRawPath, requestedTarget, player,
+                        Rs2Tile.getReachableTilesFromTile(player, MINIMAP_ROUTE_RADIUS + 2).keySet(),
+                        lastObservedPathIndex, pathIndex, MINIMAP_COMMAND_RADIUS,
+                        index -> Rs2Walker.isCatalogBackedTransportSegment(lastRawPath, index),
+                        Rs2Walker::walkMiniMap));
+        WebWalkLog.movementDispatch(result.getMethod(), requestedTarget,
+                result.getActualTarget(), pathIndex, lastObservedTick, redispatch);
         if (result.isAccepted())
         {
-            Rs2Walker.markFirstMovementClick("first_minimap_click", target, player,
-                    "requested=" + requestedTarget + " actual=" + result.getActualTarget());
+            String phase = result.getMethod() == DispatchMethod.CANVAS
+                    ? "first_canvas_click" : "first_minimap_click";
+            Rs2Walker.markFirstMovementClick(phase, target, player,
+                    "method=" + result.getMethod() + " requested=" + requestedTarget
+                            + " actual=" + result.getActualTarget());
         }
         return result;
+    }
+
+    static DispatchResult dispatchMovementTarget(WorldPoint player, WorldPoint requestedTarget,
+                                                   Runnable beforeDispatch,
+                                                   BooleanSupplier canvasDispatcher,
+                                                   Supplier<DispatchResult> minimapDispatcher)
+    {
+        Objects.requireNonNull(beforeDispatch, "beforeDispatch");
+        Objects.requireNonNull(canvasDispatcher, "canvasDispatcher");
+        Objects.requireNonNull(minimapDispatcher, "minimapDispatcher");
+        if (player == null || requestedTarget == null
+                || player.getPlane() != requestedTarget.getPlane())
+        {
+            return DispatchResult.rejected();
+        }
+        beforeDispatch.run();
+        if (shouldPreferCanvas(player, requestedTarget) && canvasDispatcher.getAsBoolean())
+        {
+            return DispatchResult.accepted(requestedTarget, DispatchMethod.CANVAS);
+        }
+        DispatchResult minimapResult = minimapDispatcher.get();
+        return minimapResult == null ? DispatchResult.rejected() : minimapResult;
+    }
+
+    static DispatchResult dispatchRouteMinimap(List<WorldPoint> path, WorldPoint requestedTarget,
+                                                WorldPoint player, Set<WorldPoint> reachable,
+                                                int currentIndex, int requestedIndex,
+                                                int maxEuclidean, IntPredicate transportEdgeAtIndex,
+                                                Predicate<WorldPoint> minimapDispatcher)
+    {
+        if (path == null || path.isEmpty() || requestedTarget == null || player == null
+                || reachable == null || reachable.isEmpty() || minimapDispatcher == null
+                || currentIndex < 0 || requestedIndex < 0 || requestedIndex >= path.size()
+                || !requestedTarget.equals(path.get(requestedIndex))
+                || requestedTarget.getPlane() != player.getPlane())
+        {
+            return DispatchResult.rejected();
+        }
+        int freshCurrentIndex = closestForwardIndex(path, player, reachable);
+        currentIndex = Math.max(currentIndex, freshCurrentIndex);
+        if (freshCurrentIndex < 0 || requestedIndex < currentIndex)
+        {
+            return DispatchResult.rejected();
+        }
+        int maxDistanceSquared = maxEuclidean * maxEuclidean;
+        if (reachable.contains(requestedTarget)
+                && euclideanSquared(requestedTarget, player) <= maxDistanceSquared
+                && minimapDispatcher.test(requestedTarget))
+        {
+            return DispatchResult.accepted(requestedTarget);
+        }
+
+        int maxFallbackIndex = requestedIndex - 1;
+        for (int index = currentIndex; index <= maxFallbackIndex; index++)
+        {
+            if (index < path.size() - 1 && transportEdgeAtIndex != null
+                    && transportEdgeAtIndex.test(index))
+            {
+                maxFallbackIndex = index;
+                break;
+            }
+        }
+        for (int index = maxFallbackIndex; index >= currentIndex; index--)
+        {
+            WorldPoint fallback = path.get(index);
+            if (fallback == null || fallback.equals(player)
+                    || path.subList(0, currentIndex).contains(fallback)
+                    || fallback.getPlane() != player.getPlane()
+                    || euclideanSquared(fallback, player) > maxDistanceSquared
+                    || !reachable.contains(fallback))
+            {
+                continue;
+            }
+            if (minimapDispatcher.test(fallback))
+            {
+                return DispatchResult.accepted(fallback);
+            }
+        }
+        return DispatchResult.rejected();
+    }
+
+    private static boolean shouldPreferCanvas(WorldPoint player, WorldPoint requestedTarget)
+    {
+        return player != null && requestedTarget != null
+                && player.getPlane() == requestedTarget.getPlane()
+                && player.distanceTo2D(requestedTarget) <= CANVAS_ROUTE_RADIUS;
     }
 
     @Override
@@ -275,23 +388,32 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
                 .orElse(-1);
     }
 
-    private static int routeActionIndex(List<WorldPoint> path, int currentIndex,
-                                        WorldPoint player, Set<WorldPoint> reachable)
+    static int routeActionIndex(List<WorldPoint> path, int currentIndex,
+                                WorldPoint player, Set<WorldPoint> reachable)
     {
-        int lastEdge = Math.min(path.size() - 2, currentIndex + 2);
+        int lastEdge = Math.min(path.size() - 2,
+                currentIndex + CATALOG_ROUTE_EDGE_ACTION_DISTANCE);
         for (int index = Math.max(0, currentIndex); index <= lastEdge; index++)
         {
             WorldPoint from = path.get(index);
             WorldPoint to = path.get(index + 1);
-            if (from == null || to == null || from.getPlane() != player.getPlane()
-                    || from.distanceTo2D(player) > ROUTE_EDGE_ACTION_DISTANCE)
+            if (from == null || to == null || from.getPlane() != player.getPlane())
             {
                 continue;
             }
+            int distance = from.distanceTo2D(player);
             if (Rs2Walker.isCatalogBackedTransportSegment(path, index)
-                    || reachable.contains(from) && !reachable.contains(to))
+                    && distance <= CATALOG_ROUTE_EDGE_ACTION_DISTANCE)
             {
                 return index;
+            }
+            if (reachable.contains(from) && !reachable.contains(to))
+            {
+                // Preserve route ordering: a later catalog transport must not leapfrog an
+                // unresolved door/gate/frontier that is still outside generic interaction range.
+                boolean genericActionInRange = index <= currentIndex + GENERIC_ROUTE_EDGE_INDEX_LOOKAHEAD
+                        && distance <= GENERIC_ROUTE_EDGE_ACTION_DISTANCE;
+                return genericActionInRange ? index : -1;
             }
         }
         return -1;
@@ -306,6 +428,17 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
     private Observation waiting(ClientSample sample)
     {
         return terminal(sample, Status.WAITING_FOR_PATH);
+    }
+
+    static boolean shouldWaitForPathfinder(Pathfinder pathfinder,
+                                           Pathfinder invalidatedPathfinder,
+                                           WorldPoint target)
+    {
+        return pathfinder == null
+                || pathfinder == invalidatedPathfinder
+                || !pathfinder.isDone()
+                || target == null
+                || !pathfinder.getTargets().contains(target);
     }
 
     private static List<WorldPoint> safePathCopy(List<WorldPoint> path)

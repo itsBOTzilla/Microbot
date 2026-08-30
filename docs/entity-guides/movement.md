@@ -4,23 +4,35 @@
 
 Blocking WebWalker calls run through `WebWalkExecutor`, `WebWalkSession`, and
 `RuneLiteWebWalkRuntime`. The executor owns one copied observation at a time and may dispatch at
-most one minimap click or route-edge interaction from it. After every dispatch it waits for a new
-tick, player tile, or pathfinder state before deciding again. `Rs2Walker.processWalk` remains only
-as legacy implementation detail during the migration and is not called by `walkWithStateInternal`.
+most one movement command (canvas or minimap) or route-edge interaction from it. After every
+dispatch it waits for a new tick, player tile, or pathfinder state before deciding again.
+`Rs2Walker.processWalk` remains only as legacy implementation detail during the migration and is
+not called by `walkWithStateInternal`.
 
 New movement fixes must preserve these boundaries:
 
 - the pathfinder and transport catalog remain the route-planning source;
 - the runtime selects the furthest collision-reachable forward point without crossing a transport;
 - an accepted click owns its actual fallback destination as the checkpoint;
-- after at least two tiles of approach, a checkpoint hands off inside the circular six-tile walk
-  or eight-tile run overlap so the next command is queued before movement is exhausted;
+- an accepted checkpoint remains owned until the player passes its raw-path index, reaches within
+  one Chebyshev tile, or, after a genuine approach from outside the five-tile band, comes within
+  five Chebyshev tiles; run speed
+  never releases it early;
+- a rejected dispatch with `actual=null` never creates a checkpoint, and the bounded rejection
+  budget replans instead of spinning on the same unusable target;
 - doors, transports, and dynamic blockers outrank forward minimap movement;
+- a door or transport preempts the active checkpoint and movement resumes only from a fresh
+  observation after the route action;
 - progress means a changed player tile or forward path index, not merely elapsed time;
 - a dispatch always ends the current decision cycle.
 
 The historical sections below document the failure modes that led to this executor. Do not restore
 their former multi-scan `processWalk` ownership model when reusing an individual helper.
+
+Source tests and a successful assembly prove only the implementation. Launcher qualification must
+use the stable `%USERPROFILE%\.microbot\microbot-local.jar`, verify its SHA-256 and embedded commit
+against the clean source commit, start it through the normal launcher with `version_pref=local`, and
+confirm the same commit in fresh startup logs. A matching filename alone is not runtime proof.
 
 ## 1. Do not recurse on failed minimap clicks without changing the click target
 
@@ -332,11 +344,8 @@ if (movingTowardDoorNearSide(clickPosition, playerPosition, from, to)) {
 
 After a handled transport, avoid expensive path-adjacent or raw transport scans on ordinary open-ground segments unless a nearby planned transport or recent door attempt exists. Those scans are recovery tools, and on long outdoor routes a no-op scan can add several seconds before the next minimap click.
 
-For long-route minimap walking, let the next checkpoint selection happen before the current minimap target is fully consumed. Waiting until the player is only a few tiles from the interim makes the walker visibly stop before issuing the next click; handing off at a moderate remaining distance keeps movement continuous without rapid re-clicking. If an interim clears as close and no nearby route door/transport is pending, issue the next route-aligned continuation click immediately instead of waiting for idle-nudge recovery.
-
-Continuation clicks that keep an active route moving should be tail-exempt like `interim-in-flight`; otherwise very long routes can exhaust `MAX_PROCESS_WALK_TAIL_ITERATIONS` while still making progress and trigger an unnecessary auto-retry.
-
-Sticky interim targets should also clear when route-index progress goes stale. If the player keeps moving but the closest path index does not advance for `INTERIM_PROGRESS_TIMEOUT_MS`, treat the checkpoint as stale and select a fresh route-aligned target instead of waiting for max-age expiry.
+The retained `processWalk` continuation/interim rules are legacy-only rollback behavior. They must
+not be used to give the active executor a second movement owner or to release a checkpoint early.
 
 When a route-following minimap click is outside the minimap clip, fallback clicks must stay on the raw path. A generic "reachable tile closer to target" fallback can select a tile far away from the route in open areas, especially near the final destination.
 
@@ -400,27 +409,46 @@ dialogue; an open dialogue by itself does not create a route-progress exit.
 
 **Defensive check:** Open a quest door that displays dialogue. The walker should log `object_transport_dialogue_yield`, then `route_dialogue_yield_to_caller`, and then allow a `quest-helper:dialogue-space-step` without another door click.
 
-## 17. Match checkpoint handoff geometry to minimap selection
+## 17. Keep one strict owner for every accepted movement checkpoint
 
-Minimap route targets are selected inside a circular Euclidean radius, so the early-handoff check must use that same Euclidean radius. Do not use `WorldPoint.distanceTo2D` for this check: its Chebyshev (maximum-axis) distance can classify a diagonal checkpoint as close before the player has made meaningful progress toward it. Keep the separate close/arrival threshold unchanged.
+An accepted minimap or canvas checkpoint remains owned until the player passes its raw-path index,
+reaches within one Chebyshev tile, or genuinely approaches it from outside the five-tile band to
+within five Chebyshev tiles. A checkpoint accepted inside that band remains owned until it reaches
+within one tile, has index progress, or enters bounded recovery. Run speed does not release ownership early. Door and transport actions preempt
+the checkpoint and require a fresh route observation before movement resumes.
 
-**Why this matters:** A checkpoint seven tiles away on both axes is within eight tiles by Chebyshev distance but almost ten tiles away geometrically. Releasing that checkpoint immediately defeats sticky-target pacing and causes repeated route processing and visible stop-start movement.
+**Why this matters:** Releasing a checkpoint merely because a running player entered a larger
+overlap radius allowed repeated decisions from stale route state. That caused extra clicks, visible
+stop/start cadence, and competing movement while the first command was still active.
 
 **Pattern to follow:**
 
 ```java
-long dx = (long) player.getX() - checkpoint.getX();
-long dy = (long) player.getY() - checkpoint.getY();
-boolean readyForHandoff = dx * dx + dy * dy <= (long) radius * radius;
+boolean passed = observation.getPathIndex() > checkpointPathIndex;
+boolean reached = player.getPlane() == checkpoint.getPlane()
+        && player.distanceTo2D(checkpoint) <= 1;
+boolean handoff = checkpointStartedOutsideFiveTiles
+        && player.getPlane() == checkpoint.getPlane()
+        && player.distanceTo2D(checkpoint) <= 5;
+if (passed || reached || handoff) {
+    WebWalkLog.checkpointReleased(passed ? "passed" : reached ? "reached" : "handoff",
+            checkpoint, checkpointPathIndex, player, observation.getTick());
+    session.clearCheckpoint();
+}
 ```
 
-**Where this applies:** `Rs2Walker` interim waits, active-route yield decisions, and any future minimap checkpoint handoff logic.
+When an exact route edge becomes actionable, log `released=route-action`, clear the checkpoint
+before interaction, dispatch only that route action, and wait for a fresh observation. A failed
+movement dispatch whose resolved target is `null` is not an accepted checkpoint and must consume
+the bounded rejection budget instead.
 
-**Defensive check:** For a running handoff radius of eight, `(7, 7)` must remain in flight while `(8, 0)` may hand off. Recovery and the five-tile checkpoint-clear contract must remain unchanged.
+**Where this applies:** `WebWalkExecutor`, `WebWalkSession`, movement dispatch results, and every
+door or transport implementation behind `RuneLiteWebWalkRuntime`.
 
-Apply the route handoff at the start of the next walk pass, before collision, door, and transport scans, and apply the same decision if the path loop revisits the checkpoint in the same pass that issued it. Waking the pass at the larger pre-click radius without releasing the route-owned checkpoint there still lets those scans consume the remaining movement time and produces a stop before the continuation click. Require at least two tiles of actual approach before early release so a newly issued checkpoint is not replaced after one tile. Tag recovery-owned checkpoints separately and keep them on the five-tile clear threshold.
-
-Do not compare the Euclidean click-selection radius directly with Chebyshev player-to-checkpoint distance. A diagonal target selected at Euclidean reach nine commonly starts at Chebyshev distance eight; requiring that value to begin beyond the handoff radius disables early continuation and forces every command down to the five-tile close threshold. Base handoff on the cumulative decrease from the checkpoint's publication distance, preserving the separately updated closest distance for moving-away detection. Count an actual player tile change as command progress even when a curved route leaves distance-to-checkpoint unchanged, while retaining maximum-age, door, transport, and recovery gates.
+**Defensive check:** The executor sequence must be movement, wait, route action, wait, new movement,
+wait. Walking and running must keep the same checkpoint until it is passed or reaches the five-tile
+handoff after beginning outside that band, except that any accepted checkpoint releases once it is
+within one tile.
 
 ## 18. Exit a walk when the local player disappears
 
@@ -452,3 +480,64 @@ Before the first movement click, skip speculative local-reachability recovery fo
 **Where this applies:** the `Rs2Walker.processWalk` local-reachability branch before `firstMovementClickMarked`, startup obstacle policy, and the final route-click door check.
 
 **Defensive check:** On a fresh walk with an unreachable smoothed waypoint but a usable raw route, logs should progress from `preclick_segment_handler_skip` to `click_candidate_found` and `first_minimap_click`; they should not emit `frontier rewind`, `recovery_target_walled`, or `active_route_idle_nudge` before that first click.
+
+## 20. Treat passive cursor motion as position, not a WebWalker takeover
+
+The real canvas listener must continue recording `MOUSE_MOVED` and `MOUSE_DRAGGED` coordinates in
+`PointerState`, but position samples alone must not mark `InputArbiter` as HUMAN. Only an actual
+mouse-button or keyboard gesture may interrupt script waits and route ownership.
+
+**Why this matters:** When motion was measured against the last synthetic cursor position, moving
+the physical cursor more than ten pixels while hovering the client marked HUMAN for 1.8 seconds.
+Continuous motion repeatedly renewed that window, causing `Script`, `Global.sleepUntil`,
+`VirtualMouse`, and `Rs2Walker` to pause or reject work even though the user never clicked.
+
+**Pattern to follow:**
+
+```java
+PointerState.setFromReal(canvasX, canvasY); // position only
+
+// Ownership begins with deliberate input, not hover motion.
+InputArbiter.onRealButtonPressed(button);
+InputArbiter.onRealKeyPressed(keyCode);
+```
+
+**Where this applies:** `CanvasInputListener`, `InputArbiter`, `Global` waits, `Script.run`,
+`VirtualMouse`, `Rs2Walker`, and any movement executor that consults human-input ownership.
+
+**Defensive check:** Dispatch repeated real `MOUSE_MOVED` events over the canvas and assert the
+pointer changes while `InputArbiter.isHuman()` stays false and a real `Global.sleepUntil` continues
+polling. Keep separate tests proving real button/key gestures still yield.
+
+## 21. Scan the full actionable transport horizon and trust exact arrival
+
+See [Transport Handoff: Preventing Immediate Reverse Traversal](../transport-handoff-fix.md) for
+the complete Edgeville failure analysis, one-shot inverse-edge suppression design, regression
+coverage, and live acceptance criteria.
+
+The route-action scan must inspect every raw-path edge within the catalog transport interaction
+radius, not only the next one or two list entries. After a transport lands, an exact player-target
+match is authoritative even if a superseded path snapshot still contains the inverse transport.
+Keep the wider scan limited to catalog-backed transports; generic blocked edges retain their
+smaller interaction radius.
+
+**Why this matters:** At the Edgeville trapdoor, the transport origin can be five raw-path indices
+ahead while only four tiles from the player. A two-index scan ground-clicks the trapdoor tile first.
+After climbing down, a stale reverse-ladder edge can then reject exact arrival and send the player
+straight back to the surface.
+
+**Pattern to follow:**
+
+```java
+int lastEdge = Math.min(path.size() - 2, currentIndex + CATALOG_ACTION_DISTANCE);
+if (player.equals(target)) {
+    return ARRIVED;
+}
+```
+
+**Where this applies:** `RuneLiteWebWalkRuntime.routeActionIndex`, `Rs2Walker.runtimeArrived`, and
+transport handoff/replan boundaries.
+
+**Defensive check:** Model a catalog transport five raw-path indices ahead and assert it preempts
+movement. Separately assert that exact physical arrival succeeds despite a stale inverse edge,
+while non-exact configured-distance arrival still honors pending route interactions.

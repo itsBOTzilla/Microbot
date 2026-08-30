@@ -5,6 +5,10 @@ import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.util.keyboard.Rs2Keyboard;
 import net.runelite.client.plugins.microbot.util.mouse.BotEventGuard;
 import net.runelite.client.plugins.microbot.util.mouse.VirtualMouse;
+import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
+import net.runelite.client.plugins.microbot.util.walker.RuneLiteWebWalkRuntime;
+import net.runelite.client.plugins.microbot.util.walker.WebWalkRuntime;
+import net.runelite.client.plugins.microbot.util.walker.WebWalkSession;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -84,14 +88,17 @@ public class InputArbiterTest
 	}
 
 	@Test
-	public void realMovePastThresholdFlipsHuman()
+	public void passiveRealMoveDoesNotClaimInput()
 	{
 		PointerState.setFromBot(100, 100);
 		assertFalse(InputArbiter.isHuman());
 
 		realMove(100, 111);
 
-		assertTrue(InputArbiter.isHuman());
+		assertEquals("passive motion must still update the tracked pointer", 100, PointerState.getX());
+		assertEquals(111, PointerState.getY());
+		assertFalse("hovering and moving over the client must not interrupt scripts",
+			InputArbiter.isHuman());
 	}
 
 	@Test
@@ -105,18 +112,46 @@ public class InputArbiterTest
 	}
 
 	@Test
-	public void slowDriftAccumulatesBecauseTheReferenceIsTheBotPoint()
+	public void repeatedPassiveMotionDoesNotClaimInput()
 	{
 		PointerState.setFromBot(100, 100);
 
-		// Measured against the previous real event, no single delta crosses the threshold.
 		for (int i = 1; i <= 20; i++)
 		{
 			realMove(100 + i * 3, 100);
 		}
 
-		assertTrue("60px of real travel must be seen even though no single delta exceeded 10px",
+		assertEquals(160, PointerState.getX());
+		assertFalse("continuous hover motion must not keep scripts in HUMAN",
 			InputArbiter.isHuman());
+	}
+
+	@Test
+	public void realButtonTakeoverCancelsActiveWebWalkObservation() throws Exception
+	{
+		net.runelite.client.callback.ClientThread clientThread =
+			mock(net.runelite.client.callback.ClientThread.class);
+		when(clientThread.runOnClientThreadOptional(org.mockito.ArgumentMatchers.any()))
+			.thenReturn(java.util.Optional.empty());
+		net.runelite.api.coords.WorldPoint goal =
+			new net.runelite.api.coords.WorldPoint(3200, 3200, 0);
+		Object previousClientThread = swapStatic("clientThread", clientThread);
+		Object previousTarget = swapStatic(Rs2Walker.class, "currentTarget", goal);
+		try
+		{
+			PointerState.setFromBot(100, 100);
+			realButtonPressed(MouseEvent.BUTTON1);
+
+			WebWalkRuntime.Observation observation = new RuneLiteWebWalkRuntime(goal, 0)
+				.observe(new WebWalkSession(goal, 0));
+
+			assertEquals(WebWalkRuntime.Status.CANCELLED, observation.getStatus());
+		}
+		finally
+		{
+			swapStatic(Rs2Walker.class, "currentTarget", previousTarget);
+			swapStatic("clientThread", previousClientThread);
+		}
 	}
 
 	@Test
@@ -154,9 +189,10 @@ public class InputArbiterTest
 	public void idleWindowReturnsToBot()
 	{
 		PointerState.setFromBot(100, 100);
-		realMove(100, 200);
+		realButtonPressed(MouseEvent.BUTTON1);
 		assertTrue(InputArbiter.isHuman());
 
+		realButtonReleased(MouseEvent.BUTTON1);
 		advanceMs(1799);
 		assertTrue("still inside the 1800ms window", InputArbiter.isHuman());
 
@@ -226,6 +262,7 @@ public class InputArbiterTest
 	public void whileHumanASyntheticEmitDoesNotClobberTheHumanPoint()
 	{
 		PointerState.setFromBot(100, 100);
+		realButtonPressed(MouseEvent.BUTTON1);
 		realMove(640, 480);
 		assertTrue(InputArbiter.isHuman());
 
@@ -239,7 +276,8 @@ public class InputArbiterTest
 	public void aClockStepBackwardsDoesNotPinHumanForever()
 	{
 		PointerState.setFromBot(100, 100);
-		realMove(100, 200);
+		realButtonPressed(MouseEvent.BUTTON1);
+		realButtonReleased(MouseEvent.BUTTON1);
 		assertTrue(InputArbiter.isHuman());
 
 		// A wall clock does this on NTP correction or a VM resuming, and the elapsed comparison
@@ -302,7 +340,12 @@ public class InputArbiterTest
 
 	private static Object swapStatic(String name, Object value) throws Exception
 	{
-		Field field = Microbot.class.getDeclaredField(name);
+		return swapStatic(Microbot.class, name, value);
+	}
+
+	private static Object swapStatic(Class<?> owner, String name, Object value) throws Exception
+	{
+		Field field = owner.getDeclaredField(name);
 		field.setAccessible(true);
 		Object previous = field.get(null);
 		field.set(null, value);

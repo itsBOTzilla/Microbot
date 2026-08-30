@@ -1,5 +1,10 @@
 package net.runelite.client.plugins.microbot.util.walker;
+import net.runelite.api.Client;
+import net.runelite.client.eventbus.EventBus;
+import net.runelite.client.plugins.microbot.Microbot;
+import net.runelite.client.plugins.microbot.api.playerstate.Rs2PlayerStateCache;
 import net.runelite.client.plugins.microbot.util.walker.geometry.WalkerPathGeometry;
+import net.runelite.client.plugins.microbot.util.walker.lifecycle.Rs2WalkerLifecycleRuntime;
 import net.runelite.client.plugins.microbot.util.walker.obstacle.Rs2ObstacleHandler;
 import net.runelite.client.plugins.microbot.util.walker.recovery.RouteRecovery;
 import net.runelite.client.plugins.microbot.util.walker.door.Rs2DoorGeometry;
@@ -10,12 +15,15 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.client.plugins.microbot.shortestpath.Transport;
+import net.runelite.client.plugins.microbot.shortestpath.ShortestPathPlugin;
 import net.runelite.client.plugins.microbot.shortestpath.TransportType;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.Pathfinder;
+import net.runelite.client.plugins.microbot.shortestpath.pathfinder.PathfinderConfig;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -23,6 +31,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 
 import static org.junit.Assert.assertEquals;
@@ -51,9 +60,178 @@ import static org.mockito.Mockito.when;
 public class Rs2WalkerUnitTest {
 
     @Test
+    public void confirmedTransportLandingDoesNotKeepPotentialReverseContinuation() {
+        assertFalse("an expected landing must still restart through reverse-edge suppression",
+                Rs2Walker.shouldKeepPrecomputedTransportContinuation(true, false, true, false));
+        assertFalse("a precomputed continuation must not bypass reverse-edge suppression after landing",
+                Rs2Walker.shouldKeepPrecomputedTransportContinuation(false, true, true, true));
+        assertTrue("a confirmed safe continuation should not force an unnecessary re-path",
+                Rs2Walker.shouldKeepPrecomputedTransportContinuation(false, true, true, false));
+        assertTrue("a not-yet-observed landing can retain its expected continuation",
+                Rs2Walker.shouldKeepPrecomputedTransportContinuation(true, false, false, false));
+    }
+
+    @Test
+    public void edgevilleObservedLandingConfirmsTheCatalogTransportDestination() {
+        assertTrue(Rs2Walker.isConfirmedTransportLanding(
+                new WorldPoint(3096, 9869, 0), new WorldPoint(3096, 9867, 0)));
+        assertFalse(Rs2Walker.isConfirmedTransportLanding(
+                new WorldPoint(3096, 3468, 0), new WorldPoint(3096, 9867, 0)));
+    }
+
+    @Test
+    public void pathContainsEdgeMatchesOnlyTheExactDirectedTransportEdge() {
+        WorldPoint underground = new WorldPoint(3096, 9867, 0);
+        WorldPoint surface = new WorldPoint(3096, 3468, 0);
+        List<WorldPoint> path = Arrays.asList(underground, surface, new WorldPoint(3095, 3468, 0));
+
+        assertTrue(Rs2Walker.pathContainsEdge(path, underground, surface));
+        assertFalse(Rs2Walker.pathContainsEdge(path, surface, underground));
+    }
+
+    @Test
+    public void pathContainsTransportFamilyRecognizesNearbyCatalogVariants() {
+        WorldPoint observedLanding = new WorldPoint(3096, 9867, 0);
+        WorldPoint originalOrigin = new WorldPoint(3096, 3468, 0);
+        List<WorldPoint> path = Arrays.asList(
+                observedLanding,
+                new WorldPoint(3097, 9868, 0),
+                originalOrigin);
+
+        assertTrue(Rs2Walker.pathContainsTransportFamily(path, observedLanding, originalOrigin));
+        assertFalse(Rs2Walker.pathContainsTransportFamily(path, originalOrigin, observedLanding));
+    }
+
+    @Test
+    public void pathContainsTransportFamilyKeepsAdjacentEdgesDirectional() {
+        WorldPoint origin = new WorldPoint(3200, 3200, 0);
+        WorldPoint destination = new WorldPoint(3201, 3200, 0);
+
+        assertFalse("the traversed forward edge must not look like its requested reverse",
+                Rs2Walker.pathContainsTransportFamily(
+                        Arrays.asList(origin, destination), destination, origin));
+        assertTrue("an exact adjacent reverse edge must still be detected",
+                Rs2Walker.pathContainsTransportFamily(
+                        Arrays.asList(destination, origin), destination, origin));
+    }
+
+    @Test
+    public void pendingReverseSuppressionCarriesToKeyWalkButNotAnExplicitSurfaceRoute() throws Exception {
+        WorldPoint underground = new WorldPoint(3096, 9867, 0);
+        WorldPoint observedUndergroundLanding = new WorldPoint(3096, 9869, 0);
+        WorldPoint surface = new WorldPoint(3096, 3468, 0);
+        WorldPoint brassKey = new WorldPoint(3131, 9862, 0);
+        WorldPoint surfaceBank = new WorldPoint(3094, 3492, 0);
+
+        try {
+            Rs2WalkerLifecycleRuntime.suppressReverseTransportOnNextPath(underground, surface);
+            assertNotNull("the immediate underground key walk must consume the inverse-edge suppression",
+                    consumePendingTransportSuppression(observedUndergroundLanding, Set.of(brassKey)));
+
+            Rs2WalkerLifecycleRuntime.suppressReverseTransportOnNextPath(underground, surface);
+            assertNull("a requested surface route must retain use of the legitimate exit ladder",
+                    consumePendingTransportSuppression(observedUndergroundLanding, Set.of(surfaceBank)));
+        } finally {
+            Rs2WalkerLifecycleRuntime.suppressReverseTransportOnNextPath(null, null);
+        }
+    }
+
+    @Test
+    public void completedTransportNoOpReplanDoesNotConsumePendingReverseSuppression() throws Exception {
+        WorldPoint underground = new WorldPoint(3096, 9867, 0);
+        WorldPoint surface = new WorldPoint(3096, 3468, 0);
+        WorldPoint brassKey = new WorldPoint(3131, 9862, 0);
+
+        try {
+            Rs2WalkerLifecycleRuntime.suppressReverseTransportOnNextPath(underground, surface);
+
+            assertNull("a terminal start-equals-goal replan must leave the one-shot suppression pending",
+                    consumePendingTransportSuppression(underground, Set.of(underground)));
+            assertNotNull("the next meaningful underground walk must receive the pending suppression",
+                    consumePendingTransportSuppression(underground, Set.of(brassKey)));
+        } finally {
+            Rs2WalkerLifecycleRuntime.suppressReverseTransportOnNextPath(null, null);
+        }
+    }
+
+    private static Object consumePendingTransportSuppression(WorldPoint start, Set<WorldPoint> ends)
+            throws Exception {
+        java.lang.reflect.Method method = Rs2WalkerLifecycleRuntime.class.getDeclaredMethod(
+                "consumePendingTransportSuppression", WorldPoint.class, Set.class);
+        method.setAccessible(true);
+        return method.invoke(null, start, ends);
+    }
+
+    @Test
     public void transientMissingPlayerSnapshotKeepsRouteAlive() {
         assertEquals(WalkerState.MOVING, Rs2Walker.playerSnapshotUnavailableState(true));
         assertEquals(WalkerState.EXIT, Rs2Walker.playerSnapshotUnavailableState(false));
+    }
+
+    @Test
+    public void runtimeArrival_exactDistanceDoesNotAcceptAdjacentPlayer() throws Exception {
+        WorldPoint target = new WorldPoint(3164, 3466, 0);
+        Rs2PlayerStateCache playerState = playerStateAt(new WorldPoint(3164, 3465, 0));
+        Object previousPlayerState = swapMicrobotStatic("rs2PlayerStateCache", playerState);
+        try {
+            assertFalse("a zero-tile arrival contract must reject a player one tile from the target",
+                    Rs2Walker.runtimeArrived(target, 0,
+                            Collections.singletonList(target), Collections.singletonList(target)));
+        } finally {
+            swapMicrobotStatic("rs2PlayerStateCache", previousPlayerState);
+        }
+    }
+
+    @Test
+    public void runtimeArrival_preservesConfiguredNonzeroDistance() throws Exception {
+        WorldPoint target = new WorldPoint(3164, 3466, 0);
+        Rs2PlayerStateCache playerState = playerStateAt(new WorldPoint(3164, 3465, 0));
+        Object previousPlayerState = swapMicrobotStatic("rs2PlayerStateCache", playerState);
+        try {
+            assertTrue("a one-tile arrival contract must accept a player one tile from the target",
+                    Rs2Walker.runtimeArrived(target, 1,
+                            Collections.singletonList(target), Collections.singletonList(target)));
+        } finally {
+            swapMicrobotStatic("rs2PlayerStateCache", previousPlayerState);
+        }
+    }
+
+    @Test
+    public void runtimeArrival_exactPlayerTargetOverridesStaleReverseTransport() throws Exception {
+        WorldPoint undergroundEntry = new WorldPoint(3096, 9867, 0);
+        WorldPoint surfaceExit = new WorldPoint(3096, 3468, 0);
+        WorldPoint target = new WorldPoint(3131, 9862, 0);
+        List<WorldPoint> stalePath = Arrays.asList(undergroundEntry, surfaceExit, target);
+        Rs2PlayerStateCache playerState = playerStateAt(target);
+        Object previousPlayerState = swapMicrobotStatic("rs2PlayerStateCache", playerState);
+        PathfinderConfig previousConfig = ShortestPathPlugin.pathfinderConfig;
+        PathfinderConfig config = mock(PathfinderConfig.class);
+        ConcurrentHashMap<WorldPoint, Set<Transport>> transports = new ConcurrentHashMap<>();
+        transports.put(undergroundEntry, Set.of(new Transport(undergroundEntry, surfaceExit,
+                "Edgeville ladder", TransportType.TRANSPORT, false, 0)));
+        when(config.getTransports()).thenReturn(transports);
+        try {
+            ShortestPathPlugin.pathfinderConfig = config;
+            assertTrue("standing exactly on the requested target must beat a stale reverse transport",
+                    Rs2Walker.runtimeArrived(target, 0, stalePath, stalePath));
+        } finally {
+            ShortestPathPlugin.pathfinderConfig = previousConfig;
+            swapMicrobotStatic("rs2PlayerStateCache", previousPlayerState);
+        }
+    }
+
+    @Test
+    public void runtimeArrival_doesNotBypassTightEndpointFinishThreshold() throws Exception {
+        WorldPoint target = new WorldPoint(3164, 3466, 0);
+        Rs2PlayerStateCache playerState = playerStateAt(new WorldPoint(3164, 3461, 0));
+        Object previousPlayerState = swapMicrobotStatic("rs2PlayerStateCache", playerState);
+        try {
+            assertFalse("an endpoint at the target must not bypass the short-approach finish cap",
+                    Rs2Walker.runtimeArrived(target, 5,
+                            Collections.singletonList(target), Collections.singletonList(target)));
+        } finally {
+            swapMicrobotStatic("rs2PlayerStateCache", previousPlayerState);
+        }
     }
 
     @Test
@@ -75,6 +253,25 @@ public class Rs2WalkerUnitTest {
         Rs2Walker.clearWalkerDedupeForTesting();
         Rs2Walker.Telemetry.reset();
         Rs2Walker.sessionBlacklistedDoors.clear();
+    }
+
+    private static Object swapMicrobotStatic(String name, Object value) throws Exception {
+        Field field = Microbot.class.getDeclaredField(name);
+        field.setAccessible(true);
+        Object previous = field.get(null);
+        field.set(null, value);
+        return previous;
+    }
+
+    private static Rs2PlayerStateCache playerStateAt(WorldPoint player) throws Exception {
+        Rs2PlayerStateCache state = new Rs2PlayerStateCache(mock(EventBus.class), mock(Client.class), null);
+        Field playerPosition = Rs2PlayerStateCache.class.getDeclaredField("localPlayerPosition");
+        playerPosition.setAccessible(true);
+        playerPosition.set(state, player);
+        Field lastPlayerTick = Rs2PlayerStateCache.class.getDeclaredField("lastLocalPlayerTick");
+        lastPlayerTick.setAccessible(true);
+        lastPlayerTick.setInt(state, Integer.MAX_VALUE);
+        return state;
     }
 
     @Test

@@ -25,6 +25,13 @@ public interface WebWalkRuntime
         FAILED
     }
 
+    enum DispatchMethod
+    {
+        CANVAS,
+        MINIMAP,
+        NONE
+    }
+
     Observation observe(WebWalkSession session);
 
     DispatchResult dispatchMinimap(WorldPoint requestedTarget, int pathIndex, boolean redispatch);
@@ -160,21 +167,32 @@ public interface WebWalkRuntime
     {
         private final boolean accepted;
         private final WorldPoint actualTarget;
+        private final DispatchMethod method;
 
-        private DispatchResult(boolean accepted, WorldPoint actualTarget)
+        private DispatchResult(boolean accepted, WorldPoint actualTarget, DispatchMethod method)
         {
             this.accepted = accepted;
             this.actualTarget = actualTarget;
+            this.method = Objects.requireNonNull(method, "method");
         }
 
         public static DispatchResult accepted(WorldPoint actualTarget)
         {
-            return new DispatchResult(true, Objects.requireNonNull(actualTarget, "actualTarget"));
+            return accepted(actualTarget, DispatchMethod.MINIMAP);
+        }
+
+        public static DispatchResult accepted(WorldPoint actualTarget, DispatchMethod method)
+        {
+            if (method == DispatchMethod.NONE)
+            {
+                throw new IllegalArgumentException("accepted dispatch requires an input method");
+            }
+            return new DispatchResult(true, Objects.requireNonNull(actualTarget, "actualTarget"), method);
         }
 
         public static DispatchResult rejected()
         {
-            return new DispatchResult(false, null);
+            return new DispatchResult(false, null, DispatchMethod.NONE);
         }
 
         public boolean isAccepted()
@@ -185,6 +203,11 @@ public interface WebWalkRuntime
         public WorldPoint getActualTarget()
         {
             return actualTarget;
+        }
+
+        public DispatchMethod getMethod()
+        {
+            return method;
         }
     }
 }

@@ -127,7 +127,15 @@ public class SplitFlagMap
 
 	public boolean get(int x, int y, int z, int flag)
 	{
-		final int index = getIndex(x / REGION_SIZE, y / REGION_SIZE);
+		final int regionX = x / REGION_SIZE;
+		final int regionY = y / REGION_SIZE;
+		if (regionX < regionExtents.getMinX() || regionX > regionExtents.getMaxX()
+			|| regionY < regionExtents.getMinY() || regionY > regionExtents.getMaxY())
+		{
+			return false;
+		}
+
+		final int index = getIndex(regionX, regionY);
 		if (index < 0 || index >= regionWordOffset.length)
 		{
 			return false;

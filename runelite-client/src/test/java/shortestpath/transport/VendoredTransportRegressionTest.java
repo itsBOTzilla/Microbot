@@ -4,6 +4,7 @@ import java.util.Collections;
 import net.runelite.api.Skill;
 import org.junit.Test;
 import shortestpath.WorldPointUtil;
+import shortestpath.ShortestPathConfig;
 import shortestpath.leagues.LeagueModeState;
 import shortestpath.leagues.LeagueRegion;
 import shortestpath.transport.parser.SkillRequirementParser;
@@ -11,9 +12,21 @@ import shortestpath.transport.parser.SkillRequirementParser;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertSame;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 public class VendoredTransportRegressionTest
 {
+	@Test
+	public void quetzalWhistleUsesItsOwnConfiguredCost()
+	{
+		ShortestPathConfig config = mock(ShortestPathConfig.class);
+		when(config.costQuetzals()).thenReturn(7);
+		when(config.costQuetzalWhistle()).thenReturn(19);
+
+		assertEquals(19, (int) TransportType.QUETZAL_WHISTLE.getCostGetter().apply(config));
+	}
+
 	@Test
 	public void emptyLeagueUnlockSetProducesAnEmptySnapshot()
 	{

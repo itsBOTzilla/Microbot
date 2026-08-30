@@ -59,7 +59,7 @@ public class InputDiagnosticsTest
 
 		assertEquals("none yet", readout.get("bot point"));
 		assertEquals("a distance from (-1,-1) would read as a bug", "n/a until first emit",
-			readout.get("drift"));
+			readout.get("pointer offset"));
 		assertEquals("never", readout.get("last real"));
 		assertEquals("none", readout.get("real held"));
 	}

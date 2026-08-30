@@ -34,6 +34,11 @@ public final class InputLoop
 		lockTimeoutMs = millis;
 	}
 
+	static long getLockTimeoutForTest()
+	{
+		return lockTimeoutMs;
+	}
+
 	public enum Result
 	{
 		COMPLETED,
