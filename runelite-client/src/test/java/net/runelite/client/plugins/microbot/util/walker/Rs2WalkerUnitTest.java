@@ -1,4 +1,8 @@
 package net.runelite.client.plugins.microbot.util.walker;
+import net.runelite.api.Client;
+import net.runelite.client.eventbus.EventBus;
+import net.runelite.client.plugins.microbot.Microbot;
+import net.runelite.client.plugins.microbot.api.playerstate.Rs2PlayerStateCache;
 import net.runelite.client.plugins.microbot.util.walker.geometry.WalkerPathGeometry;
 import net.runelite.client.plugins.microbot.util.walker.obstacle.Rs2ObstacleHandler;
 import net.runelite.client.plugins.microbot.util.walker.recovery.RouteRecovery;
@@ -16,6 +20,7 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -57,6 +62,34 @@ public class Rs2WalkerUnitTest {
     }
 
     @Test
+    public void runtimeArrival_exactDistanceDoesNotAcceptAdjacentPlayer() throws Exception {
+        WorldPoint target = new WorldPoint(3164, 3466, 0);
+        Rs2PlayerStateCache playerState = playerStateAt(new WorldPoint(3164, 3465, 0));
+        Object previousPlayerState = swapMicrobotStatic("rs2PlayerStateCache", playerState);
+        try {
+            assertFalse("a zero-tile arrival contract must reject a player one tile from the target",
+                    Rs2Walker.runtimeArrived(target, 0,
+                            Collections.singletonList(target), Collections.singletonList(target)));
+        } finally {
+            swapMicrobotStatic("rs2PlayerStateCache", previousPlayerState);
+        }
+    }
+
+    @Test
+    public void runtimeArrival_preservesConfiguredNonzeroDistance() throws Exception {
+        WorldPoint target = new WorldPoint(3164, 3466, 0);
+        Rs2PlayerStateCache playerState = playerStateAt(new WorldPoint(3164, 3465, 0));
+        Object previousPlayerState = swapMicrobotStatic("rs2PlayerStateCache", playerState);
+        try {
+            assertTrue("a one-tile arrival contract must accept a player one tile from the target",
+                    Rs2Walker.runtimeArrived(target, 1,
+                            Collections.singletonList(target), Collections.singletonList(target)));
+        } finally {
+            swapMicrobotStatic("rs2PlayerStateCache", previousPlayerState);
+        }
+    }
+
+    @Test
     public void interimDoorScanMayRunDuringApproachButRecoveryScanStillWaits() {
         assertFalse(Rs2Walker.shouldDeferPendingDoorRawScan(true, true));
         assertTrue(Rs2Walker.shouldDeferPendingDoorRawScan(true, false));
@@ -75,6 +108,25 @@ public class Rs2WalkerUnitTest {
         Rs2Walker.clearWalkerDedupeForTesting();
         Rs2Walker.Telemetry.reset();
         Rs2Walker.sessionBlacklistedDoors.clear();
+    }
+
+    private static Object swapMicrobotStatic(String name, Object value) throws Exception {
+        Field field = Microbot.class.getDeclaredField(name);
+        field.setAccessible(true);
+        Object previous = field.get(null);
+        field.set(null, value);
+        return previous;
+    }
+
+    private static Rs2PlayerStateCache playerStateAt(WorldPoint player) throws Exception {
+        Rs2PlayerStateCache state = new Rs2PlayerStateCache(mock(EventBus.class), mock(Client.class), null);
+        Field playerPosition = Rs2PlayerStateCache.class.getDeclaredField("localPlayerPosition");
+        playerPosition.setAccessible(true);
+        playerPosition.set(state, player);
+        Field lastPlayerTick = Rs2PlayerStateCache.class.getDeclaredField("lastLocalPlayerTick");
+        lastPlayerTick.setAccessible(true);
+        lastPlayerTick.setInt(state, Integer.MAX_VALUE);
+        return state;
     }
 
     @Test

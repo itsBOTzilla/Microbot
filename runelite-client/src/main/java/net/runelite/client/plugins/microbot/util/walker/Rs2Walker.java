@@ -658,7 +658,7 @@ public class Rs2Walker {
         boolean endpointArrival = endpoint != null
                 && endpoint.getPlane() == target.getPlane()
                 && endpoint.distanceTo2D(target) <= configuredDistance
-                && player.distanceTo2D(endpoint) <= 1;
+                && player.distanceTo2D(target) <= configuredDistance;
         boolean pendingTransport = hasPendingExplicitTransportStepBeforeArrival(
                 rawPath, target, configuredDistance)
                 || hasPendingExplicitTransportStepBeforeArrival(
