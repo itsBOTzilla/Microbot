@@ -6,6 +6,7 @@ import net.runelite.client.game.ItemEquipmentStats;
 import net.runelite.client.game.ItemStats;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
+import net.runelite.client.plugins.microbot.util.gameobject.Rs2GameObject;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2ItemModel;
 
@@ -14,6 +15,8 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
+
+import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
 
 /** Capability checks shared by slash-web route planning and execution. */
 public final class SlashWebCapability {
@@ -59,6 +62,32 @@ public final class SlashWebCapability {
     public static boolean hasCarriedSlashWeapon() {
         return Rs2Equipment.all().anyMatch(item -> isSlashWeapon(item.getId()))
                 || Rs2Inventory.items().anyMatch(item -> isSlashWeapon(item.getId()));
+    }
+
+    public static boolean prepareTool() {
+        if (Rs2Inventory.hasItem(ItemID.KNIFE)
+                || Rs2Equipment.all().anyMatch(item -> isSlashWeapon(item.getId()))) {
+            return true;
+        }
+
+        Rs2ItemModel slashWeapon = inventorySlashWeapon();
+        if (slashWeapon == null) {
+            return false;
+        }
+        String equipAction = slashWeapon.getActionFromList(Arrays.asList("wield", "wear", "equip"));
+        if (equipAction == null || !Rs2Inventory.interact(slashWeapon, equipAction)) {
+            return false;
+        }
+        int itemId = slashWeapon.getId();
+        return sleepUntil(() -> Rs2Equipment.isWearing(itemId), 2_000);
+    }
+
+    public static boolean isTransportObjectPresent(Transport transport) {
+        if (transport == null || transport.getOrigin() == null || transport.getObjectId() <= 0) {
+            return false;
+        }
+        return !Rs2GameObject.getAll(
+                object -> object.getId() == transport.getObjectId(), transport.getOrigin(), 2).isEmpty();
     }
 
     public static Rs2ItemModel inventorySlashWeapon() {

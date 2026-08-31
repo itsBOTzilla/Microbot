@@ -9541,7 +9541,7 @@ public class Rs2Walker {
                             log.debug("[Walker] Using object action '{}' for transport action '{}' at {} (id={})",
                                     interactionAction, transportAction, object.getWorldLocation(), object.getId());
                         }
-                        if (SlashWebCapability.applies(transport) && !prepareSlashWebTool()) {
+                        if (SlashWebCapability.applies(transport) && !SlashWebCapability.prepareTool()) {
                             WebWalkLog.spWarn("slash_web_tool_unavailable | origin={} dest={}",
                                     compactWorldPoint(transport.getOrigin()), compactWorldPoint(transport.getDestination()));
                             return false;
@@ -9561,7 +9561,7 @@ public class Rs2Walker {
                                 transport, destWait, maxInclusive, dialogueWasOpen);
                         if (!landedAfterObject
                                 && SlashWebCapability.applies(transport)
-                                && !isTransportObjectPresent(transport)) {
+                                && !SlashWebCapability.isTransportObjectPresent(transport)) {
                             WebWalkLog.spInfo("slash_web_cleared | origin={} dest={} at={}",
                                     compactWorldPoint(transport.getOrigin()),
                                     compactWorldPoint(destWait),
@@ -9653,7 +9653,8 @@ public class Rs2Walker {
             if (settledAwayFromDestination) {
                 settledAwayFromAdjacentDestination.set(true);
             }
-            boolean webCleared = SlashWebCapability.applies(transport) && !isTransportObjectPresent(transport);
+            boolean webCleared = SlashWebCapability.applies(transport)
+                    && !SlashWebCapability.isTransportObjectPresent(transport);
             if (webCleared) {
                 slashWebCleared.set(true);
             }
@@ -9675,32 +9676,6 @@ public class Rs2Walker {
                 settledNearAdjacentDestination.get(),
                 settledAwayFromAdjacentDestination.get(),
                 completed && !slashWebCleared.get());
-    }
-
-    private static boolean prepareSlashWebTool() {
-        if (Rs2Inventory.hasItem(ItemID.KNIFE)
-                || Rs2Equipment.all().anyMatch(item -> SlashWebCapability.isSlashWeapon(item.getId()))) {
-            return true;
-        }
-
-        Rs2ItemModel slashWeapon = SlashWebCapability.inventorySlashWeapon();
-        if (slashWeapon == null) {
-            return false;
-        }
-        String equipAction = slashWeapon.getActionFromList(Arrays.asList("wield", "wear", "equip"));
-        if (equipAction == null || !Rs2Inventory.interact(slashWeapon, equipAction)) {
-            return false;
-        }
-        int itemId = slashWeapon.getId();
-        return sleepUntil(() -> Rs2Equipment.isWearing(itemId), 2_000);
-    }
-
-    private static boolean isTransportObjectPresent(Transport transport) {
-        if (transport == null || transport.getOrigin() == null || transport.getObjectId() <= 0) {
-            return false;
-        }
-        return !Rs2GameObject.getAll(
-                object -> object.getId() == transport.getObjectId(), transport.getOrigin(), 2).isEmpty();
     }
 
     static boolean shouldEndObjectTransportPass(boolean landed,
