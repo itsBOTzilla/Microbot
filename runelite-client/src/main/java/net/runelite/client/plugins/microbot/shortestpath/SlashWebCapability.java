@@ -42,13 +42,36 @@ public final class SlashWebCapability {
     }
 
     public static boolean containsSlashWeapon(Collection<Integer> itemIds) {
-        return itemIds != null && itemIds.stream().anyMatch(SlashWebCapability::isSlashWeapon);
+        if (itemIds == null || itemIds.isEmpty()) {
+            return false;
+        }
+        if (itemIds.stream().anyMatch(KNOWN_SLASH_WEAPONS::contains)) {
+            return true;
+        }
+        if (Microbot.getClientThread() == null || Microbot.getItemManager() == null) {
+            return false;
+        }
+        // ItemManager#getItemStats loads the item composition through Client#getItemDefinition.
+        // Transport refresh runs on a pathfinding worker, so classify every unknown carried item in
+        // one client-thread batch instead of touching definitions directly from that worker.
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> itemIds.stream()
+                        .filter(itemId -> itemId != null && !KNOWN_SLASH_WEAPONS.contains(itemId))
+                        .anyMatch(SlashWebCapability::isSlashWeaponOnClientThread))
+                .orElse(false);
     }
 
     public static boolean isSlashWeapon(int itemId) {
         if (KNOWN_SLASH_WEAPONS.contains(itemId)) {
             return true;
         }
+        if (Microbot.getClientThread() == null || Microbot.getItemManager() == null) {
+            return false;
+        }
+        return Microbot.getClientThread().runOnClientThreadOptional(
+                () -> isSlashWeaponOnClientThread(itemId)).orElse(false);
+    }
+
+    private static boolean isSlashWeaponOnClientThread(int itemId) {
         if (Microbot.getItemManager() == null) {
             return false;
         }
@@ -60,8 +83,10 @@ public final class SlashWebCapability {
     }
 
     public static boolean hasCarriedSlashWeapon() {
-        return Rs2Equipment.all().anyMatch(item -> isSlashWeapon(item.getId()))
-                || Rs2Inventory.items().anyMatch(item -> isSlashWeapon(item.getId()));
+        Set<Integer> carriedItemIds = new HashSet<>();
+        Rs2Equipment.all().forEach(item -> carriedItemIds.add(item.getId()));
+        Rs2Inventory.items().forEach(item -> carriedItemIds.add(item.getId()));
+        return containsSlashWeapon(carriedItemIds);
     }
 
     public static boolean prepareTool() {

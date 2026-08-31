@@ -384,6 +384,10 @@ public class ShortestPathCoreTest {
 		java.lang.reflect.Field available = PathfinderConfig.class.getDeclaredField("refreshAvailableItemIds");
 		available.setAccessible(true);
 		available.set(config, Collections.singleton(ItemID.RUNE_SCIMITAR));
+		java.lang.reflect.Field slashCapability =
+				PathfinderConfig.class.getDeclaredField("refreshHasCarriedSlashWeapon");
+		slashCapability.setAccessible(true);
+		slashCapability.setBoolean(config, true);
 		java.lang.reflect.Method hasRequiredItems =
 				PathfinderConfig.class.getDeclaredMethod("hasRequiredItems", Transport.class);
 		hasRequiredItems.setAccessible(true);
