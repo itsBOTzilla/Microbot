@@ -7,6 +7,7 @@ import net.runelite.api.Quest;
 import net.runelite.api.QuestState;
 import net.runelite.api.Skill;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.ItemID;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -306,6 +307,15 @@ public class Transport {
                 }
                 itemIdRequirements.add(multiitemList);
             }
+        }
+
+        // A web's object action is present even when the player has nothing capable of cutting it.
+        // Treat every catalogued Slash;Web edge as knife-gated so route selection and the existing
+        // banked-transport planner can prepare the capability before committing to the route.
+        if ("Slash".equalsIgnoreCase(action)
+                && "Web".equalsIgnoreCase(name)
+                && objectId == 733) {
+            itemIdRequirements.add(Collections.singleton(ItemID.KNIFE));
         }
 
         if ((value = fieldMap.get("Quests")) != null && !value.trim().isEmpty()) {

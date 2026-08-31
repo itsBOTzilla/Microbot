@@ -4,11 +4,13 @@ import net.runelite.api.Quest;
 import net.runelite.api.VarPlayer;
 import net.runelite.api.coords.WorldArea;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.ItemID;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.*;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static org.junit.Assert.*;
 
@@ -348,6 +350,46 @@ public class ShortestPathCoreTest {
 		}
 		assertTrue("southbound Shantay must keep the ticket-gated variant", hasTicketVariant);
 		assertTrue("southbound Shantay must offer the 5-coin buy-at-gate variant", hasCoinVariant);
+	}
+
+	@Test
+	public void slashWebTransportsRequireAKnifeForRoutePlanning() {
+		List<Transport> slashWebs = Transport.loadAllFromResources().values().stream()
+				.flatMap(Set::stream)
+				.filter(t -> "Slash".equalsIgnoreCase(t.getAction()))
+				.filter(t -> "Web".equalsIgnoreCase(t.getName()))
+				.filter(t -> t.getObjectId() == 733)
+				.collect(Collectors.toList());
+
+		assertFalse("the transport catalog should contain slashable webs", slashWebs.isEmpty());
+		for (Transport web : slashWebs) {
+			assertTrue("a slashable web must declare the canonical knife requirement: " + web,
+					web.getItemIdRequirements().stream()
+							.flatMap(Set::stream)
+							.anyMatch(itemId -> itemId == ItemID.KNIFE));
+		}
+	}
+
+	@Test
+	public void slashWebTransportAcceptsACarriedSlashWeaponInsteadOfAKnife() throws Exception {
+		Transport web = Transport.loadAllFromResources().values().stream()
+				.flatMap(Set::stream)
+				.filter(t -> "Slash".equalsIgnoreCase(t.getAction()))
+				.filter(t -> "Web".equalsIgnoreCase(t.getName()))
+				.filter(t -> t.getObjectId() == 733)
+				.findFirst()
+				.orElseThrow(() -> new AssertionError("catalog should contain slashable webs"));
+		PathfinderConfig config = createMinimalConfig();
+
+		java.lang.reflect.Field available = PathfinderConfig.class.getDeclaredField("refreshAvailableItemIds");
+		available.setAccessible(true);
+		available.set(config, Collections.singleton(ItemID.RUNE_SCIMITAR));
+		java.lang.reflect.Method hasRequiredItems =
+				PathfinderConfig.class.getDeclaredMethod("hasRequiredItems", Transport.class);
+		hasRequiredItems.setAccessible(true);
+
+		assertTrue("a carried rune scimitar must satisfy the web's slash capability",
+				(Boolean) hasRequiredItems.invoke(config, web));
 	}
 
 	@Test
@@ -1066,16 +1108,13 @@ public class ShortestPathCoreTest {
 	}
 
 	// ========================
-	// Pathfinder Tiebreaker / Route Diversity Tests
+	// Pathfinder Determinism / Optimality Tests
 	// ========================
 
 	@Test
-	public void testPathfinderTiebreakerProducesDiverseRoutes() {
-		// With deterministic A*, the same (start, target) pair always produces the
-		// same tile sequence, leaving a fingerprint on bots that shuttle between
-		// fixed waypoints. Node.tiebreaker seeds a random secondary priority-queue
-		// key so equal-fCost frontiers expand in a different order each run —
-		// paths stay optimal by cost but diverge tile-by-tile.
+	public void testPathfinderProducesDeterministicRoutes() {
+		// Identical route inputs must produce the same tile sequence so the overlay,
+		// ETA math, and executor agree on one reproducible shortest path.
 		final WorldPoint start = new WorldPoint(3222, 3218, 0);   // Lumbridge
 		final WorldPoint target = new WorldPoint(3164, 3485, 0);  // Grand Exchange
 		final int runs = 10;
@@ -1100,19 +1139,15 @@ public class ShortestPathCoreTest {
 					referenceLength, paths.get(i).size());
 		}
 
-		// Diversity: at least two of the N runs should produce different tile
-		// sequences. Lumbridge → GE has abundant equal-cost alternatives through
-		// Varrock squares, so the tiebreaker reliably picks different ones.
+		// Exact route determinism: equal-cost alternatives use one stable ordering.
 		long distinctPaths = paths.stream().distinct().count();
-		assertTrue(
-				"Expected at least 2 distinct paths over " + runs + " runs, got " + distinctPaths,
-				distinctPaths >= 2);
+		assertEquals("Expected one stable path over " + runs + " runs", 1, distinctPaths);
 	}
 
 	@Test
 	public void testPathfinderShortRouteStillOptimal() {
-		// Tiebreaker must not break optimality on short routes where only one
-		// shortest tile sequence exists. Two runs should still agree on length.
+		// Deterministic ordering must preserve optimality on short routes where only
+		// one shortest tile sequence exists.
 		final WorldPoint start = new WorldPoint(3222, 3218, 0);
 		final WorldPoint target = new WorldPoint(3228, 3218, 0); // 6 tiles east
 

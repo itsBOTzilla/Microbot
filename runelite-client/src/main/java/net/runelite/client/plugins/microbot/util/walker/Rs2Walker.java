@@ -9541,6 +9541,11 @@ public class Rs2Walker {
                             log.debug("[Walker] Using object action '{}' for transport action '{}' at {} (id={})",
                                     interactionAction, transportAction, object.getWorldLocation(), object.getId());
                         }
+                        if (SlashWebCapability.applies(transport) && !prepareSlashWebTool()) {
+                            WebWalkLog.spWarn("slash_web_tool_unavailable | origin={} dest={}",
+                                    compactWorldPoint(transport.getOrigin()), compactWorldPoint(transport.getDestination()));
+                            return false;
+                        }
                         prepareTransportObjectForInteraction(object);
                         boolean dialogueWasOpen = Rs2Dialogue.isInDialogue();
                         if (!handleObject(transport, object, interactionAction)) {
@@ -9554,6 +9559,15 @@ public class Rs2Walker {
                         }
                         boolean landedAfterObject = waitForPostHandleObjectLanding(
                                 transport, destWait, maxInclusive, dialogueWasOpen);
+                        if (!landedAfterObject
+                                && SlashWebCapability.applies(transport)
+                                && !isTransportObjectPresent(transport)) {
+                            WebWalkLog.spInfo("slash_web_cleared | origin={} dest={} at={}",
+                                    compactWorldPoint(transport.getOrigin()),
+                                    compactWorldPoint(destWait),
+                                    compactWorldPoint(Rs2Player.getWorldLocation()));
+                            return finishHandledTransport(transport);
+                        }
                         boolean dialogueOpen = Rs2Dialogue.isInDialogue();
                         if (shouldEndObjectTransportPass(landedAfterObject, dialogueWasOpen, dialogueOpen)) {
                             if (shouldYieldObjectTransportDialogue(
@@ -9606,6 +9620,7 @@ public class Rs2Walker {
         AtomicBoolean dialogueOpened = new AtomicBoolean(false);
         AtomicBoolean settledAwayFromAdjacentDestination = new AtomicBoolean(false);
         AtomicBoolean settledNearAdjacentDestination = new AtomicBoolean(false);
+        AtomicBoolean slashWebCleared = new AtomicBoolean(false);
         boolean completed = sleepUntil(() -> {
             boolean atDestination = isPlayerWithinChebyshevInclusive(destWait, maxInclusive);
             boolean dialogueOpen = Rs2Dialogue.isInDialogue();
@@ -9638,7 +9653,11 @@ public class Rs2Walker {
             if (settledAwayFromDestination) {
                 settledAwayFromAdjacentDestination.set(true);
             }
-            return shouldEndObjectTransportLandingPoll(
+            boolean webCleared = SlashWebCapability.applies(transport) && !isTransportObjectPresent(transport);
+            if (webCleared) {
+                slashWebCleared.set(true);
+            }
+            return webCleared || shouldEndObjectTransportLandingPoll(
                     atDestination, newDialogue, settledNearDestination, settledAwayFromDestination);
         }, POST_HANDLE_OBJECT_LANDING_WAIT_MS);
 
@@ -9655,7 +9674,33 @@ public class Rs2Walker {
                 dialogueOpened.get(),
                 settledNearAdjacentDestination.get(),
                 settledAwayFromAdjacentDestination.get(),
-                completed);
+                completed && !slashWebCleared.get());
+    }
+
+    private static boolean prepareSlashWebTool() {
+        if (Rs2Inventory.hasItem(ItemID.KNIFE)
+                || Rs2Equipment.all().anyMatch(item -> SlashWebCapability.isSlashWeapon(item.getId()))) {
+            return true;
+        }
+
+        Rs2ItemModel slashWeapon = SlashWebCapability.inventorySlashWeapon();
+        if (slashWeapon == null) {
+            return false;
+        }
+        String equipAction = slashWeapon.getActionFromList(Arrays.asList("wield", "wear", "equip"));
+        if (equipAction == null || !Rs2Inventory.interact(slashWeapon, equipAction)) {
+            return false;
+        }
+        int itemId = slashWeapon.getId();
+        return sleepUntil(() -> Rs2Equipment.isWearing(itemId), 2_000);
+    }
+
+    private static boolean isTransportObjectPresent(Transport transport) {
+        if (transport == null || transport.getOrigin() == null || transport.getObjectId() <= 0) {
+            return false;
+        }
+        return !Rs2GameObject.getAll(
+                object -> object.getId() == transport.getObjectId(), transport.getOrigin(), 2).isEmpty();
     }
 
     static boolean shouldEndObjectTransportPass(boolean landed,

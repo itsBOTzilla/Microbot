@@ -1517,6 +1517,15 @@ public class PathfinderConfig {
     private boolean hasRequiredItems(Transport transport) {
         if (requiresChronicle(transport)) return hasChronicleCharges();
 
+        if (SlashWebCapability.applies(transport)) {
+            boolean snapshotHasCarriedSlashWeapon = !useBankItems
+                    && refreshAvailableItemIds != null
+                    && SlashWebCapability.containsSlashWeapon(refreshAvailableItemIds);
+            if (snapshotHasCarriedSlashWeapon || SlashWebCapability.hasCarriedSlashWeapon()) {
+                return true;
+            }
+        }
+
         if (refreshAvailableItemIds != null) {
             return transport.getItemIdRequirements()
                     .stream()
@@ -2003,12 +2012,14 @@ public class PathfinderConfig {
         final Set<Integer> ids = transportRelevantItemIds;
         final int[] h = {1};
         Rs2Inventory.items().forEach(item -> {
-            if (!itemAffectsTransportUsability(item.getId(), ids)) return;
+            if (!itemAffectsTransportUsability(item.getId(), ids)
+                    && !SlashWebCapability.isSlashWeapon(item.getId())) return;
             h[0] = 31 * h[0] + item.getId();
             h[0] = 31 * h[0] + item.getQuantity();
         });
         Rs2Equipment.all().forEach(item -> {
-            if (!itemAffectsTransportUsability(item.getId(), ids)) return;
+            if (!itemAffectsTransportUsability(item.getId(), ids)
+                    && item.getSlot() != EquipmentInventorySlot.WEAPON.getSlotIdx()) return;
             h[0] = 31 * h[0] + item.getId();
             h[0] = 31 * h[0] + item.getQuantity();
         });
