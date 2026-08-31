@@ -397,6 +397,32 @@ public class ShortestPathCoreTest {
 	}
 
 	@Test
+	public void slashWebTransportAcceptsABankedScimitarInsteadOfAKnife() throws Exception {
+		Transport web = Transport.loadAllFromResources().values().stream()
+				.flatMap(Set::stream)
+				.filter(t -> "Slash".equalsIgnoreCase(t.getAction()))
+				.filter(t -> "Web".equalsIgnoreCase(t.getName()))
+				.filter(t -> t.getObjectId() == 733)
+				.findFirst()
+				.orElseThrow(() -> new AssertionError("catalog should contain slashable webs"));
+		PathfinderConfig config = createMinimalConfig();
+
+		java.lang.reflect.Field available = PathfinderConfig.class.getDeclaredField("refreshAvailableItemIds");
+		available.setAccessible(true);
+		available.set(config, Collections.singleton(ItemID.RUNE_SCIMITAR));
+		java.lang.reflect.Field slashCapability =
+				PathfinderConfig.class.getDeclaredField("refreshHasCarriedSlashWeapon");
+		slashCapability.setAccessible(true);
+		slashCapability.setBoolean(config, false);
+		java.lang.reflect.Method hasRequiredItems =
+				PathfinderConfig.class.getDeclaredMethod("hasRequiredItems", Transport.class);
+		hasRequiredItems.setAccessible(true);
+
+		assertTrue("a banked rune scimitar must unlock the web route so it can be withdrawn",
+				(Boolean) hasRequiredItems.invoke(config, web));
+	}
+
+	@Test
 	public void testNewTransportTypesLoaded() {
 		HashMap<WorldPoint, Set<Transport>> transports = Transport.loadAllFromResources();
 

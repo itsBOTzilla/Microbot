@@ -310,12 +310,13 @@ public class Transport {
         }
 
         // A web's object action is present even when the player has nothing capable of cutting it.
-        // Treat every catalogued Slash;Web edge as knife-gated so route selection and the existing
-        // banked-transport planner can prepare the capability before committing to the route.
+        // Treat every catalogued Slash;Web edge as requiring one cutting tool so route selection and
+        // the banked-transport planner can prepare either a knife or an available scimitar before
+        // committing to the route.
         if ("Slash".equalsIgnoreCase(action)
                 && "Web".equalsIgnoreCase(name)
                 && objectId == 733) {
-            itemIdRequirements.add(Collections.singleton(ItemID.KNIFE));
+            itemIdRequirements.add(SlashWebCapability.bankableToolItemIds());
         }
 
         if ((value = fieldMap.get("Quests")) != null && !value.trim().isEmpty()) {

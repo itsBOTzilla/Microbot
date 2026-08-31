@@ -14,6 +14,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
 import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
@@ -21,7 +22,7 @@ import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
 /** Capability checks shared by slash-web route planning and execution. */
 public final class SlashWebCapability {
     private static final Set<Integer> KNOWN_SLASH_WEAPONS = Collections.unmodifiableSet(
-            new HashSet<>(Arrays.asList(
+            new LinkedHashSet<>(Arrays.asList(
                     ItemID.BRONZE_SCIMITAR,
                     ItemID.IRON_SCIMITAR,
                     ItemID.STEEL_SCIMITAR,
@@ -30,6 +31,14 @@ public final class SlashWebCapability {
                     ItemID.ADAMANT_SCIMITAR,
                     ItemID.RUNE_SCIMITAR,
                     ItemID.DRAGON_SCIMITAR)));
+    private static final Set<Integer> BANKABLE_TOOLS;
+
+    static {
+        LinkedHashSet<Integer> tools = new LinkedHashSet<>();
+        tools.add(ItemID.KNIFE);
+        tools.addAll(KNOWN_SLASH_WEAPONS);
+        BANKABLE_TOOLS = Collections.unmodifiableSet(tools);
+    }
 
     private SlashWebCapability() {
     }
@@ -39,6 +48,10 @@ public final class SlashWebCapability {
                 && transport.getObjectId() == 733
                 && "Slash".equalsIgnoreCase(transport.getAction())
                 && "Web".equalsIgnoreCase(transport.getName());
+    }
+
+    public static Set<Integer> bankableToolItemIds() {
+        return BANKABLE_TOOLS;
     }
 
     public static boolean containsSlashWeapon(Collection<Integer> itemIds) {
