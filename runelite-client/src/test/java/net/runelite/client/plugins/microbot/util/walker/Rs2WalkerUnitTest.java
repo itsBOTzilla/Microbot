@@ -92,6 +92,20 @@ public class Rs2WalkerUnitTest {
     }
 
     @Test
+    public void clearedSlashWebRepathsUntilThePlayerActuallyCrosses() {
+        assertTrue(Rs2Walker.shouldRepathAfterClearedSlashWeb(false, false));
+        assertFalse(Rs2Walker.shouldRepathAfterClearedSlashWeb(true, false));
+        assertFalse(Rs2Walker.shouldRepathAfterClearedSlashWeb(false, true));
+    }
+
+    @Test
+    public void strongholdRegionCheckHandlesUnavailablePlayerLocation() {
+        assertFalse(Rs2Walker.isStrongholdLocation(null));
+        assertTrue(Rs2Walker.isStrongholdLocation(new WorldPoint(1859, 5239, 0)));
+        assertFalse(Rs2Walker.isStrongholdLocation(new WorldPoint(3253, 3420, 0)));
+    }
+
+    @Test
     public void nearbyTransportObjectRemainsActionableWhileDoorCollisionRefreshes() {
         WorldPoint justInsideLockedDoor = new WorldPoint(3115, 3450, 0);
         WorldPoint ladderOrigin = new WorldPoint(3115, 3452, 0);

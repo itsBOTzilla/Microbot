@@ -623,3 +623,7 @@ plain-transport rule at either boundary.
 
 **Defensive check:** Pass a production `Slash;Web` transport through the filtered-path boundary and
 assert it remains present so its cutting-tool requirement reaches the withdrawal map.
+
+After a successful slash, the web object can disappear before the player has crossed its edge.
+Treat that state as a reason to re-path through the now-open tile, not as a confirmed transport
+landing. The normal landing check remains authoritative for completing the transport.

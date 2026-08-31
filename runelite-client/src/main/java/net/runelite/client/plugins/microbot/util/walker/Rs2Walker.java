@@ -8612,8 +8612,12 @@ public class Rs2Walker {
     }
 
     private static boolean isInStrongholdOfSecurity() {
+        return isStrongholdLocation(Rs2Player.getWorldLocation());
+    }
+
+    static boolean isStrongholdLocation(WorldPoint playerLocation) {
         List<Integer> mapRegionIds = List.of(7505, 7504, 7760, 7503, 7759, 7758, 7757, 8013, 7756, 8012, 8017, 8530, 9297);
-        return mapRegionIds.contains(Rs2Player.getWorldLocation().getRegionID());
+        return playerLocation != null && mapRegionIds.contains(playerLocation.getRegionID());
     }
 
     private static boolean handleStrongholdOfSecurityAnswer() {
@@ -9561,14 +9565,15 @@ public class Rs2Walker {
                         }
                         boolean landedAfterObject = waitForPostHandleObjectLanding(
                                 transport, destWait, maxInclusive, dialogueWasOpen);
-                        if (!landedAfterObject
-                                && SlashWebCapability.applies(transport)
-                                && !SlashWebCapability.isTransportObjectPresent(transport)) {
+                        boolean slashWebTransport = SlashWebCapability.applies(transport);
+                        if (slashWebTransport && shouldRepathAfterClearedSlashWeb(
+                                landedAfterObject,
+                                SlashWebCapability.isTransportObjectPresent(transport))) {
                             WebWalkLog.spInfo("slash_web_cleared | origin={} dest={} at={}",
                                     compactWorldPoint(transport.getOrigin()),
                                     compactWorldPoint(destWait),
                                     compactWorldPoint(Rs2Player.getWorldLocation()));
-                            return finishHandledTransport(transport);
+                            return false;
                         }
                         boolean dialogueOpen = Rs2Dialogue.isInDialogue();
                         if (shouldEndObjectTransportPass(landedAfterObject, dialogueWasOpen, dialogueOpen)) {
@@ -10367,6 +10372,11 @@ public class Rs2Walker {
         // evaluated only after the transport handler has reported success, so the wider tolerance
         // confirms the landing without making transport discovery or path selection permissive.
         return isNearSamePlane(currentLocation, transportDestination, 3);
+    }
+
+    static boolean shouldRepathAfterClearedSlashWeb(boolean landedAfterObject,
+                                                     boolean transportObjectPresent) {
+        return !landedAfterObject && !transportObjectPresent;
     }
 
     static boolean shouldAttemptTransportObject(boolean originReachable,
