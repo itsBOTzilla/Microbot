@@ -1248,7 +1248,8 @@ public class PathfinderConfig {
     private boolean useTransport(Transport transport) {
         // Check if the feature flag is disabled
         if (!isFeatureEnabled(transport)) {
-            log.debug("Transport Type {} is disabled by feature flag", transport.getType());
+            // refreshTransports already records aggregate counts and timings by transport type.
+            // Logging here emits one identical line per catalog row and floods the console.
             return false;
         }
         // If the transport requires you to be in a members world (used for more granular member requirements)

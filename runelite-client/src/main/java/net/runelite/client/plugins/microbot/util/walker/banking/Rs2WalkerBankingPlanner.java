@@ -78,7 +78,7 @@ public final class Rs2WalkerBankingPlanner {
      * {@link #getTransportsForDestination} pathfinds first and inspects only transports on the
      * resulting route — so an item is fetched solely when the chosen route actually needs it.
      */
-    static boolean planningCoversPlainTransport(Transport transport) {
+    public static boolean planningCoversPlainTransport(Transport transport) {
         if (transport == null || transport.getType() != TransportType.TRANSPORT) {
             return false;
         }

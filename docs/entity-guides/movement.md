@@ -596,3 +596,30 @@ starts a search that the same call immediately cancels when preflight rejects th
 **Defensive check:** Load the production transport resources and assert the shortcut carries its
 unlock requirement. Test a literal dungeon display coordinate against its hand-derived physical
 tile, and assert target preflight precedes pathfinder startup.
+
+## 23. Keep item-gated plain transports through bank-route filtering
+
+Bank-route pathfinding may use a plain `TRANSPORT` because an item in the bank satisfies its
+requirement. The later path-to-transport scan must retain that row when it has either an item or
+currency requirement; otherwise the withdrawal planner sees an empty list and starts the direct
+walk without fetching the item.
+
+**Why this matters:** A Varrock Sewers route correctly found the slashable web while bank items
+were enabled and selected the faster banking route. An older filter then discarded the web because
+it was a plain transport with no currency fare, producing `direct_no_missing_items` after the bank
+had opened and leaving the knife and scimitars in the bank.
+
+**Pattern to follow:**
+
+```java
+Rs2WalkerBankingPlanner.planningCoversPlainTransport(transport)
+```
+
+Use the shared predicate in both eligibility checks and path filtering. Do not duplicate a narrower
+plain-transport rule at either boundary.
+
+**Where this applies:** `Rs2Walker.applyTransportFiltering`,
+`Rs2WalkerBankingPlanner.planningCoversPlainTransport`, and any future bank-route transport scan.
+
+**Defensive check:** Pass a production `Slash;Web` transport through the filtered-path boundary and
+assert it remains present so its cutting-tool requirement reaches the withdrawal map.

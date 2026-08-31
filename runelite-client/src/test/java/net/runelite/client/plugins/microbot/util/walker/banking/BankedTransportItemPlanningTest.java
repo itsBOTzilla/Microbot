@@ -138,6 +138,25 @@ public class BankedTransportItemPlanningTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    public void pathTransportFilteringRetainsTheItemGatedWeb() throws Exception {
+        Transport web = all.stream()
+                .filter(t -> "Slash".equalsIgnoreCase(t.getAction()))
+                .filter(t -> "Web".equalsIgnoreCase(t.getName()))
+                .filter(t -> t.getObjectId() == 733)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("catalog should contain slashable webs"));
+        java.lang.reflect.Method filter = net.runelite.client.plugins.microbot.util.walker.Rs2Walker.class
+                .getDeclaredMethod("applyTransportFiltering", List.class);
+        filter.setAccessible(true);
+
+        List<Transport> retained = (List<Transport>) filter.invoke(null, java.util.List.of(web));
+
+        assertEquals("the banked route must keep the web long enough to schedule its cutting tool",
+                java.util.List.of(web), retained);
+    }
+
+    @Test
     public void musaPointShipAndAlKharidTollContributeTheirExactFares() {
         Transport musaPoint = all.stream()
                 .filter(t -> t.getType() == TransportType.SHIP)
