@@ -560,3 +560,39 @@ transport handoff/replan boundaries.
 **Defensive check:** Model a catalog transport five raw-path indices ahead and assert it preempts
 movement. Separately assert that exact physical arrival succeeds despite a stale inverse edge,
 while non-exact configured-distance arrival still honors pending route interactions.
+
+## 22. Translate dungeon display coordinates and gate shortcuts by their real unlock
+
+World-map display coordinates are not necessarily the player's real tiles inside coordinate-shifted
+dungeons. Convert a dungeon-map selection through the existing world-map-area mapping, then
+normalize any canonical plane representation to the physical coordinates used by the pathfinder.
+Reject only when the selected map coordinate cannot be mapped to a real dungeon tile. Transport
+data for reward shortcuts must also include the exact varbit that unlocks the interaction; an object
+being visible and accepting a click does not prove that it can transport the player.
+
+**Why this matters:** On the second Stronghold of Security floor, a world-map click produced a
+surface/display target outside the floor. The resulting route searched the wrong component and an
+unconditional Famine portal row then diverted the route to a locked portal instead of the gates.
+The object click returned success after merely walking to the portal, while the expected landing
+never occurred.
+
+**Pattern to follow:**
+
+```java
+if (insideKnownDungeonFloor(player) && selectedPointIsDungeonMapCoordinate) {
+    selectedMapPoint = convertMapPointToPhysicalDungeonTile(selectedMapPoint);
+}
+if (shortcutRequiresReward) {
+    transport.addVarbitRequirement(rewardVarbit, 1);
+}
+```
+
+Run static target walkability preflight before starting a new pathfinder. Otherwise a bad target
+starts a search that the same call immediately cancels when preflight rejects the coordinate.
+
+**Where this applies:** `ShortestPathPlugin` world-map target selection, dungeon shortcut TSV data,
+`Rs2Walker.walkWithStateInternal`, and any transport whose availability changes after a reward.
+
+**Defensive check:** Load the production transport resources and assert the shortcut carries its
+unlock requirement. Test a literal dungeon display coordinate against its hand-derived physical
+tile, and assert target preflight precedes pathfinder startup.

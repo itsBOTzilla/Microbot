@@ -1499,6 +1499,16 @@ public class Rs2Walker {
             return WalkerState.ARRIVED;
         }
 
+        PathfinderConfig preflightConfig = Rs2PathApi.getPathfinderConfig();
+        CollisionMap preflightMap = preflightConfig != null ? preflightConfig.getMap() : null;
+        if (!hasWalkableTileWithin(preflightMap, target, distance)) {
+            WorldPoint nearestWalkable = nearestWalkableTile(preflightMap, target, 48);
+            Telemetry.recordUnreachable("target-not-walkable", playerLocWalk,
+                    target, nearestWalkable, 0, distance, null);
+            setTarget(null, "webwalk-executor:target-not-walkable");
+            return WalkerState.UNREACHABLE;
+        }
+
         final Pathfinder pathfinder = Rs2PathApi.getPathfinder();
         boolean hasCurrentPath = pathfinder != null
                 && pathfinder.getTargets().contains(target);
@@ -1537,15 +1547,6 @@ public class Rs2Walker {
                 return WalkerState.EXIT;
             }
             setTarget(target, "webwalk-executor:basement-restore");
-        }
-        PathfinderConfig preflightConfig = Rs2PathApi.getPathfinderConfig();
-        CollisionMap preflightMap = preflightConfig != null ? preflightConfig.getMap() : null;
-        if (!hasWalkableTileWithin(preflightMap, target, distance)) {
-            WorldPoint nearestWalkable = nearestWalkableTile(preflightMap, target, 48);
-            Telemetry.recordUnreachable("target-not-walkable", playerLocWalk,
-                    target, nearestWalkable, 0, distance, null);
-            setTarget(null, "webwalk-executor:target-not-walkable");
-            return WalkerState.UNREACHABLE;
         }
         long targetGeneration = currentTargetGenerationIfOwned(target);
         if (targetGeneration < 0L) {
@@ -6141,7 +6142,10 @@ public class Rs2Walker {
         }
 
         if (recentlyOpenedStationaryDoorOnSegment(fromWp, toWp)) {
-            return false;
+            // The scene/pathfinder can retain the just-opened collision edge while the player is
+            // standing in the doorway. Do not interact with the same gate again and do not report
+            // a failed route action: dispatch the one-tile continuation through the open edge.
+            return tryDoorEdgeCrossNudge(fromWp, toWp, currentTarget);
         }
 
         // A broad raw scan already owns immutable wall/game-object snapshots. Resolve the
@@ -6252,7 +6256,6 @@ public class Rs2Walker {
                 }
 
                 if (found) {
-                    if (!handleDoorException(object, action)) {
                         if (shouldThrottleDoorAttempt(probe, fromWp, toWp)) {
                             WebWalkLog.spInfo("door_attempt_throttled | mode=segment-door probe={} from={} to={}",
                                     compactWorldPoint(probe), compactWorldPoint(fromWp), compactWorldPoint(toWp));
@@ -6286,6 +6289,7 @@ public class Rs2Walker {
                                     compactWorldPoint(probe), compactWorldPoint(fromWp), compactWorldPoint(toWp));
                             return false;
                         }
+                        handleDoorPostInteraction();
                         markDoorInteractionSettling(toWp);
                         waitForDoorInteractionProgress(posBefore, fromWp, toWp);
                         WorldPoint posAfter = Rs2Player.getWorldLocation();
@@ -6336,7 +6340,6 @@ public class Rs2Walker {
                         }
                         markStationaryDoorOpened(probe);
                         markNearbyDoorFamilyOpened(object, probe, action, SEGMENT_DOOR_FAMILY_MARK_RADIUS);
-                    }
                     return true;
                 }
             }
@@ -6391,10 +6394,6 @@ public class Rs2Walker {
 
         if (!found) return false;
 
-        if (handleDoorException(object, action)) {
-            return true;
-        }
-
         if (shouldThrottleDoorAttempt(probe, fromWp, toWp)) {
             WebWalkLog.spInfo("door_attempt_throttled | mode=segment-probe probe={} from={} to={}",
                     compactWorldPoint(probe), compactWorldPoint(fromWp), compactWorldPoint(toWp));
@@ -6428,6 +6427,7 @@ public class Rs2Walker {
                     compactWorldPoint(probe), compactWorldPoint(fromWp), compactWorldPoint(toWp));
             return false;
         }
+        handleDoorPostInteraction();
         markDoorInteractionSettling(toWp);
         waitForDoorInteractionProgress(posBefore, fromWp, toWp);
         WorldPoint posAfter = Rs2Player.getWorldLocation();
@@ -8601,11 +8601,14 @@ public class Rs2Walker {
 		return false;
 	}
 
-    private static boolean handleDoorException(TileObject object, String action) {
+    /**
+     * Runs location-specific door work after the shared handler has dispatched and recorded the
+     * interaction. This hook is advisory; shared traversal verification owns the interaction result.
+     */
+    private static void handleDoorPostInteraction() {
         if (isInStrongholdOfSecurity()) {
-            return handleStrongholdOfSecurityAnswer(object, action);
+            handleStrongholdOfSecurityAnswer();
         }
-        return false;
     }
 
     private static boolean isInStrongholdOfSecurity() {
@@ -8613,8 +8616,7 @@ public class Rs2Walker {
         return mapRegionIds.contains(Rs2Player.getWorldLocation().getRegionID());
     }
 
-    private static boolean handleStrongholdOfSecurityAnswer(TileObject object, String action) {
-        Rs2GameObject.interact(object, action);
+    private static boolean handleStrongholdOfSecurityAnswer() {
         boolean isInDialogue = Rs2Dialogue.sleepUntilInDialogue();
 
         // Not all the doors ask questions, so only if dialogue is shown we will attempt to get the answer

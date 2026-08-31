@@ -90,7 +90,7 @@ public final class Rs2DoorHandler {
      * @param suppressMs the time window in milliseconds to consider a door "recently opened"
      * @param fromWp the starting point of the path segment
      * @param toWp the ending point of the path segment
-     * @return true if a recently opened door is within 2 tiles of either segment endpoint
+     * @return true if a recently opened door is on or immediately adjacent to this segment
      */
     public static boolean recentlyOpenedStationaryDoorOnSegment(Map<WorldPoint, Long> recentlyOpenedStationaryDoors,
                                                                 long suppressMs,
@@ -99,7 +99,10 @@ public final class Rs2DoorHandler {
         if (fromWp == null || toWp == null) {
             return false;
         }
-        final int segmentDoorSuppressDist = 2;
+        // Keep suppression local to the edge that was just opened. Stronghold of Security gates
+        // are only a few tiles apart; a radius of two suppresses the next distinct gate and turns
+        // its exact route action into a false failure.
+        final int segmentDoorSuppressDist = 1;
         long now = System.currentTimeMillis();
         recentlyOpenedStationaryDoors.entrySet().removeIf(entry -> now - entry.getValue() > suppressMs);
         return recentlyOpenedStationaryDoors.keySet().stream()
