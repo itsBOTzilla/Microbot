@@ -48,6 +48,8 @@ import net.runelite.client.input.KeyManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.microbot.Microbot;
+import net.runelite.client.plugins.microbot.questhelper.util.worldmap.WorldMapArea;
+import net.runelite.client.plugins.microbot.questhelper.util.worldmap.WorldPointMapper;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.CollisionMap;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.Pathfinder;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.PathfinderConfig;
@@ -1048,8 +1050,25 @@ public class ShortestPathPlugin extends Plugin implements KeyListener {
         } else {
             WorldPoint mapPoint = calculateMapPoint(client.isMenuOpen() ? lastMenuOpenedPoint : client.getMouseCanvasPosition());
             if (mapPoint != null) {
+                Player localPlayer = client.getLocalPlayer();
+                WorldPoint player = localPlayer == null ? null : localPlayer.getWorldLocation();
                 WorldMapData worldMapData = client.getWorldMap().getWorldMapData();
-                if (worldMapData != null && !worldMapData.surfaceContainsPosition(mapPoint.getX(), mapPoint.getY())) {
+                boolean mapContainsPosition = worldMapData == null
+                        || worldMapData.surfaceContainsPosition(mapPoint.getX(), mapPoint.getY());
+                WorldPoint resolvedTarget = resolveSelectedWorldMapTarget(
+                        player, mapPoint, mapContainsPosition);
+                if (strongholdFloor(player) >= 0) {
+                    if (resolvedTarget == null) {
+                        log.warn("[ShortestPath] Could not translate Stronghold of Security world map target {} " +
+                                        "to a real dungeon tile.",
+                                mapPoint);
+                    } else {
+                        log.debug("[ShortestPath] Translated Stronghold world map target {} to {}",
+                                mapPoint, resolvedTarget);
+                    }
+                    return resolvedTarget;
+                }
+                if (!mapContainsPosition) {
                     log.warn("[ShortestPath] World map target {} is a dungeon display coordinate (not on surface map). " +
                             "The actual game tiles may be at different coordinates. " +
                             "For accurate dungeon navigation, close the world map and right-click a tile in the game view instead.",
@@ -1060,6 +1079,68 @@ public class ShortestPathPlugin extends Plugin implements KeyListener {
             return mapPoint;
         }
         return null;
+    }
+
+    static WorldPoint resolveSelectedWorldMapTarget(
+            WorldPoint player, WorldPoint mapPoint, boolean mapContainsPosition) {
+        if (strongholdFloor(player) >= 0) {
+            return resolveStrongholdMapTarget(player, mapPoint);
+        }
+        return mapContainsPosition ? mapPoint : null;
+    }
+
+    static WorldPoint resolveStrongholdMapTarget(WorldPoint player, WorldPoint mapPoint) {
+        if (player == null || mapPoint == null || strongholdFloor(player) < 0) {
+            return mapPoint;
+        }
+
+        WorldPoint canonicalTarget = WorldPointMapper.getRealWorldPointFromMapPoint(
+                mapPoint, WorldMapArea.STRONGHOLD_OF_SECURITY).getWorldPoint();
+        WorldPoint physicalTarget;
+        switch (canonicalTarget.getPlane()) {
+            case 0:
+                physicalTarget = canonicalTarget;
+                break;
+            case 1:
+                physicalTarget = new WorldPoint(
+                        canonicalTarget.getX() + 128, canonicalTarget.getY(), 0);
+                break;
+            case 2:
+                physicalTarget = new WorldPoint(
+                        canonicalTarget.getX() + 256, canonicalTarget.getY() + 64, 0);
+                break;
+            case 3:
+                physicalTarget = new WorldPoint(
+                        canonicalTarget.getX() + 448, canonicalTarget.getY(), 0);
+                break;
+            default:
+                return null;
+        }
+        return strongholdFloor(physicalTarget) >= 0 ? physicalTarget : null;
+    }
+
+    private static int strongholdFloor(WorldPoint point) {
+        if (point == null || point.getPlane() != 0) {
+            return -1;
+        }
+        if (inside(point, 1855, 5184, 1920, 5248)) {
+            return 0;
+        }
+        if (inside(point, 1983, 5184, 2048, 5248)) {
+            return 1;
+        }
+        if (inside(point, 2111, 5248, 2176, 5310)) {
+            return 2;
+        }
+        if (inside(point, 2304, 5184, 2367, 5248)) {
+            return 3;
+        }
+        return -1;
+    }
+
+    private static boolean inside(WorldPoint point, int minX, int minY, int maxX, int maxY) {
+        return point.getX() >= minX && point.getX() <= maxX
+                && point.getY() >= minY && point.getY() <= maxY;
     }
 
     public void setTarget(WorldPoint target) {

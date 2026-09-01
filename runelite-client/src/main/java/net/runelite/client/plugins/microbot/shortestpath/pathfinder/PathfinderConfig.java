@@ -211,6 +211,7 @@ public class PathfinderConfig {
     private volatile boolean useBankItems = false;
 
     private Set<Integer> refreshAvailableItemIds;
+    private boolean refreshHasCarriedSlashWeapon;
     private int[] refreshBoostedLevels;
     private Map<String, int[]> refreshCurrencyCache;
     // Varplayer values snapshot for the current refreshTransports pass. Without it, every varp
@@ -1247,7 +1248,8 @@ public class PathfinderConfig {
     private boolean useTransport(Transport transport) {
         // Check if the feature flag is disabled
         if (!isFeatureEnabled(transport)) {
-            log.debug("Transport Type {} is disabled by feature flag", transport.getType());
+            // refreshTransports already records aggregate counts and timings by transport type.
+            // Logging here emits one identical line per catalog row and floods the console.
             return false;
         }
         // If the transport requires you to be in a members world (used for more granular member requirements)
@@ -1516,6 +1518,12 @@ public class PathfinderConfig {
      */
     private boolean hasRequiredItems(Transport transport) {
         if (requiresChronicle(transport)) return hasChronicleCharges();
+
+        if (SlashWebCapability.applies(transport)) {
+            if (refreshHasCarriedSlashWeapon) {
+                return true;
+            }
+        }
 
         if (refreshAvailableItemIds != null) {
             return transport.getItemIdRequirements()
@@ -1960,11 +1968,13 @@ public class PathfinderConfig {
      * start (7.8s worst) on almost every walk. A fishing script churns items too but walks once a trip,
      * so it only ate it occasionally — which is why this looked like a questing bug.
      * <p>
-     * Usability depends on item state in exactly four places, all enumerated into the relevant sets by
+     * Usability depends on item state in the requirement sets enumerated by
      * {@link #collectTransportRelevantItemState}: transport {@code itemIdRequirements}, restriction
      * {@code itemIdRequirements}, the hardcoded fairy-ring staves and Chronicle, and currency — which
      * is matched by NAME, not id, so ids alone would silently stop coin changes invalidating the
-     * cache and leave a stale "you can afford this" verdict.
+     * cache and leave a stale "you can afford this" verdict. Slash-web capability is represented by
+     * one separately computed boolean, so changing between two usable slash weapons does not cause a
+     * needless cache miss while gaining or losing the capability still invalidates the cache.
      *
      * Deliberately takes an ITEM ID only. An earlier version also compared {@code item.getName()}
      * against the currency names, which was a client-thread stall in disguise: {@link
@@ -2002,13 +2012,16 @@ public class PathfinderConfig {
     private int fingerprintInventoryEquipmentBank() {
         final Set<Integer> ids = transportRelevantItemIds;
         final int[] h = {1};
+        refreshHasCarriedSlashWeapon = SlashWebCapability.hasCarriedSlashWeapon();
+        h[0] = 31 * h[0] + (refreshHasCarriedSlashWeapon ? 1 : 0);
         Rs2Inventory.items().forEach(item -> {
             if (!itemAffectsTransportUsability(item.getId(), ids)) return;
             h[0] = 31 * h[0] + item.getId();
             h[0] = 31 * h[0] + item.getQuantity();
         });
         Rs2Equipment.all().forEach(item -> {
-            if (!itemAffectsTransportUsability(item.getId(), ids)) return;
+            if (!itemAffectsTransportUsability(item.getId(), ids)
+                    && item.getSlot() != EquipmentInventorySlot.WEAPON.getSlotIdx()) return;
             h[0] = 31 * h[0] + item.getId();
             h[0] = 31 * h[0] + item.getQuantity();
         });

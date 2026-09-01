@@ -27,7 +27,7 @@ public class Pathfinder implements Runnable {
     private static final Comparator<Node> NODE_ORDER = Comparator
             .comparingInt(Node::fCost)
             .thenComparingInt(n -> n.cost)
-            .thenComparingInt(n -> n.tiebreaker);
+            .thenComparingInt(n -> n.packedPosition);
 
     /**
      * Bidirectional search only for single-target routes at least this Chebyshev distance apart.
@@ -58,7 +58,7 @@ public class Pathfinder implements Runnable {
     // travel cost is cheaper than any frontier walking node's g-cost, preserving the
     // existing "try cheap transports before walking farther" selection behavior.
     //
-    // Comparator chain is (fCost, gCost, tiebreaker):
+    // Comparator chain is (fCost, gCost, packedPosition):
     //   1. fCost — standard A* primary ordering.
     //   2. gCost — required for correctness under early-discovery. addNeighbors() marks
     //      a neighbor visited at insert time (not at pop), so a node only ever enters
@@ -67,11 +67,9 @@ public class Pathfinder implements Runnable {
     //      suboptimal value (because visited is already set when the lower-g node later
     //      tries to discover the same neighbor). Preferring lower gCost on ties keeps
     //      early-discovery optimal.
-    //   3. tiebreaker — per-node random. Among nodes with identical (f, g) — common in
-    //      open-grid regions where many tiles share the same distance-from-start and
-    //      distance-to-goal — this rotates the exploration order each run so paths
-    //      diverge tile-by-tile between successive searches with the same endpoints.
-    //      Kills the deterministic "identical route every trip" fingerprint.
+    //   3. packedPosition provides stable ordering among otherwise equivalent nodes.
+    //      The overlay, ETA calculation, and executor can therefore reproduce the same
+    //      shortest tile sequence from the same route inputs.
     private final Queue<Node> boundary = new PriorityQueue<>(4096, NODE_ORDER);
     private final Queue<Node> pending = new PriorityQueue<>(256);
     private final Queue<Node> boundaryBackward = new PriorityQueue<>(4096, NODE_ORDER);

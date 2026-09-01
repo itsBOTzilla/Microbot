@@ -560,3 +560,70 @@ transport handoff/replan boundaries.
 **Defensive check:** Model a catalog transport five raw-path indices ahead and assert it preempts
 movement. Separately assert that exact physical arrival succeeds despite a stale inverse edge,
 while non-exact configured-distance arrival still honors pending route interactions.
+
+## 22. Translate dungeon display coordinates and gate shortcuts by their real unlock
+
+World-map display coordinates are not necessarily the player's real tiles inside coordinate-shifted
+dungeons. Convert a dungeon-map selection through the existing world-map-area mapping, then
+normalize any canonical plane representation to the physical coordinates used by the pathfinder.
+Reject only when the selected map coordinate cannot be mapped to a real dungeon tile. Transport
+data for reward shortcuts must also include the exact varbit that unlocks the interaction; an object
+being visible and accepting a click does not prove that it can transport the player.
+
+**Why this matters:** On the second Stronghold of Security floor, a world-map click produced a
+surface/display target outside the floor. The resulting route searched the wrong component and an
+unconditional Famine portal row then diverted the route to a locked portal instead of the gates.
+The object click returned success after merely walking to the portal, while the expected landing
+never occurred.
+
+**Pattern to follow:**
+
+```java
+if (insideKnownDungeonFloor(player) && selectedPointIsDungeonMapCoordinate) {
+    selectedMapPoint = convertMapPointToPhysicalDungeonTile(selectedMapPoint);
+}
+if (shortcutRequiresReward) {
+    transport.addVarbitRequirement(rewardVarbit, 1);
+}
+```
+
+Run static target walkability preflight before starting a new pathfinder. Otherwise a bad target
+starts a search that the same call immediately cancels when preflight rejects the coordinate.
+
+**Where this applies:** `ShortestPathPlugin` world-map target selection, dungeon shortcut TSV data,
+`Rs2Walker.walkWithStateInternal`, and any transport whose availability changes after a reward.
+
+**Defensive check:** Load the production transport resources and assert the shortcut carries its
+unlock requirement. Test a literal dungeon display coordinate against its hand-derived physical
+tile, and assert target preflight precedes pathfinder startup.
+
+## 23. Keep item-gated plain transports through bank-route filtering
+
+Bank-route pathfinding may use a plain `TRANSPORT` because an item in the bank satisfies its
+requirement. The later path-to-transport scan must retain that row when it has either an item or
+currency requirement; otherwise the withdrawal planner sees an empty list and starts the direct
+walk without fetching the item.
+
+**Why this matters:** A Varrock Sewers route correctly found the slashable web while bank items
+were enabled and selected the faster banking route. An older filter then discarded the web because
+it was a plain transport with no currency fare, producing `direct_no_missing_items` after the bank
+had opened and leaving the knife and scimitars in the bank.
+
+**Pattern to follow:**
+
+```java
+Rs2WalkerBankingPlanner.planningCoversPlainTransport(transport)
+```
+
+Use the shared predicate in both eligibility checks and path filtering. Do not duplicate a narrower
+plain-transport rule at either boundary.
+
+**Where this applies:** `Rs2Walker.applyTransportFiltering`,
+`Rs2WalkerBankingPlanner.planningCoversPlainTransport`, and any future bank-route transport scan.
+
+**Defensive check:** Pass a production `Slash;Web` transport through the filtered-path boundary and
+assert it remains present so its cutting-tool requirement reaches the withdrawal map.
+
+After a successful slash, the web object can disappear before the player has crossed its edge.
+Treat that state as a reason to re-path through the now-open tile, not as a confirmed transport
+landing. The normal landing check remains authoritative for completing the transport.

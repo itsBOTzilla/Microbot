@@ -169,14 +169,14 @@ public final class WebWalkLog {
         LOG.debug("[WebWalk] sp | " + fmt, args);
     }
 
-    /** One INFO line; full blob only at DEBUG. */
+    /** One INFO line; full blob only at TRACE. */
     public static void compareSummary(double totalMs, int directTiles, int bankTiles, String verdictOneLine) {
         LOG.info("[WebWalk] compare | {}ms direct={}t bank={}t | {}",
                 String.format("%.1f", totalMs), directTiles, bankTiles, verdictOneLine);
     }
 
     public static void compareDetail(String multiline) {
-        LOG.debug("[WebWalk] compare_detail\n{}", multiline);
+        LOG.trace("[WebWalk] compare_detail\n{}", multiline);
     }
 
     public static void compareError(double totalMs, WorldPoint target, String err) {

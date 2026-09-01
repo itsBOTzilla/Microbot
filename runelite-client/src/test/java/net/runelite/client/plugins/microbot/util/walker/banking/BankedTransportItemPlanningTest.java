@@ -120,6 +120,65 @@ public class BankedTransportItemPlanningTest {
                 summed.getOrDefault(net.runelite.api.gameval.ItemID.COINS, 0) >= one.getCurrencyAmount() * 2);
     }
 
+    @Test
+    public void slashWebRouteWithdrawsTheCanonicalKnife() {
+        Transport web = all.stream()
+                .filter(t -> "Slash".equalsIgnoreCase(t.getAction()))
+                .filter(t -> "Web".equalsIgnoreCase(t.getName()))
+                .filter(t -> t.getObjectId() == 733)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("catalog should contain slashable webs"));
+
+        assertTrue("a slash-web edge must participate in bank planning",
+                Rs2WalkerBankingPlanner.planningCoversPlainTransport(web));
+        java.util.Map<Integer, Integer> map =
+                Rs2WalkerBankingPlanner.getMissingTransportItemIdsWithQuantities(java.util.List.of(web));
+        assertEquals("the route should withdraw one knife before attempting the web",
+                1, map.getOrDefault(net.runelite.api.gameval.ItemID.KNIFE, 0).intValue());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void pathTransportFilteringRetainsTheItemGatedWeb() throws Exception {
+        Transport web = all.stream()
+                .filter(t -> "Slash".equalsIgnoreCase(t.getAction()))
+                .filter(t -> "Web".equalsIgnoreCase(t.getName()))
+                .filter(t -> t.getObjectId() == 733)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("catalog should contain slashable webs"));
+        java.lang.reflect.Method filter = net.runelite.client.plugins.microbot.util.walker.Rs2Walker.class
+                .getDeclaredMethod("applyTransportFiltering", List.class);
+        filter.setAccessible(true);
+
+        List<Transport> retained = (List<Transport>) filter.invoke(null, java.util.List.of(web));
+
+        assertEquals("the banked route must keep the web long enough to schedule its cutting tool",
+                java.util.List.of(web), retained);
+    }
+
+    @Test
+    public void musaPointShipAndAlKharidTollContributeTheirExactFares() {
+        Transport musaPoint = all.stream()
+                .filter(t -> t.getType() == TransportType.SHIP)
+                .filter(t -> "Musa Point".equalsIgnoreCase(t.getAction()))
+                .filter(t -> "Captain Tobias".equalsIgnoreCase(t.getName()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("catalog should contain Captain Tobias to Musa Point"));
+        Transport alKharidToll = all.stream()
+                .filter(t -> t.getType() == TransportType.TRANSPORT)
+                .filter(t -> "Pay-toll(10gp)".equalsIgnoreCase(t.getAction()))
+                .filter(t -> "Gate".equalsIgnoreCase(t.getName()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("catalog should contain the Al Kharid toll gate"));
+
+        java.util.Map<Integer, Integer> map =
+                Rs2WalkerBankingPlanner.getMissingTransportItemIdsWithQuantities(
+                        java.util.List.of(musaPoint, alKharidToll));
+
+        assertEquals("Musa Point (30) plus the unfinished-quest Al Kharid toll (10)",
+                40, map.getOrDefault(net.runelite.api.gameval.ItemID.COINS, 0).intValue());
+    }
+
     /**
      * An item-gated row whose item the bank cannot supply, but which is vendor-purchasable at the
      * transport (the Shantay ticket row): the planner must withdraw the FARE, not request an item
