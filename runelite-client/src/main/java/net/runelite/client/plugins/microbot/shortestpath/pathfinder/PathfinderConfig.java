@@ -517,7 +517,7 @@ public class PathfinderConfig {
         String cacheMissReason = transportRefreshSnapshots.isEmpty()
                 ? "no_snapshot"
                 : (snap == null ? "key" : "verify");
-        WebWalkLog.cfgSlow("refresh_transports cache_miss reason={} key={} prevKey={} invFp={} prevInvFp={} invChanged={}{}",
+        WebWalkLog.cfg("refresh_transports cache_miss reason={} key={} prevKey={} invFp={} prevInvFp={} invChanged={}{}",
                 cacheMissReason,
                 refreshCacheKeyHash,
                 snap == null ? 0 : snap.cacheKeyHash,

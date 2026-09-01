@@ -23,13 +23,13 @@ public final class WebWalkLog {
     public static void movementDispatch(WebWalkRuntime.DispatchMethod method,
                                         WorldPoint requested, WorldPoint actual,
                                         int pathIndex, int tick, boolean redispatch) {
-        LOG.info("[WebWalk] click | method={} requested={} actual={} idx={} tick={} redispatch={}",
+        LOG.debug("[WebWalk] click | method={} requested={} actual={} idx={} tick={} redispatch={}",
                 method, requested, actual, pathIndex, tick, redispatch);
     }
 
     public static void checkpointReleased(String reason, WorldPoint checkpoint,
                                           int pathIndex, WorldPoint player, int tick) {
-        LOG.info("[WebWalk] checkpoint | released={} target={} idx={} at={} tick={}",
+        LOG.debug("[WebWalk] checkpoint | released={} target={} idx={} at={} tick={}",
                 reason, checkpoint, pathIndex, player, tick);
     }
 
@@ -197,7 +197,7 @@ public final class WebWalkLog {
     }
 
     public static void tmark(String phase, long elapsedMs, WorldPoint goal, WorldPoint at, String detail) {
-        LOG.info("[WebWalk] tmark | phase={} elapsed={}ms goal={} at={} detail={}",
+        LOG.debug("[WebWalk] tmark | phase={} elapsed={}ms goal={} at={} detail={}",
                 phase, elapsedMs, goal, at, detail == null ? "-" : detail);
     }
 
