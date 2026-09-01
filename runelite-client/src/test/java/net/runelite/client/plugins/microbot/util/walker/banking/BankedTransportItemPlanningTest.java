@@ -1,8 +1,10 @@
 package net.runelite.client.plugins.microbot.util.walker.banking;
 
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.client.plugins.microbot.shortestpath.ShortestPathPlugin;
 import net.runelite.client.plugins.microbot.shortestpath.Transport;
 import net.runelite.client.plugins.microbot.shortestpath.TransportType;
+import net.runelite.client.plugins.microbot.shortestpath.pathfinder.PathfinderConfig;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -154,6 +156,40 @@ public class BankedTransportItemPlanningTest {
 
         assertEquals("the banked route must keep the web long enough to schedule its cutting tool",
                 java.util.List.of(web), retained);
+    }
+
+    @Test
+    public void pathTransportExtractionFindsAnOffSceneSewerWeb() {
+        WorldPoint origin = new WorldPoint(3210, 9899, 0);
+        WorldPoint destination = new WorldPoint(3210, 9898, 0);
+        Transport web = all.stream()
+                .filter(t -> origin.equals(t.getOrigin()))
+                .filter(t -> destination.equals(t.getDestination()))
+                .filter(t -> "Slash".equalsIgnoreCase(t.getAction()))
+                .filter(t -> "Web".equalsIgnoreCase(t.getName()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("catalog should contain the Varrock sewer web"));
+
+        PathfinderConfig original = ShortestPathPlugin.pathfinderConfig;
+        PathfinderConfig testConfig = new PathfinderConfig(
+                null, java.util.Map.of(origin, Set.of(web)), java.util.List.of(), null, null);
+        testConfig.getTransports().put(origin, Set.of(web));
+        ShortestPathPlugin.pathfinderConfig = testConfig;
+        try {
+            List<Transport> extracted = net.runelite.client.plugins.microbot.util.walker.Rs2Walker
+                    .getTransportsForPath(java.util.List.of(origin, destination), 0,
+                            TransportType.TELEPORTATION_SPELL, true);
+
+            assertEquals("bank planning must inspect future static route tiles even when the live scene "
+                            + "is still above ground at the bank",
+                    java.util.List.of(web), extracted);
+            java.util.Map<Integer, Integer> withdrawal =
+                    Rs2WalkerBankingPlanner.getMissingTransportItemIdsWithQuantities(extracted);
+            assertEquals("the extracted sewer web must schedule one knife for withdrawal",
+                    1, withdrawal.getOrDefault(net.runelite.api.gameval.ItemID.KNIFE, 0).intValue());
+        } finally {
+            ShortestPathPlugin.pathfinderConfig = original;
+        }
     }
 
     @Test

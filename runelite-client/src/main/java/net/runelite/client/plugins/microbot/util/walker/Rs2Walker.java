@@ -4693,7 +4693,6 @@ public class Rs2Walker {
             return transportList;
         }
         Map<WorldPoint, Integer> pathFirstIndex = buildPathFirstIndex(path);
-        WorldPoint playerLoc = Rs2Player.getWorldLocation();
         int currentIndex = indexOfStartPoint;
 
         // Loop through the path until the end
@@ -4745,21 +4744,9 @@ public class Rs2Walker {
                 }
 
                 // For non-teleportation transports (or if teleportation had a valid origin, though typically null):
-                Collection<WorldPoint> originPoints;
-                if (transport.getOrigin() == null) {
-                    originPoints = Collections.singleton(null);
-                } else {
-                    originPoints = WorldPoint.toLocalInstance(
-                            Microbot.getClient().getTopLevelWorldView(), transport.getOrigin());
-                }
+                Collection<WorldPoint> originPoints = transportOriginPoints(transport.getOrigin());
 
                 for (WorldPoint origin : originPoints) {
-                    // If an origin is defined but the player's plane doesn't match, skip it.
-                    if (transport.getOrigin() != null && playerLoc != null
-                            && playerLoc.getPlane() != transport.getOrigin().getPlane()) {
-                        continue;
-                    }
-
                     // For non-teleportation transports, ensure both origin and destination exist in the path
                     // and that the destination comes after the origin.
                     Integer indexOfDestinationValue = pathFirstIndex.get(transport.getDestination());
@@ -13166,5 +13153,26 @@ public class Rs2Walker {
                 compactWorldPoint(transport.getDestination()),
                 compactWorldPoint(Rs2Player.getWorldLocation()));
         return false;
+    }
+
+    private static Collection<WorldPoint> transportOriginPoints(WorldPoint origin) {
+        if (origin == null) {
+            return Collections.singleton(null);
+        }
+
+        // The route can include transports far outside the currently loaded scene (for example the
+        // Varrock sewer web while the player is still at the surface bank). The canonical world
+        // origin must therefore always participate. Add live instance copies only as alternatives;
+        // never replace the static route coordinate with a scene-dependent lookup.
+        Set<WorldPoint> origins = new LinkedHashSet<>();
+        origins.add(origin);
+        Client client = Microbot.getClient();
+        if (client != null && Microbot.getClientThread() != null) {
+            origins.addAll(Microbot.getClientThread()
+                    .runOnClientThreadOptional(() ->
+                            WorldPoint.toLocalInstance(client.getTopLevelWorldView(), origin))
+                    .orElse(Collections.emptyList()));
+        }
+        return origins;
     }
 }
