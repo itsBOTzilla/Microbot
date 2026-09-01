@@ -627,3 +627,21 @@ assert it remains present so its cutting-tool requirement reaches the withdrawal
 After a successful slash, the web object can disappear before the player has crossed its edge.
 Treat that state as a reason to re-path through the now-open tile, not as a confirmed transport
 landing. The normal landing check remains authoritative for completing the transport.
+
+## 24. Inspect future route transports in world space before consulting the live scene
+
+A banked route is often inspected while its later dungeon tiles are not loaded. Always match the
+transport's canonical world origin against the planned path. Instance-local copies may be added as
+alternatives when a world view exists, but a scene conversion must not replace the canonical origin
+or gate matching on the player's current plane.
+
+**Why this matters:** From Varrock East bank, the bank-enabled path used the slashable sewer web,
+but the withdrawal scan converted that underground origin through the currently loaded surface
+scene. The conversion returned no point, so the planner reported `direct_no_missing_items` and left
+the knife and scimitars in the bank.
+
+**Where this applies:** `Rs2Walker.getTransportsForPath` and any route analysis that inspects
+transports beyond the currently loaded scene.
+
+**Defensive check:** Feed the production Varrock sewer web edge to the path-transport extractor in
+a headless/off-scene test and assert the web reaches the missing-item planner.
