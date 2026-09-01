@@ -4789,25 +4789,6 @@ public class Rs2Walker {
         return transportList;
     }
 
-    private static Collection<WorldPoint> transportOriginPoints(WorldPoint origin) {
-        if (origin == null) {
-            return Collections.singleton(null);
-        }
-
-        // The route can include transports far outside the currently loaded scene (for example the
-        // Varrock sewer web while the player is still at the surface bank). The canonical world
-        // origin must therefore always participate. Add live instance copies only as alternatives;
-        // never replace the static route coordinate with a scene-dependent lookup.
-        Set<WorldPoint> origins = new LinkedHashSet<>();
-        origins.add(origin);
-        Client client = Microbot.getClient();
-        WorldView worldView = client == null ? null : client.getTopLevelWorldView();
-        if (worldView != null) {
-            origins.addAll(WorldPoint.toLocalInstance(worldView, origin));
-        }
-        return origins;
-    }
-
     private static Map<WorldPoint, Integer> buildPathFirstIndex(List<WorldPoint> path) {
         Map<WorldPoint, Integer> pathFirstIndex = new HashMap<>(path.size());
         for (int i = 0; i < path.size(); i++) {
@@ -13172,5 +13153,26 @@ public class Rs2Walker {
                 compactWorldPoint(transport.getDestination()),
                 compactWorldPoint(Rs2Player.getWorldLocation()));
         return false;
+    }
+
+    private static Collection<WorldPoint> transportOriginPoints(WorldPoint origin) {
+        if (origin == null) {
+            return Collections.singleton(null);
+        }
+
+        // The route can include transports far outside the currently loaded scene (for example the
+        // Varrock sewer web while the player is still at the surface bank). The canonical world
+        // origin must therefore always participate. Add live instance copies only as alternatives;
+        // never replace the static route coordinate with a scene-dependent lookup.
+        Set<WorldPoint> origins = new LinkedHashSet<>();
+        origins.add(origin);
+        Client client = Microbot.getClient();
+        if (client != null && Microbot.getClientThread() != null) {
+            origins.addAll(Microbot.getClientThread()
+                    .runOnClientThreadOptional(() ->
+                            WorldPoint.toLocalInstance(client.getTopLevelWorldView(), origin))
+                    .orElse(Collections.emptyList()));
+        }
+        return origins;
     }
 }
