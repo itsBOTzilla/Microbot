@@ -336,6 +336,7 @@ public class MicrobotPlugin extends Plugin
 	   }
 	   if (gameStateChanged.getGameState() == GameState.HOPPING || gameStateChanged.getGameState() == GameState.LOGIN_SCREEN || gameStateChanged.getGameState() == GameState.CONNECTION_LOST)
 	   {
+		   Rs2Bank.resetBankPacing();
 		   // Clear all cache states when logging out through Rs2CacheManager
 		   //Rs2CacheManager.emptyCacheState(); // should not be nessary here, handled in ClientShutdown event,
 		   // and we also handle correct cache loading in onRuneScapeProfileChanged event

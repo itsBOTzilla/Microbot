@@ -48,6 +48,7 @@ import java.awt.*;
 import java.awt.event.KeyEvent;
 import java.util.List;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -94,6 +95,54 @@ public class Rs2Bank {
 
     private static final int BANK_OPEN_CACHE_SYNC_TIMEOUT_MS = 4_000;
 
+    private static final BankPacing BANK_PACING = new BankPacing(
+            Rs2Random::betweenInclusive,
+            () -> TimeUnit.NANOSECONDS.toMillis(System.nanoTime()),
+            Thread::sleep
+    );
+
+    private static boolean isClientThread()
+    {
+        return Microbot.getClientThread() != null && Microbot.getClientThread().isClientThread();
+    }
+
+    private static boolean awaitBeforeBankAction()
+    {
+        return isClientThread()
+                ? BANK_PACING.recordActionWithoutWait()
+                : BANK_PACING.awaitBeforeAction();
+    }
+
+    private static boolean awaitBeforeBankClose(long sessionToken)
+    {
+        return isClientThread()
+                ? BANK_PACING.recordCloseWithoutWait(sessionToken)
+                : BANK_PACING.awaitBeforeClose(sessionToken);
+    }
+
+    private static boolean awaitAfterBankClose(long sessionToken)
+    {
+        if (isClientThread())
+        {
+            return BANK_PACING.finishCloseWithoutWait(sessionToken);
+        }
+        return BANK_PACING.awaitAfterClose(sessionToken);
+    }
+
+    private static boolean beginBankPacingSession(boolean bankReady)
+    {
+        if (bankReady)
+        {
+            BANK_PACING.beginSession();
+        }
+        return bankReady;
+    }
+
+    private static boolean beginBankPacingForAlreadyOpenBank()
+    {
+        return beginBankPacingSession(verifyBankMirrorAfterOpen(true, BANK_LIVE_EPOCH.get()));
+    }
+
     /**
      * Monotonic counter incremented in {@link #updateLocalBank} for each applied bank container snapshot.
      */
@@ -107,6 +156,7 @@ public class Rs2Bank {
      */
     public static void invalidateBankMirrorCache(String reason)
     {
+        resetBankPacing();
         rs2BankData.setEmpty();
         BANK_LIVE_EPOCH.set(0);
         if (log.isInfoEnabled())
@@ -114,6 +164,15 @@ public class Rs2Bank {
             String suffix = (reason == null || reason.isBlank()) ? "" : " reason=" + reason;
             log.info("[Rs2Bank] bank mirror cache invalidated{}", suffix);
         }
+    }
+
+    /**
+     * Cancels session-scoped bank timing when the game session ends or changes worlds.
+     * Script callers normally rely on {@link #openBank()} and {@link #closeBank()} lifecycle handling.
+     */
+    public static void resetBankPacing()
+    {
+        BANK_PACING.reset();
     }
 
     /**
@@ -290,6 +349,12 @@ public class Rs2Bank {
      * @param rs2Item    The ItemWidget associated with the menu swap.
      */
     public static void invokeMenu(final int identifier, Rs2ItemModel rs2Item) {
+        invokeMenuPaced(identifier, rs2Item);
+    }
+
+    private static boolean invokeMenuPaced(final int identifier, Rs2ItemModel rs2Item) {
+        if (!awaitBeforeBankAction()) return false;
+
         Rectangle itemBoundingBox = null;
 
         if (container == BANK_INVENTORY_ITEM_CONTAINER) {
@@ -312,6 +377,7 @@ public class Rs2Bank {
                 .target(rs2Item.getName()), (itemBoundingBox == null) ? new Rectangle(1, 1) : itemBoundingBox);
         // MenuEntryImpl(getOption=Wear, getTarget=<col=ff9040>Amulet of glory(4)</col>, getIdentifier=9, getType=CC_OP_LOW_PRIORITY, getParam0=1, getParam1=983043, getItemId=1712, isForceLeftClick=false, isDeprioritized=false)
         // Rs2Reflection.invokeMenu(rs2Item.slot, container, MenuAction.CC_OP.getId(), identifier, rs2Item.id, "Withdraw-1", rs2Item.name, -1, -1);
+        return true;
     }
 
     /**
@@ -388,14 +454,25 @@ public class Rs2Bank {
 	 * @return true if the bank interface was open and successfully closed, true if already closed.
 	 */
     public static boolean closeBank() {
-        if (!isOpen()) return true;
+        if (!isOpen()) {
+            BANK_PACING.reset();
+            return true;
+        }
+        long closingSessionToken = BANK_PACING.sessionToken();
+        if (!awaitBeforeBankClose(closingSessionToken)) return false;
         if (Rs2Settings.isEscCloseInterfaceSettingEnabled()) {
             Rs2Keyboard.keyPress(KeyEvent.VK_ESCAPE);
         } else {
             Rs2Widget.clickChildWidget(786434, 11);
         }
 
-        return sleepUntil(() -> !isOpen(), 5000);
+        if (!sleepUntil(() -> !isOpen(), 5000)) {
+            if (Thread.currentThread().isInterrupted()) {
+                BANK_PACING.cancelSession(closingSessionToken);
+            }
+            return false;
+        }
+        return awaitAfterBankClose(closingSessionToken);
     }
 
     /**
@@ -709,11 +786,16 @@ public class Rs2Bank {
      * This method finds and clicks the "Deposit Equipment" button in the bank interface.
      */
     public static boolean depositEquipment() {
+        if (!isOpen()) return false;
+        if (Rs2Equipment.items().isEmpty()) return true;
+
         Widget widget = Rs2Widget.findWidget(SpriteID.BANK_DEPOSIT_EQUIPMENT, null);
         if (widget == null) return false;
+        if (!awaitBeforeBankAction()) return false;
 
-        Microbot.getMouse().click(widget.getBounds());
-        return true;
+        int epochBeforeDeposit = getBankLiveEpoch();
+        if (!Rs2Widget.clickWidget(widget)) return false;
+        return syncBankInventoryAfterChange(epochBeforeDeposit);
     }
 
     /**
@@ -1096,11 +1178,10 @@ public class Rs2Bank {
         container = BANK_INVENTORY_ITEM_CONTAINER;
 
         if (Microbot.getVarbitValue(VarbitID.BANK_QUANTITY_TYPE) == 0) {
-            invokeMenu(2, rs2Item);
+            return invokeMenuPaced(2, rs2Item);
         } else {
-            invokeMenu(3, rs2Item);
+            return invokeMenuPaced(3, rs2Item);
         }
-        return true;
     }
 
     /**
@@ -1203,12 +1284,12 @@ public class Rs2Bank {
 
         if (hasX && configuredX == amount) {
             final int before = Rs2Inventory.count();
-            invokeMenu(xSetOffset, rs2Item);
+            if (!invokeMenuPaced(xSetOffset, rs2Item)) return false;
             if (safe) return sleepUntilTrue(() -> Rs2Inventory.count() != before, 100, 2500);
             return true;
         }
 
-        invokeMenu(xPromptOffset, rs2Item);
+        if (!invokeMenuPaced(xPromptOffset, rs2Item)) return false;
         boolean foundEnterAmount = sleepUntil(() -> {
             Widget widget = Rs2Widget.getWidget(162, 43);
             return widget != null && widget.getText().equalsIgnoreCase("Enter amount:");
@@ -1267,11 +1348,10 @@ public class Rs2Bank {
         container = BANK_INVENTORY_ITEM_CONTAINER;
 
         if (Microbot.getVarbitValue(VarbitID.BANK_QUANTITY_TYPE) == 4) {
-            invokeMenu(2, rs2Item);
+            return invokeMenuPaced(2, rs2Item);
         } else {
-            invokeMenu(8, rs2Item);
+            return invokeMenuPaced(8, rs2Item);
         }
-        return true;
     }
 
     /**
@@ -1292,8 +1372,7 @@ public class Rs2Bank {
         List<Rs2ItemModel> items = Rs2Inventory.items(predicate).distinct().collect(Collectors.toList());
         for (Rs2ItemModel item : items) {
             if (item == null) continue;
-            depositAll(item);
-            sleep(Rs2Random.randomGaussian(400,200));
+            if (!depositAll(item)) return false;
             result = true;
         }
         return result;
@@ -1342,11 +1421,10 @@ public class Rs2Bank {
 
         Widget widget = Rs2Widget.getWidget(786471); // Empty containers button ID
         if (widget == null) return false;
+        if (!awaitBeforeBankAction()) return false;
 
-        Rs2Widget.clickWidget(widget);
-        sleep(1000, 2000); // Wait for containers to be emptied
-        
-        return true;
+        int epochBeforeDeposit = getBankLiveEpoch();
+        return Rs2Widget.clickWidget(widget) && syncBankInventoryAfterChange(epochBeforeDeposit);
     }
 
     /**
@@ -1359,6 +1437,7 @@ public class Rs2Bank {
 
         Widget widget = Rs2Widget.findWidget(SpriteID.BANK_DEPOSIT_INVENTORY, null);
         if (widget == null) return false;
+        if (!awaitBeforeBankAction()) return false;
 
         Rs2Widget.clickWidget(widget);
         return Rs2Inventory.waitForInventoryChanges(10_000);
@@ -1497,8 +1576,7 @@ public class Rs2Bank {
         container = BANK_ITEM_CONTAINER;
 
         final int entryIndex = Microbot.getVarbitValue(VarbitID.BANK_QUANTITY_TYPE) == 0 ? 1 : 2;
-        invokeMenu(entryIndex, rs2Item);
-        return true;
+        return invokeMenuPaced(entryIndex, rs2Item);
     }
 
     /**
@@ -1589,8 +1667,7 @@ public class Rs2Bank {
         if (Rs2Inventory.isFull()) return true;
         container = BANK_ITEM_CONTAINER;
 
-        invokeMenu(7, rs2Item);
-        return true;
+        return invokeMenuPaced(7, rs2Item);
     }
 
     /**
@@ -1734,11 +1811,10 @@ public class Rs2Bank {
         container = BANK_ITEM_CONTAINER;
 
         if (Microbot.getVarbitValue(VarbitID.BANK_QUANTITY_TYPE) == 4) {
-            invokeMenu(1, rs2Item);
+            return invokeMenuPaced(1, rs2Item);
         } else {
-            invokeMenu(7, rs2Item);
+            return invokeMenuPaced(7, rs2Item);
         }
-        return true;
     }
 
     public static boolean withdrawAll(boolean checkInv, String name) {
@@ -1797,8 +1873,7 @@ public class Rs2Bank {
         if (!isOpen()) return false;
         container = BANK_INVENTORY_ITEM_CONTAINER;
 
-        invokeMenu(9, rs2Item);
-        return true;
+        return invokeMenuPaced(9, rs2Item);
     }
 
     /**
@@ -1931,7 +2006,8 @@ public class Rs2Bank {
                 Microbot.getMouse().click();
             }
 
-            if (isOpen()) return true;
+            if (isOpen()) return beginBankPacingForAlreadyOpenBank();
+            BANK_PACING.reset();
 
             int epochBeforeInteract = BANK_LIVE_EPOCH.get();
 
@@ -1960,7 +2036,7 @@ public class Rs2Bank {
             if (!sleepUntil(Rs2Bank::isOpen, 5_000)) {
                 return false;
             }
-            return awaitBankContainerSnapshotSince(epochBeforeInteract);
+            return beginBankPacingSession(awaitBankContainerSnapshotSince(epochBeforeInteract));
         } catch (Exception ex) {
             Microbot.logStackTrace("Rs2Bank", ex);
             return false;
@@ -2073,7 +2149,8 @@ public class Rs2Bank {
     public static boolean openBank(Rs2NpcModel npc) {
         Microbot.status = "Opening bank";
         try {
-            if (isOpen()) return true;
+            if (isOpen()) return beginBankPacingForAlreadyOpenBank();
+            BANK_PACING.reset();
             if (Rs2Inventory.isItemSelected()) Microbot.getMouse().click();
 
             if (npc == null) return false;
@@ -2089,8 +2166,7 @@ public class Rs2Bank {
             if (!sleepUntil(Rs2Bank::isOpen)) {
                 return false;
             }
-            sleep(Rs2Random.randomGaussian(800,200));
-            return awaitBankContainerSnapshotSince(epochBeforeInteract);
+            return beginBankPacingSession(awaitBankContainerSnapshotSince(epochBeforeInteract));
         } catch (Exception ex) {
             Microbot.logStackTrace("Rs2Bank", ex);
         }
@@ -2111,7 +2187,8 @@ public class Rs2Bank {
     public static boolean openBank(TileObject object) {
         Microbot.status = "Opening bank";
         try {
-            if (isOpen()) return true;
+            if (isOpen()) return beginBankPacingForAlreadyOpenBank();
+            BANK_PACING.reset();
             if (Rs2Inventory.isItemSelected()) Microbot.getMouse().click();
 
             if (object == null) return false;
@@ -2127,8 +2204,7 @@ public class Rs2Bank {
             if (!sleepUntil(Rs2Bank::isOpen)) {
                 return false;
             }
-            sleep(Rs2Random.randomGaussian(800,200));
-            return awaitBankContainerSnapshotSince(epochBeforeInteract);
+            return beginBankPacingSession(awaitBankContainerSnapshotSince(epochBeforeInteract));
         } catch (Exception ex) {
             Microbot.logStackTrace("Rs2Bank", ex);
         }
@@ -2145,8 +2221,7 @@ public class Rs2Bank {
         if (rs2Item == null) return false;
         container = BANK_INVENTORY_ITEM_CONTAINER;
 
-        invokeMenu(9, rs2Item);
-        return true;
+        return invokeMenuPaced(9, rs2Item);
     }
 
     /**
@@ -2676,6 +2751,7 @@ public class Rs2Bank {
     public static boolean setWithdrawAs(boolean noted) {
         if (isWithdrawAs(noted)) return true;
         int target = noted ? InterfaceID.Bankmain.NOTE : InterfaceID.Bankmain.QUANTITY1_TEXT;
+        if (!awaitBeforeBankAction()) return false;
         boolean clicked = Rs2Widget.clickWidget(target);
         if (!clicked) return false;
         return sleepUntil(() -> isWithdrawAs(noted));
@@ -2744,10 +2820,12 @@ public class Rs2Bank {
     public static boolean emptyGemBag() {
         Rs2ItemModel gemBag = Rs2Inventory.get(ItemID.GEM_BAG, ItemID.GEM_BAG_OPEN);
         if (gemBag == null) return false;
+        if (isOpen() && !awaitBeforeBankAction()) return false;
         return Rs2Inventory.interact(gemBag, "Empty");
     }
 
     private static boolean empty(int... ids) {
+        if (isOpen() && !awaitBeforeBankAction()) return false;
         return Rs2Inventory.interact(Rs2Inventory.get(ids), "Empty");
     }
 
@@ -2800,6 +2878,7 @@ public class Rs2Bank {
         if (Rs2Inventory.interact(ItemID.LOOTING_BAG_OPEN, "View")) {
             sleepUntil(()-> Rs2Widget.getWidget(983046) != null, Rs2Random.between(2000,5000));
             if(Rs2Widget.getWidget(983046) != null){
+                if (!awaitBeforeBankAction()) return false;
                 if(Rs2Widget.clickWidget(983046)){
                     sleepUntil(()-> Rs2Widget.getWidget(15,11).getChildren()[0] == null, Rs2Random.between(500,1000));
                     if(Rs2Widget.clickWidget(983048)){ // close the bag
@@ -3418,7 +3497,7 @@ public class Rs2Bank {
 
         container = BANK_INVENTORY_ITEM_CONTAINER;
         final int currentLockState = Microbot.getVarbitValue(VarbitID.BANK_SIDE_SLOT_OVERVIEW);
-        invokeMenu(10, rs2Item);
+        if (!invokeMenuPaced(10, rs2Item)) return false;
         return sleepUntilTrue(() -> Microbot.getVarbitValue(VarbitID.BANK_SIDE_SLOT_OVERVIEW) != currentLockState, 300, 2000);
     }
 
