@@ -19,6 +19,8 @@ import java.awt.geom.Rectangle2D;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public class PathTileOverlay extends Overlay {
     private final Client client;
@@ -39,7 +41,7 @@ public class PathTileOverlay extends Overlay {
         if (ShortestPathPlugin.getTransports() == null) return;
         if (ShortestPathPlugin.getPathfinderFuture() == null || !ShortestPathPlugin.getPathfinderFuture().isDone()) return;
         for (WorldPoint a : ShortestPathPlugin.getTransports().keySet()) {
-            drawTile(graphics, a, plugin.colourTransports, -1, true);
+            drawTile(graphics, a, plugin.colourTransports, -1, 0, true);
 
             Point ca = tileCenter(a);
 
@@ -132,17 +134,32 @@ public class PathTileOverlay extends Overlay {
                 }
             } else {
                 boolean showTiles = TileStyle.TILES.equals(plugin.pathStyle);
-                for (int i = 0; i < path.size(); i++) {
-                    float step = i / (float) path.size();
+                int gradientAnchor = 0;
+                List<PathVisualization.VisualizationTile> visualization =
+                        visualizationTiles(path, ShortestPathPlugin.getTransports());
+                for (PathVisualization.VisualizationTile tile : visualization) {
+                    if (tile.anchorIndex() >= 0) {
+                        gradientAnchor = tile.anchorIndex();
+                    }
+                    float step = gradientAnchor / (float) path.size();
                     Color newColor = generateGradient(step);
                     newColor = new Color(newColor.getRed(), newColor.getGreen(), newColor.getBlue(), 75);
-                    drawTile(graphics, path.get(i), newColor, counter++, showTiles);
+                    drawTile(graphics, tile.point(), newColor, tile.displayIndex(),
+                            visualization.size(), showTiles);
+                }
+                for (int i = 0; i < path.size(); i++) {
                     drawTransportInfo(graphics, path.get(i), (i + 1 == path.size()) ? null : path.get(i + 1));
                 }
             }
         }
 
         return null;
+    }
+
+    static List<PathVisualization.VisualizationTile> visualizationTiles(
+            List<WorldPoint> anchors,
+            Map<WorldPoint, Set<Transport>> transports) {
+        return PathVisualization.expand(anchors, transports);
     }
 
     private Point tileCenter(WorldPoint b) {
@@ -165,7 +182,8 @@ public class PathTileOverlay extends Overlay {
         return new Point(cx, cy);
     }
 
-    private void drawTile(Graphics2D graphics, WorldPoint location, Color color, int counter, boolean draw) {
+    private void drawTile(Graphics2D graphics, WorldPoint location, Color color, int displayIndex,
+                          int visualizationSize, boolean draw) {
         for (WorldPoint point : WorldPoint.toLocalInstance(client, location)) {
             if (point.getPlane() != client.getPlane()) {
                 continue;
@@ -186,8 +204,26 @@ public class PathTileOverlay extends Overlay {
                 graphics.fill(poly);
             }
 
-            drawCounter(graphics, poly.getBounds().getCenterX(), poly.getBounds().getCenterY(), counter);
+            drawVisualizationCounter(graphics, poly.getBounds().getCenterX(),
+                    poly.getBounds().getCenterY(), displayIndex, visualizationSize);
         }
+    }
+
+    private void drawVisualizationCounter(Graphics2D graphics, double x, double y,
+                                          int displayIndex, int visualizationSize) {
+        if (displayIndex <= 0 || TileCounter.DISABLED.equals(plugin.showTileCounter)) {
+            return;
+        }
+        int n = plugin.tileCounterStep > 0 ? plugin.tileCounterStep : 1;
+        if (((displayIndex - 1) % n != 0) && displayIndex != visualizationSize) {
+            return;
+        }
+        int counter = TileCounter.REMAINING.equals(plugin.showTileCounter)
+                ? visualizationSize - displayIndex : displayIndex;
+        if (n > 1 && counter == 0) {
+            return;
+        }
+        drawCounterText(graphics, x, y, counter);
     }
 
     private void drawLine(Graphics2D graphics, WorldPoint startLoc, WorldPoint endLoc, Color color, int counter) {
@@ -249,12 +285,16 @@ public class PathTileOverlay extends Overlay {
             if (n > 1 && counter == 0) {
                 return;
             }
-            String counterText = Integer.toString(counter);
-            graphics.setColor(plugin.colourText);
-            graphics.drawString(
-                    counterText,
-                    (int) (x - graphics.getFontMetrics().getStringBounds(counterText, graphics).getWidth() / 2), (int) y);
+            drawCounterText(graphics, x, y, counter);
         }
+    }
+
+    private void drawCounterText(Graphics2D graphics, double x, double y, int counter) {
+        String counterText = Integer.toString(counter);
+        graphics.setColor(plugin.colourText);
+        graphics.drawString(
+                counterText,
+                (int) (x - graphics.getFontMetrics().getStringBounds(counterText, graphics).getWidth() / 2), (int) y);
     }
 
     private void drawTransportInfo(Graphics2D graphics, WorldPoint location, WorldPoint locationEnd) {
