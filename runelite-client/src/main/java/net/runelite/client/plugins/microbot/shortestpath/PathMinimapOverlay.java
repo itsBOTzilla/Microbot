@@ -48,7 +48,7 @@ public class PathMinimapOverlay extends Overlay {
         Color pathColor = pathfinder.isDone() ? plugin.colourPath : plugin.colourPathCalculating;
         if (!pathPoints.isEmpty()) {
             for (PathVisualization.VisualizationTile tile
-                    : PathVisualization.expand(pathPoints, ShortestPathPlugin.getTransports())) {
+                    : PathVisualization.snapshot(pathPoints, ShortestPathPlugin.getTransportVisualizationSnapshot()).tiles()) {
                 drawOnMinimap(graphics, tile.point(), pathColor);
             }
         }

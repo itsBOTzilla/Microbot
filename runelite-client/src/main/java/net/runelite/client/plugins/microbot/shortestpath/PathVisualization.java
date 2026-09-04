@@ -21,39 +21,47 @@ final class PathVisualization
 
     static List<VisualizationTile> expand(
             List<WorldPoint> anchors,
-            Map<WorldPoint, Set<Transport>> transports)
+            Map<WorldPoint, Set<Transport>> transportSnapshot)
+    {
+        return snapshot(anchors, transportSnapshot).tiles();
+    }
+
+    static VisualizationSnapshot snapshot(
+            List<WorldPoint> anchors,
+            Map<WorldPoint, Set<Transport>> transportSnapshot)
     {
         if (anchors == null || anchors.isEmpty())
         {
-            return Collections.emptyList();
+            return VisualizationSnapshot.empty();
         }
 
         CachedVisualization cached = cachedVisualization;
-        if (cached != null && cached.matches(anchors, transports))
+        if (cached != null && cached.matches(anchors, transportSnapshot))
         {
-            return cached.tiles;
+            return cached.snapshot;
         }
 
         synchronized (PathVisualization.class)
         {
             cached = cachedVisualization;
-            if (cached != null && cached.matches(anchors, transports))
+            if (cached != null && cached.matches(anchors, transportSnapshot))
             {
-                return cached.tiles;
+                return cached.snapshot;
             }
 
-            Map<WorldPoint, Set<WorldPoint>> transportEdges = snapshotTransportEdges(anchors, transports);
-            List<VisualizationTile> tiles = expandUncached(anchors, transportEdges);
-            cachedVisualization = new CachedVisualization(anchors, transports, transportEdges, tiles);
-            return tiles;
+            Map<WorldPoint, Set<WorldPoint>> transportEdges = snapshotTransportEdges(anchors, transportSnapshot);
+            VisualizationSnapshot visualization = expandUncached(anchors, transportEdges);
+            cachedVisualization = new CachedVisualization(anchors, transportSnapshot, transportEdges, visualization);
+            return visualization;
         }
     }
 
-    private static List<VisualizationTile> expandUncached(
+    private static VisualizationSnapshot expandUncached(
             List<WorldPoint> anchors,
             Map<WorldPoint, Set<WorldPoint>> transportEdges)
     {
         List<VisualizationTile> tiles = new ArrayList<>();
+        int[] anchorDisplayIndexes = new int[anchors.size()];
         tiles.add(new VisualizationTile(anchors.get(0), 0, 0));
         for (int anchorIndex = 1; anchorIndex < anchors.size(); anchorIndex++)
         {
@@ -68,8 +76,9 @@ final class PathVisualization
                 }
             }
             tiles.add(new VisualizationTile(to, anchorIndex, tiles.size()));
+            anchorDisplayIndexes[anchorIndex] = tiles.size() - 1;
         }
-        return List.copyOf(tiles);
+        return new VisualizationSnapshot(List.copyOf(tiles), anchorDisplayIndexes);
     }
 
     static boolean shouldRasterizeWalkingSegment(
@@ -181,27 +190,61 @@ final class PathVisualization
         }
     }
 
+    static final class VisualizationSnapshot
+    {
+        private static final VisualizationSnapshot EMPTY = new VisualizationSnapshot(Collections.emptyList(), new int[0]);
+
+        private final List<VisualizationTile> tiles;
+        private final int[] anchorDisplayIndexes;
+
+        private VisualizationSnapshot(List<VisualizationTile> tiles, int[] anchorDisplayIndexes)
+        {
+            this.tiles = tiles;
+            this.anchorDisplayIndexes = anchorDisplayIndexes;
+        }
+
+        private static VisualizationSnapshot empty()
+        {
+            return EMPTY;
+        }
+
+        List<VisualizationTile> tiles()
+        {
+            return tiles;
+        }
+
+        int displayIndexForAnchor(int anchorIndex)
+        {
+            return anchorDisplayIndexes[anchorIndex];
+        }
+
+        int size()
+        {
+            return tiles.size();
+        }
+    }
+
     private static final class CachedVisualization
     {
         private final List<WorldPoint> anchors;
-        private final Map<WorldPoint, Set<Transport>> transports;
+        private final Map<WorldPoint, Set<Transport>> transportSnapshot;
         @SuppressWarnings("unused")
         private final Map<WorldPoint, Set<WorldPoint>> transportEdges;
-        private final List<VisualizationTile> tiles;
+        private final VisualizationSnapshot snapshot;
 
-        private CachedVisualization(List<WorldPoint> anchors, Map<WorldPoint, Set<Transport>> transports,
+        private CachedVisualization(List<WorldPoint> anchors, Map<WorldPoint, Set<Transport>> transportSnapshot,
                                     Map<WorldPoint, Set<WorldPoint>> transportEdges,
-                                    List<VisualizationTile> tiles)
+                                    VisualizationSnapshot snapshot)
         {
             this.anchors = anchors;
-            this.transports = transports;
+            this.transportSnapshot = transportSnapshot;
             this.transportEdges = transportEdges;
-            this.tiles = tiles;
+            this.snapshot = snapshot;
         }
 
         private boolean matches(List<WorldPoint> candidateAnchors, Map<WorldPoint, Set<Transport>> candidateTransports)
         {
-            return anchors == candidateAnchors && transports == candidateTransports;
+            return anchors == candidateAnchors && transportSnapshot == candidateTransports;
         }
     }
 }

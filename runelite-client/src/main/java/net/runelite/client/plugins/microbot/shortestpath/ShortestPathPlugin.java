@@ -947,6 +947,11 @@ public class ShortestPathPlugin extends Plugin implements KeyListener {
         return pathfinderConfig.getTransports();
     }
 
+    /** Immutable transport view for overlays, published after a complete routing-map update. */
+    public static Map<WorldPoint, Set<Transport>> getTransportVisualizationSnapshot() {
+        return pathfinderConfig == null ? Collections.emptyMap() : pathfinderConfig.getTransportVisualizationSnapshot();
+    }
+
     public CollisionMap getMap() {
         return pathfinderConfig.getMap();
     }

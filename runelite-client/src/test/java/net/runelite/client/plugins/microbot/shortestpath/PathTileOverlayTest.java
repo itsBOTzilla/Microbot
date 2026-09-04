@@ -1,17 +1,30 @@
 package net.runelite.client.plugins.microbot.shortestpath;
 
 import java.lang.reflect.Method;
+import java.util.AbstractSet;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.client.plugins.microbot.shortestpath.pathfinder.PathfinderConfig;
 import org.junit.Test;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 public class PathTileOverlayTest
@@ -108,6 +121,109 @@ public class PathTileOverlayTest
         assertEquals(0, visualizationCounter(TileCounter.REMAINING, 4, 5));
     }
 
+    @Test
+    public void lineCountersUseExpandedDistanceForSparseWalkableAnchors() throws Exception
+    {
+        WorldPoint start = new WorldPoint(3200, 3200, 0);
+        WorldPoint end = new WorldPoint(3204, 3202, 0);
+        Object snapshot = visualizationSnapshot(List.of(start, end), Map.of());
+
+        assertEquals(0, visualizationCounter(TileCounter.TRAVELLED, displayIndexForAnchor(snapshot, 0), snapshotSize(snapshot)));
+        assertEquals(4, visualizationCounter(TileCounter.TRAVELLED, displayIndexForAnchor(snapshot, 1), snapshotSize(snapshot)));
+        assertEquals(4, visualizationCounter(TileCounter.REMAINING, displayIndexForAnchor(snapshot, 0), snapshotSize(snapshot)));
+        assertEquals(0, visualizationCounter(TileCounter.REMAINING, displayIndexForAnchor(snapshot, 1), snapshotSize(snapshot)));
+    }
+
+    @Test
+    public void lineRendererReadsExpandedDisplayIndexes() throws Exception
+    {
+        String snapshotOwner = Type.getInternalName(PathVisualization.VisualizationSnapshot.class);
+        AtomicBoolean displayIndexRead = new AtomicBoolean();
+        new ClassReader(PathTileOverlay.class.getResourceAsStream("PathTileOverlay.class")).accept(
+                new ClassVisitor(Opcodes.ASM9)
+                {
+                    @Override
+                    public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                     String signature, String[] exceptions)
+                    {
+                        if (!"render".equals(name))
+                        {
+                            return null;
+                        }
+                        return new MethodVisitor(Opcodes.ASM9)
+                        {
+                            @Override
+                            public void visitMethodInsn(int opcode, String owner, String name,
+                                                        String descriptor, boolean isInterface)
+                            {
+                                if (snapshotOwner.equals(owner) && "displayIndexForAnchor".equals(name))
+                                {
+                                    displayIndexRead.set(true);
+                                }
+                            }
+                        };
+                    }
+                }, 0);
+        assertTrue("line rendering must count expanded display tiles, not sparse anchors", displayIndexRead.get());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void producerSnapshotIsStableDuringOverlappingTransportMutation() throws Exception
+    {
+        WorldPoint start = new WorldPoint(3029, 3217, 0);
+        WorldPoint landing = new WorldPoint(2956, 3143, 0);
+        Transport ship = new Transport(start, landing, "ship", TransportType.SHIP, false, 10);
+        CoordinatedSet<Transport> liveEdges = new CoordinatedSet<>(Set.of(ship));
+        Map<WorldPoint, Set<Transport>> liveTransports = new HashMap<>();
+        liveTransports.put(start, liveEdges);
+        AtomicBoolean running = new AtomicBoolean(true);
+        Thread mutator = new Thread(() ->
+        {
+            try
+            {
+                assertTrue("producer snapshot construction did not begin", liveEdges.iteratorEntered.await(5, TimeUnit.SECONDS));
+                while (running.get())
+                {
+                    synchronized (liveEdges)
+                    {
+                        liveEdges.clear();
+                        liveEdges.add(ship);
+                    }
+                }
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+        });
+        mutator.start();
+        try
+        {
+            Map<WorldPoint, Set<Transport>> frozen = null;
+            for (int i = 0; i < 25; i++)
+            {
+                frozen = producerSnapshot(liveTransports);
+            }
+            assertEquals(Set.of(ship), frozen.get(start));
+            try
+            {
+                frozen.get(start).clear();
+                fail("producer snapshot must not retain a mutable transport edge set");
+            }
+            catch (UnsupportedOperationException expected)
+            {
+                // Expected: rendering only receives the producer-published immutable snapshot.
+            }
+        }
+        finally
+        {
+            running.set(false);
+            mutator.join(5000);
+            assertTrue("overlapping producer mutation did not stop", !mutator.isAlive());
+        }
+    }
+
     private static List<?> visualizationTiles(List<WorldPoint> anchors, Map<WorldPoint, Set<Transport>> transports)
             throws Exception
     {
@@ -134,6 +250,38 @@ public class PathTileOverlayTest
         return (int) counter.invoke(null, counterMode, displayIndex, visualizationSize);
     }
 
+    private static Object visualizationSnapshot(List<WorldPoint> anchors, Map<WorldPoint, Set<Transport>> transports)
+            throws Exception
+    {
+        Method snapshot = PathVisualization.class.getDeclaredMethod("snapshot", List.class, Map.class);
+        snapshot.setAccessible(true);
+        return snapshot.invoke(null, anchors, transports);
+    }
+
+    private static int displayIndexForAnchor(Object snapshot, int anchorIndex)
+            throws Exception
+    {
+        Method displayIndex = snapshot.getClass().getDeclaredMethod("displayIndexForAnchor", int.class);
+        displayIndex.setAccessible(true);
+        return (int) displayIndex.invoke(snapshot, anchorIndex);
+    }
+
+    private static int snapshotSize(Object snapshot) throws Exception
+    {
+        Method size = snapshot.getClass().getDeclaredMethod("size");
+        size.setAccessible(true);
+        return (int) size.invoke(snapshot);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<WorldPoint, Set<Transport>> producerSnapshot(Map<WorldPoint, Set<Transport>> transports)
+            throws Exception
+    {
+        Method snapshot = PathfinderConfig.class.getDeclaredMethod("immutableTransportVisualizationSnapshot", Map.class);
+        snapshot.setAccessible(true);
+        return (Map<WorldPoint, Set<Transport>>) snapshot.invoke(null, transports);
+    }
+
     private static void assertTile(Object tile, WorldPoint expectedPoint, int expectedAnchorIndex,
                                    int expectedDisplayIndex)
             throws Exception
@@ -156,5 +304,41 @@ public class PathTileOverlayTest
         assertEquals(expectedPoint, point.invoke(tile));
         assertEquals(expectedAnchorIndex, anchorIndex.invoke(tile));
         assertEquals(expectedDisplayIndex, displayIndex.invoke(tile));
+    }
+
+    private static final class CoordinatedSet<E> extends AbstractSet<E>
+    {
+        private final Set<E> delegate;
+        private final CountDownLatch iteratorEntered = new CountDownLatch(1);
+
+        private CoordinatedSet(Set<E> initial)
+        {
+            this.delegate = new HashSet<>(initial);
+        }
+
+        @Override
+        public Iterator<E> iterator()
+        {
+            iteratorEntered.countDown();
+            return delegate.iterator();
+        }
+
+        @Override
+        public int size()
+        {
+            return delegate.size();
+        }
+
+        @Override
+        public boolean add(E element)
+        {
+            return delegate.add(element);
+        }
+
+        @Override
+        public void clear()
+        {
+            delegate.clear();
+        }
     }
 }

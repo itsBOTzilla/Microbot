@@ -97,6 +97,8 @@ public class PathfinderConfig {
 
     @Getter
     private final ConcurrentHashMap<WorldPoint, Set<Transport>> transports;
+    /** Immutable transport edges published after each completed producer update for overlay rendering. */
+    private volatile Map<WorldPoint, Set<Transport>> transportVisualizationSnapshot = Collections.emptyMap();
     // Copy of transports with packed positions for the hotpath; lists are not copied and are the same reference in both maps
     @Getter
     private final PrimitiveIntHashMap<Set<Transport>> transportsPacked;
@@ -286,6 +288,39 @@ public class PathfinderConfig {
     }
 
     /**
+     * Returns the last fully-published immutable transport view. Overlay rendering must not iterate
+     * the mutable routing map while a refresh or teleport update can replace its edge sets.
+     */
+    public Map<WorldPoint, Set<Transport>> getTransportVisualizationSnapshot() {
+        return transportVisualizationSnapshot;
+    }
+
+    private void publishTransportVisualizationSnapshot() {
+        transportVisualizationSnapshot = immutableTransportVisualizationSnapshot(transports);
+    }
+
+    static Map<WorldPoint, Set<Transport>> immutableTransportVisualizationSnapshot(
+            Map<WorldPoint, Set<Transport>> source) {
+        if (source == null || source.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<WorldPoint, Set<Transport>> snapshot = new HashMap<>(source.size());
+        for (Map.Entry<WorldPoint, Set<Transport>> entry : source.entrySet()) {
+            Set<Transport> edges = entry.getValue();
+            if (edges == null) {
+                continue;
+            }
+            synchronized (edges) {
+                if (!edges.isEmpty()) {
+                    snapshot.put(entry.getKey(), Set.copyOf(edges));
+                }
+            }
+        }
+        return snapshot.isEmpty() ? Collections.emptyMap() : Map.copyOf(snapshot);
+    }
+
+    /**
      * Diagnostics for the live-collision overlay at one tile, for the agent server's
      * {@code /live-collision} endpoint. Reads only immutable data (the static map and the pinned
      * snapshot), so it is safe to call from any thread.
@@ -419,6 +454,7 @@ public class PathfinderConfig {
                 transports.put(key, usableWildyTeleports);
                 transportsPacked.put(packedLocation, usableWildyTeleports);
             }
+            publishTransportVisualizationSnapshot();
         }
 
     }
@@ -504,6 +540,7 @@ public class PathfinderConfig {
                 if (useBankItems && config != null && config.maxSimilarTransportDistance() > 0) {
                     filterSimilarTransports(target);
                 }
+                publishTransportVisualizationSnapshot();
                 WebWalkLog.cfg("refresh_transports cache_hit key={}", refreshCacheKeyHash);
                 previousRefreshInvFingerprint = lastComputedInvFingerprint;
                 return;
@@ -725,6 +762,7 @@ public class PathfinderConfig {
             filterSimilarTransports(target);
         }
         long similarTime = System.currentTimeMillis() - similarStart;
+        publishTransportVisualizationSnapshot();
 
         refreshAvailableItemIds = null;
         refreshBoostedLevels = null;

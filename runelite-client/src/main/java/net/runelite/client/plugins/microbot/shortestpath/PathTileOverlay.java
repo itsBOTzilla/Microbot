@@ -17,7 +17,7 @@ import java.awt.*;
 import java.awt.geom.Line2D;
 import java.awt.geom.Rectangle2D;
 import java.util.Collection;
-import java.util.HashSet;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,9 +38,10 @@ public class PathTileOverlay extends Overlay {
 
     private void renderTransports(Graphics2D graphics) {
         if (plugin == null) return;
-        if (ShortestPathPlugin.getTransports() == null) return;
+        Map<WorldPoint, Set<Transport>> transportSnapshot = ShortestPathPlugin.getTransportVisualizationSnapshot();
+        if (transportSnapshot.isEmpty()) return;
         if (ShortestPathPlugin.getPathfinderFuture() == null || !ShortestPathPlugin.getPathfinderFuture().isDone()) return;
-        for (WorldPoint a : ShortestPathPlugin.getTransports().keySet()) {
+        for (WorldPoint a : transportSnapshot.keySet()) {
             drawTile(graphics, a, plugin.colourTransports, -1, 0, true);
 
             Point ca = tileCenter(a);
@@ -50,7 +51,7 @@ public class PathTileOverlay extends Overlay {
             }
 
             StringBuilder s = new StringBuilder();
-            for (Transport b : ShortestPathPlugin.getTransports().getOrDefault(a, new HashSet<>())) {
+            for (Transport b : transportSnapshot.getOrDefault(a, Collections.emptySet())) {
                 for (WorldPoint destination : WorldPoint.toLocalInstance(client, b.getDestination())) {
                     Point cb = tileCenter(destination);
                     if (cb != null) {
@@ -122,22 +123,24 @@ public class PathTileOverlay extends Overlay {
         final Pathfinder pathfinder = ShortestPathPlugin.getPathfinder();
         if (plugin.drawTiles && pathfinder != null) {
             final List<WorldPoint> path = pathfinder.getWalkablePath();
+            Map<WorldPoint, Set<Transport>> transportSnapshot = ShortestPathPlugin.getTransportVisualizationSnapshot();
+            PathVisualization.VisualizationSnapshot visualization =
+                    PathVisualization.snapshot(path, transportSnapshot);
 
-            int counter = 0;
             if (TileStyle.LINES.equals(plugin.pathStyle)) {
                 for (int i = 1; i < path.size(); i++) {
                     float step = i / (float) path.size();
                     Color newColor = generateGradient(step);
                     newColor = new Color(newColor.getRed(), newColor.getGreen(), newColor.getBlue(), 75);
-                    drawLine(graphics, path.get(i - 1), path.get(i), newColor, 1 + counter++);
-                    drawTransportInfo(graphics, path.get(i - 1), path.get(i));
+                    drawLine(graphics, path.get(i - 1), path.get(i), newColor,
+                            visualization.displayIndexForAnchor(i - 1),
+                            visualization.displayIndexForAnchor(i), visualization.size());
+                    drawTransportInfo(graphics, path.get(i - 1), path.get(i), transportSnapshot);
                 }
             } else {
                 boolean showTiles = TileStyle.TILES.equals(plugin.pathStyle);
                 int gradientAnchor = 0;
-                List<PathVisualization.VisualizationTile> visualization =
-                        visualizationTiles(path, ShortestPathPlugin.getTransports());
-                for (PathVisualization.VisualizationTile tile : visualization) {
+                for (PathVisualization.VisualizationTile tile : visualization.tiles()) {
                     if (tile.anchorIndex() >= 0) {
                         gradientAnchor = tile.anchorIndex();
                     }
@@ -148,7 +151,8 @@ public class PathTileOverlay extends Overlay {
                             visualization.size(), showTiles);
                 }
                 for (int i = 0; i < path.size(); i++) {
-                    drawTransportInfo(graphics, path.get(i), (i + 1 == path.size()) ? null : path.get(i + 1));
+                    drawTransportInfo(graphics, path.get(i), (i + 1 == path.size()) ? null : path.get(i + 1),
+                            transportSnapshot);
                 }
             }
         }
@@ -230,7 +234,8 @@ public class PathTileOverlay extends Overlay {
                 ? visualizationSize - displayIndex - 1 : displayIndex;
     }
 
-    private void drawLine(Graphics2D graphics, WorldPoint startLoc, WorldPoint endLoc, Color color, int counter) {
+    private void drawLine(Graphics2D graphics, WorldPoint startLoc, WorldPoint endLoc, Color color,
+                          int startDisplayIndex, int endDisplayIndex, int visualizationSize) {
         Collection<WorldPoint> starts = WorldPoint.toLocalInstance(client, startLoc);
         Collection<WorldPoint> ends = WorldPoint.toLocalInstance(client, endLoc);
 
@@ -269,28 +274,10 @@ public class PathTileOverlay extends Overlay {
         graphics.setStroke(new BasicStroke(4));
         graphics.draw(line);
 
-        if (counter == 1) {
-            drawCounter(graphics, p1.getX(), p1.getY(), 0);
+        if (startDisplayIndex == 0) {
+            drawVisualizationCounter(graphics, p1.getX(), p1.getY(), startDisplayIndex, visualizationSize);
         }
-        drawCounter(graphics, p2.getX(), p2.getY(), counter);
-    }
-
-    private void drawCounter(Graphics2D graphics, double x, double y, int counter) {
-        if (ShortestPathPlugin.getPathfinder() == null) return;
-        if (counter >= 0 && !TileCounter.DISABLED.equals(plugin.showTileCounter)) {
-            int n = plugin.tileCounterStep > 0 ? plugin.tileCounterStep : 1;
-            int s = ShortestPathPlugin.getPathfinder().getWalkablePath().size();
-            if ((counter % n != 0) && (s != (counter + 1))) {
-                return;
-            }
-            if (TileCounter.REMAINING.equals(plugin.showTileCounter)) {
-                counter = s - counter - 1;
-            }
-            if (n > 1 && counter == 0) {
-                return;
-            }
-            drawCounterText(graphics, x, y, counter);
-        }
+        drawVisualizationCounter(graphics, p2.getX(), p2.getY(), endDisplayIndex, visualizationSize);
     }
 
     private void drawCounterText(Graphics2D graphics, double x, double y, int counter) {
@@ -301,7 +288,8 @@ public class PathTileOverlay extends Overlay {
                 (int) (x - graphics.getFontMetrics().getStringBounds(counterText, graphics).getWidth() / 2), (int) y);
     }
 
-    private void drawTransportInfo(Graphics2D graphics, WorldPoint location, WorldPoint locationEnd) {
+    private void drawTransportInfo(Graphics2D graphics, WorldPoint location, WorldPoint locationEnd,
+                                   Map<WorldPoint, Set<Transport>> transportSnapshot) {
         if (locationEnd == null || !plugin.showTransportInfo) {
             return;
         }
@@ -313,7 +301,7 @@ public class PathTileOverlay extends Overlay {
                 }
 
                 int vertical_offset = 0;
-                for (Transport transport : ShortestPathPlugin.getTransports().getOrDefault(point, new HashSet<>())) {
+                for (Transport transport : transportSnapshot.getOrDefault(point, Collections.emptySet())) {
                     if (pointEnd == null || !pointEnd.equals(transport.getDestination())) {
                         continue;
                     }
