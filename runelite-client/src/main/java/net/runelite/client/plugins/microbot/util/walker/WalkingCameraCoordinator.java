@@ -1,9 +1,11 @@
 package net.runelite.client.plugins.microbot.util.walker;
 
 import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -62,10 +64,15 @@ final class WalkingCameraCoordinator
     private final ClientThreadDispatcher clientThreadDispatcher;
     private final AtomicBoolean updateInFlight = new AtomicBoolean();
     private final Object routeMutex = new Object();
+    private final Set<Object> invalidatedRouteSources =
+            Collections.newSetFromMap(new IdentityHashMap<>());
     private long routeRevision;
     private RouteState routeState = RouteState.stopped(0L);
     private Object lastRouteSource;
-    private Object blockedRouteSource;
+    private long lastRouteSourceTargetGeneration;
+    private boolean lastRouteSourceSet;
+    private long invalidatedSourcesTargetGeneration;
+    private boolean invalidatedSourcesTargetGenerationSet;
 
     WalkingCameraCoordinator(Executor executor, ClientThreadDispatcher clientThreadDispatcher)
     {
@@ -80,8 +87,9 @@ final class WalkingCameraCoordinator
         List<WorldPoint> route = path == null ? Collections.emptyList() : List.copyOf(path);
         synchronized (routeMutex)
         {
+            selectInvalidatedSourcesGenerationLocked(targetGeneration);
             if (routeRevision != expectedRouteRevision || routeSource == null
-                    || routeSource == blockedRouteSource)
+                    || invalidatedRouteSources.contains(routeSource))
             {
                 return -1L;
             }
@@ -105,22 +113,39 @@ final class WalkingCameraCoordinator
             routeState = new RouteState(routeRevision, targetGeneration, route,
                     currentPathIndex, true);
             lastRouteSource = routeSource;
-            blockedRouteSource = null;
+            lastRouteSourceTargetGeneration = targetGeneration;
+            lastRouteSourceSet = true;
             return routeRevision;
         }
     }
 
-    long invalidateRoute()
+    long invalidateRoute(long targetGeneration, Object currentRouteSource)
     {
         synchronized (routeMutex)
         {
-            if (lastRouteSource != null)
+            selectInvalidatedSourcesGenerationLocked(targetGeneration);
+            if (currentRouteSource != null)
             {
-                blockedRouteSource = lastRouteSource;
+                invalidatedRouteSources.add(currentRouteSource);
+            }
+            if (lastRouteSourceSet && lastRouteSourceTargetGeneration == targetGeneration)
+            {
+                invalidatedRouteSources.add(lastRouteSource);
             }
             routeRevision++;
             routeState = RouteState.stopped(routeRevision);
             return routeRevision;
+        }
+    }
+
+    private void selectInvalidatedSourcesGenerationLocked(long targetGeneration)
+    {
+        if (!invalidatedSourcesTargetGenerationSet
+                || invalidatedSourcesTargetGeneration != targetGeneration)
+        {
+            invalidatedRouteSources.clear();
+            invalidatedSourcesTargetGeneration = targetGeneration;
+            invalidatedSourcesTargetGenerationSet = true;
         }
     }
 

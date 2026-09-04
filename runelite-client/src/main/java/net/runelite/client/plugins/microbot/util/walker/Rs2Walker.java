@@ -503,7 +503,8 @@ public class Rs2Walker {
     }
 
     private static void invalidateWalkingCameraRoute() {
-        WALKING_CAMERA_COORDINATOR.invalidateRoute();
+        WALKING_CAMERA_COORDINATOR.invalidateRoute(
+                currentTargetGeneration.get(), Rs2PathApi.getPathfinder());
         WALKING_CAMERA_DEADLINE_SET.set(false);
     }
 

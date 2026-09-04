@@ -25,6 +25,7 @@ public class WalkingCameraCoordinatorTest
     private static final long TARGET_GENERATION = 41L;
     private static final Object INITIAL_ROUTE_SOURCE = new Object();
     private static final Object REPLACEMENT_ROUTE_SOURCE = new Object();
+    private static final Object SECOND_REPLACEMENT_ROUTE_SOURCE = new Object();
 
     @Test
     public void sameTargetReplanInvalidatesQueuedYaw() throws Exception
@@ -34,7 +35,8 @@ public class WalkingCameraCoordinatorTest
             scenario.scheduleYaw();
             scenario.clientThread.awaitAction();
 
-            long replanRevision = scenario.coordinator.invalidateRoute();
+            long replanRevision = scenario.coordinator.invalidateRoute(
+                    TARGET_GENERATION, INITIAL_ROUTE_SOURCE);
             long replacementRevision = scenario.coordinator.publishRoute(
                     replanRevision, TARGET_GENERATION, replacementPath(), 0,
                     REPLACEMENT_ROUTE_SOURCE);
@@ -72,7 +74,7 @@ public class WalkingCameraCoordinatorTest
                 Runnable::run, new ImmediateClientThread());
         long observedRevision = coordinator.getRouteRevision();
 
-        coordinator.invalidateRoute();
+        coordinator.invalidateRoute(TARGET_GENERATION, INITIAL_ROUTE_SOURCE);
 
         assertEquals(-1L, coordinator.publishRoute(
                 observedRevision, TARGET_GENERATION, initialPath(), 0,
@@ -89,12 +91,47 @@ public class WalkingCameraCoordinatorTest
                 TARGET_GENERATION, initialPath(), 0, INITIAL_ROUTE_SOURCE);
         assertTrue(initialRevision >= 0L);
 
-        long replanRevision = coordinator.invalidateRoute();
+        long replanRevision = coordinator.invalidateRoute(
+                TARGET_GENERATION, INITIAL_ROUTE_SOURCE);
 
         assertEquals(-1L, coordinator.publishRoute(replanRevision,
                 TARGET_GENERATION, initialPath(), 0, INITIAL_ROUTE_SOURCE));
         assertTrue(coordinator.publishRoute(replanRevision,
                 TARGET_GENERATION, replacementPath(), 0, REPLACEMENT_ROUTE_SOURCE) >= 0L);
+    }
+
+    @Test
+    public void invalidationBeforeFirstPublicationRetiresCurrentRouteSource()
+    {
+        WalkingCameraCoordinator coordinator = new WalkingCameraCoordinator(
+                Runnable::run, new ImmediateClientThread());
+        long replanRevision = coordinator.invalidateRoute(
+                TARGET_GENERATION, INITIAL_ROUTE_SOURCE);
+
+        assertEquals(-1L, coordinator.publishRoute(replanRevision,
+                TARGET_GENERATION, initialPath(), 0, INITIAL_ROUTE_SOURCE));
+        assertTrue(coordinator.publishRoute(replanRevision,
+                TARGET_GENERATION, replacementPath(), 0, REPLACEMENT_ROUTE_SOURCE) >= 0L);
+    }
+
+    @Test
+    public void consecutiveReplansRetireUnpublishedCurrentRouteSource()
+    {
+        WalkingCameraCoordinator coordinator = new WalkingCameraCoordinator(
+                Runnable::run, new ImmediateClientThread());
+        long initialRevision = coordinator.publishRoute(coordinator.getRouteRevision(),
+                TARGET_GENERATION, initialPath(), 0, INITIAL_ROUTE_SOURCE);
+        assertTrue(initialRevision >= 0L);
+
+        coordinator.invalidateRoute(TARGET_GENERATION, INITIAL_ROUTE_SOURCE);
+        long secondReplanRevision = coordinator.invalidateRoute(
+                TARGET_GENERATION, REPLACEMENT_ROUTE_SOURCE);
+
+        assertEquals(-1L, coordinator.publishRoute(secondReplanRevision,
+                TARGET_GENERATION, replacementPath(), 0, REPLACEMENT_ROUTE_SOURCE));
+        assertTrue(coordinator.publishRoute(secondReplanRevision,
+                TARGET_GENERATION, replacementPath(), 0,
+                SECOND_REPLACEMENT_ROUTE_SOURCE) >= 0L);
     }
 
     @Test
@@ -171,6 +208,7 @@ public class WalkingCameraCoordinatorTest
         CountDownLatch invalidationStarted = new CountDownLatch(1);
         CountDownLatch invalidationCompleted = new CountDownLatch(1);
         AtomicBoolean yawAfterInvalidation = new AtomicBoolean();
+        AtomicInteger yawUpdates = new AtomicInteger();
         try
         {
             WalkingCameraCoordinator coordinator = new WalkingCameraCoordinator(
@@ -213,13 +251,17 @@ public class WalkingCameraCoordinatorTest
 
             assertTrue(coordinator.trySchedule(request,
                     () -> coordinator.dispatchIfCurrent(request, pausingState,
-                            () -> yawAfterInvalidation.set(
-                                    invalidationCompleted.getCount() == 0L))));
+                            () ->
+                            {
+                                yawUpdates.incrementAndGet();
+                                yawAfterInvalidation.set(
+                                        invalidationCompleted.getCount() == 0L);
+                            })));
             assertTrue(finalGuardReached.await(5, TimeUnit.SECONDS));
             invalidationExecutor.execute(() ->
             {
                 invalidationStarted.countDown();
-                coordinator.invalidateRoute();
+                coordinator.invalidateRoute(TARGET_GENERATION, INITIAL_ROUTE_SOURCE);
                 invalidationCompleted.countDown();
             });
             assertTrue(invalidationStarted.await(5, TimeUnit.SECONDS));
@@ -229,6 +271,7 @@ public class WalkingCameraCoordinatorTest
             releaseFinalGuard.countDown();
             assertTrue(invalidationCompleted.await(5, TimeUnit.SECONDS));
             awaitIdle(coordinator);
+            assertEquals("the final yaw action never ran", 1, yawUpdates.get());
             assertFalse("yaw ran after route invalidation completed", yawAfterInvalidation.get());
         }
         finally

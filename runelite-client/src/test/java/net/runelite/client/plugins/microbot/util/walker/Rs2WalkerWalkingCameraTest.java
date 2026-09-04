@@ -180,6 +180,7 @@ public class Rs2WalkerWalkingCameraTest
         MethodNode observe = findRuntimeMethod("observe");
         MethodNode recalculatePath = findWalkerMethod("recalculatePath");
         MethodNode clearTarget = findWalkerMethod("clearTargetLocked");
+        MethodNode invalidateCamera = findWalkerMethod("invalidateWalkingCameraRoute");
 
         assertTrue("observed paths must publish their camera route revision",
                 invocationIndex(observe, Rs2Walker.class,
@@ -190,6 +191,12 @@ public class Rs2WalkerWalkingCameraTest
         assertTrue("walk cancellation must invalidate queued camera work",
                 invocationIndex(clearTarget, Rs2Walker.class,
                         "invalidateWalkingCameraRoute") >= 0);
+        int currentPathfinder = invocationIndex(invalidateCamera,
+                Rs2PathApi.class, "getPathfinder");
+        int invalidateRoute = invocationIndex(invalidateCamera,
+                WalkingCameraCoordinator.class, "invalidateRoute");
+        assertTrue("route invalidation must retire the currently installed pathfinder",
+                currentPathfinder >= 0 && currentPathfinder < invalidateRoute);
     }
 
     private static MethodNode findRuntimeMethod(String name) throws Exception
