@@ -487,13 +487,14 @@ public class Rs2Walker {
 
     static long publishWalkingCameraRoute(List<WorldPoint> path, int currentPathIndex,
                                           long targetGeneration,
-                                          long expectedRouteRevision) {
+                                          long expectedRouteRevision,
+                                          Pathfinder routeSource) {
         synchronized (currentTargetOwnershipMutex) {
             if (currentTarget == null || currentTargetGeneration.get() != targetGeneration) {
                 return -1L;
             }
             return WALKING_CAMERA_COORDINATOR.publishRoute(expectedRouteRevision,
-                    targetGeneration, path, currentPathIndex);
+                    targetGeneration, path, currentPathIndex, routeSource);
         }
     }
 
@@ -671,7 +672,7 @@ public class Rs2Walker {
 
         @Override
         public boolean isTargetCurrent(long targetGeneration) {
-            return isWalkingCameraGenerationCurrent(targetGeneration);
+            return currentTarget != null && currentTargetGeneration.get() == targetGeneration;
         }
 
         @Override

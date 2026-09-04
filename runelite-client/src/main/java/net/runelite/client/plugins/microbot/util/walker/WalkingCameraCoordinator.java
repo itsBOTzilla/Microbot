@@ -64,6 +64,8 @@ final class WalkingCameraCoordinator
     private final Object routeMutex = new Object();
     private long routeRevision;
     private RouteState routeState = RouteState.stopped(0L);
+    private Object lastRouteSource;
+    private Object blockedRouteSource;
 
     WalkingCameraCoordinator(Executor executor, ClientThreadDispatcher clientThreadDispatcher)
     {
@@ -73,12 +75,13 @@ final class WalkingCameraCoordinator
     }
 
     long publishRoute(long expectedRouteRevision, long targetGeneration,
-                      List<WorldPoint> path, int currentPathIndex)
+                      List<WorldPoint> path, int currentPathIndex, Object routeSource)
     {
         List<WorldPoint> route = path == null ? Collections.emptyList() : List.copyOf(path);
         synchronized (routeMutex)
         {
-            if (routeRevision != expectedRouteRevision)
+            if (routeRevision != expectedRouteRevision || routeSource == null
+                    || routeSource == blockedRouteSource)
             {
                 return -1L;
             }
@@ -101,6 +104,8 @@ final class WalkingCameraCoordinator
             }
             routeState = new RouteState(routeRevision, targetGeneration, route,
                     currentPathIndex, true);
+            lastRouteSource = routeSource;
+            blockedRouteSource = null;
             return routeRevision;
         }
     }
@@ -109,6 +114,10 @@ final class WalkingCameraCoordinator
     {
         synchronized (routeMutex)
         {
+            if (lastRouteSource != null)
+            {
+                blockedRouteSource = lastRouteSource;
+            }
             routeRevision++;
             routeState = RouteState.stopped(routeRevision);
             return routeRevision;
@@ -199,15 +208,6 @@ final class WalkingCameraCoordinator
         }
     }
 
-    private boolean isCurrentFutureNode(Request request, WorldPoint player)
-    {
-        synchronized (routeMutex)
-        {
-            return isCurrentFutureNodeLocked(request.lookAhead, request.targetGeneration,
-                    request.routeRevision, player);
-        }
-    }
-
     private boolean isCurrentFutureNodeLocked(WorldPoint lookAhead, long targetGeneration,
                                                long expectedRouteRevision, WorldPoint player)
     {
@@ -280,15 +280,20 @@ final class WalkingCameraCoordinator
         @Override
         public Boolean call()
         {
-            WorldPoint player = finalState.getPlayerLocation();
-            if (request == null || !isCurrentFutureNode(request, player)
-                    || !finalState.isTargetCurrent(request.targetGeneration)
-                    || finalState.isHumanInput())
+            synchronized (routeMutex)
             {
-                return false;
+                WorldPoint player = finalState.getPlayerLocation();
+                if (request == null || player == null
+                        || !isCurrentFutureNodeLocked(request.lookAhead,
+                        request.targetGeneration, request.routeRevision, player)
+                        || !finalState.isTargetCurrent(request.targetGeneration)
+                        || finalState.isHumanInput())
+                {
+                    return false;
+                }
+                yawUpdate.run();
+                return true;
             }
-            yawUpdate.run();
-            return true;
         }
     }
 

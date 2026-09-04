@@ -145,7 +145,7 @@ public class Rs2WalkerWalkingCameraTest
         MethodNode clientThreadAction = findWalkerNestedMethod(
                 "WalkingCameraCoordinator$GuardedClientAction.class", "call");
         int routeGuard = invocationIndex(clientThreadAction,
-                WalkingCameraCoordinator.class, "isCurrentFutureNode");
+                WalkingCameraCoordinator.class, "isCurrentFutureNodeLocked");
         int targetGuard = invocationIndex(clientThreadAction,
                 WalkingCameraCoordinator.FinalState.class, "isTargetCurrent");
         int humanGuard = invocationIndex(clientThreadAction,

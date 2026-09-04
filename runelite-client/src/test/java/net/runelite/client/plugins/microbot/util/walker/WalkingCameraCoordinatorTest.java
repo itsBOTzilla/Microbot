@@ -9,6 +9,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import net.runelite.api.coords.WorldPoint;
 import org.junit.Test;
 
@@ -22,6 +23,8 @@ public class WalkingCameraCoordinatorTest
 {
     private static final WorldPoint PLAYER = new WorldPoint(3200, 3200, 0);
     private static final long TARGET_GENERATION = 41L;
+    private static final Object INITIAL_ROUTE_SOURCE = new Object();
+    private static final Object REPLACEMENT_ROUTE_SOURCE = new Object();
 
     @Test
     public void sameTargetReplanInvalidatesQueuedYaw() throws Exception
@@ -33,7 +36,8 @@ public class WalkingCameraCoordinatorTest
 
             long replanRevision = scenario.coordinator.invalidateRoute();
             long replacementRevision = scenario.coordinator.publishRoute(
-                    replanRevision, TARGET_GENERATION, replacementPath(), 0);
+                    replanRevision, TARGET_GENERATION, replacementPath(), 0,
+                    REPLACEMENT_ROUTE_SOURCE);
             assertTrue(replacementRevision > scenario.request.getRouteRevision());
 
             scenario.clientThread.releaseAction();
@@ -52,7 +56,7 @@ public class WalkingCameraCoordinatorTest
 
             long replacementRevision = scenario.coordinator.publishRoute(
                     scenario.request.getRouteRevision(), TARGET_GENERATION,
-                    replacementPath(), 0);
+                    replacementPath(), 0, INITIAL_ROUTE_SOURCE);
             assertTrue(replacementRevision > scenario.request.getRouteRevision());
 
             scenario.clientThread.releaseAction();
@@ -71,8 +75,26 @@ public class WalkingCameraCoordinatorTest
         coordinator.invalidateRoute();
 
         assertEquals(-1L, coordinator.publishRoute(
-                observedRevision, TARGET_GENERATION, initialPath(), 0));
+                observedRevision, TARGET_GENERATION, initialPath(), 0,
+                INITIAL_ROUTE_SOURCE));
         assertNull(coordinator.request(point(9), TARGET_GENERATION, observedRevision));
+    }
+
+    @Test
+    public void observationAfterReplanCannotRepublishOldRouteSource()
+    {
+        WalkingCameraCoordinator coordinator = new WalkingCameraCoordinator(
+                Runnable::run, new ImmediateClientThread());
+        long initialRevision = coordinator.publishRoute(coordinator.getRouteRevision(),
+                TARGET_GENERATION, initialPath(), 0, INITIAL_ROUTE_SOURCE);
+        assertTrue(initialRevision >= 0L);
+
+        long replanRevision = coordinator.invalidateRoute();
+
+        assertEquals(-1L, coordinator.publishRoute(replanRevision,
+                TARGET_GENERATION, initialPath(), 0, INITIAL_ROUTE_SOURCE));
+        assertTrue(coordinator.publishRoute(replanRevision,
+                TARGET_GENERATION, replacementPath(), 0, REPLACEMENT_ROUTE_SOURCE) >= 0L);
     }
 
     @Test
@@ -108,6 +130,118 @@ public class WalkingCameraCoordinatorTest
     }
 
     @Test
+    public void missingPlayerBeforeClientActionSuppressesYaw() throws Exception
+    {
+        try (Scenario scenario = new Scenario())
+        {
+            scenario.scheduleYaw();
+            scenario.clientThread.awaitAction();
+
+            scenario.playerLocation.set(null);
+
+            scenario.clientThread.releaseAction();
+            scenario.awaitIdle();
+            assertEquals(0, scenario.yawUpdates.get());
+        }
+    }
+
+    @Test
+    public void playerOnDifferentPlaneBeforeClientActionSuppressesYaw() throws Exception
+    {
+        try (Scenario scenario = new Scenario())
+        {
+            scenario.scheduleYaw();
+            scenario.clientThread.awaitAction();
+
+            scenario.playerLocation.set(new WorldPoint(3200, 3200, 1));
+
+            scenario.clientThread.releaseAction();
+            scenario.awaitIdle();
+            assertEquals(0, scenario.yawUpdates.get());
+        }
+    }
+
+    @Test
+    public void routeInvalidationCannotCompleteBetweenFinalGuardAndYaw() throws Exception
+    {
+        ExecutorService cameraExecutor = Executors.newSingleThreadExecutor();
+        ExecutorService invalidationExecutor = Executors.newSingleThreadExecutor();
+        CountDownLatch finalGuardReached = new CountDownLatch(1);
+        CountDownLatch releaseFinalGuard = new CountDownLatch(1);
+        CountDownLatch invalidationStarted = new CountDownLatch(1);
+        CountDownLatch invalidationCompleted = new CountDownLatch(1);
+        AtomicBoolean yawAfterInvalidation = new AtomicBoolean();
+        try
+        {
+            WalkingCameraCoordinator coordinator = new WalkingCameraCoordinator(
+                    cameraExecutor, new ImmediateClientThread());
+            long revision = coordinator.publishRoute(coordinator.getRouteRevision(),
+                    TARGET_GENERATION, initialPath(), 0, INITIAL_ROUTE_SOURCE);
+            WalkingCameraCoordinator.Request request = coordinator.request(
+                    point(9), TARGET_GENERATION, revision);
+            assertNotNull(request);
+            WalkingCameraCoordinator.FinalState pausingState =
+                    new WalkingCameraCoordinator.FinalState()
+                    {
+                        @Override
+                        public WorldPoint getPlayerLocation()
+                        {
+                            return PLAYER;
+                        }
+
+                        @Override
+                        public boolean isTargetCurrent(long targetGeneration)
+                        {
+                            return targetGeneration == TARGET_GENERATION;
+                        }
+
+                        @Override
+                        public boolean isHumanInput()
+                        {
+                            finalGuardReached.countDown();
+                            try
+                            {
+                                return !releaseFinalGuard.await(5, TimeUnit.SECONDS);
+                            }
+                            catch (InterruptedException ex)
+                            {
+                                Thread.currentThread().interrupt();
+                                return true;
+                            }
+                        }
+                    };
+
+            assertTrue(coordinator.trySchedule(request,
+                    () -> coordinator.dispatchIfCurrent(request, pausingState,
+                            () -> yawAfterInvalidation.set(
+                                    invalidationCompleted.getCount() == 0L))));
+            assertTrue(finalGuardReached.await(5, TimeUnit.SECONDS));
+            invalidationExecutor.execute(() ->
+            {
+                invalidationStarted.countDown();
+                coordinator.invalidateRoute();
+                invalidationCompleted.countDown();
+            });
+            assertTrue(invalidationStarted.await(5, TimeUnit.SECONDS));
+            assertFalse("route invalidation crossed the final guard/yaw critical section",
+                    invalidationCompleted.await(1, TimeUnit.SECONDS));
+
+            releaseFinalGuard.countDown();
+            assertTrue(invalidationCompleted.await(5, TimeUnit.SECONDS));
+            awaitIdle(coordinator);
+            assertFalse("yaw ran after route invalidation completed", yawAfterInvalidation.get());
+        }
+        finally
+        {
+            releaseFinalGuard.countDown();
+            cameraExecutor.shutdownNow();
+            invalidationExecutor.shutdownNow();
+            assertTrue(cameraExecutor.awaitTermination(5, TimeUnit.SECONDS));
+            assertTrue(invalidationExecutor.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
     public void lookAheadThatIsNoLongerFutureSuppressesYaw() throws Exception
     {
         try (Scenario scenario = new Scenario())
@@ -116,7 +250,7 @@ public class WalkingCameraCoordinatorTest
             scenario.clientThread.awaitAction();
 
             scenario.coordinator.publishRoute(scenario.request.getRouteRevision(),
-                    TARGET_GENERATION, initialPath(), 2);
+                    TARGET_GENERATION, initialPath(), 2, INITIAL_ROUTE_SOURCE);
 
             scenario.clientThread.releaseAction();
             scenario.awaitIdle();
@@ -133,7 +267,7 @@ public class WalkingCameraCoordinatorTest
             WalkingCameraCoordinator coordinator = new WalkingCameraCoordinator(
                     executor, new ImmediateClientThread());
             long revision = coordinator.publishRoute(coordinator.getRouteRevision(),
-                    TARGET_GENERATION, initialPath(), 0);
+                    TARGET_GENERATION, initialPath(), 0, INITIAL_ROUTE_SOURCE);
             WalkingCameraCoordinator.Request request = coordinator.request(
                     point(9), TARGET_GENERATION, revision);
             assertNotNull(request);
@@ -211,6 +345,8 @@ public class WalkingCameraCoordinatorTest
         private final WalkingCameraCoordinator coordinator =
                 new WalkingCameraCoordinator(executor, clientThread);
         private final AtomicBoolean humanInput = new AtomicBoolean();
+        private final AtomicReference<WorldPoint> playerLocation =
+                new AtomicReference<>(PLAYER);
         private final AtomicInteger yawUpdates = new AtomicInteger();
         private final WalkingCameraCoordinator.FinalState finalState =
                 new WalkingCameraCoordinator.FinalState()
@@ -218,7 +354,7 @@ public class WalkingCameraCoordinatorTest
                     @Override
                     public WorldPoint getPlayerLocation()
                     {
-                        return PLAYER;
+                        return playerLocation.get();
                     }
 
                     @Override
@@ -238,7 +374,7 @@ public class WalkingCameraCoordinatorTest
         private Scenario()
         {
             long revision = coordinator.publishRoute(coordinator.getRouteRevision(),
-                    TARGET_GENERATION, initialPath(), 0);
+                    TARGET_GENERATION, initialPath(), 0, INITIAL_ROUTE_SOURCE);
             request = coordinator.request(point(9), TARGET_GENERATION, revision);
             assertNotNull(request);
         }

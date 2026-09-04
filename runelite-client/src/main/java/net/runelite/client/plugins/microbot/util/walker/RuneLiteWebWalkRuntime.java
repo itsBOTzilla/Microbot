@@ -142,7 +142,8 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         }
         lastObservedPathIndex = currentIndex;
         walkingCameraRouteRevision = Rs2Walker.publishWalkingCameraRoute(
-                rawPath, currentIndex, targetGeneration, observedCameraRouteRevision);
+                rawPath, currentIndex, targetGeneration, observedCameraRouteRevision,
+                pathfinder);
         pathRemaining = Math.max(0, rawPath.size() - currentIndex - 1);
         routeActionIndex = routeActionIndex(rawPath, currentIndex, sample.player, reachable);
         boolean routeActionAvailable = routeActionIndex >= 0;
