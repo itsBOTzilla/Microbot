@@ -154,15 +154,7 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         }
         pathfinderWaitStartedNanos = 0L;
         invalidatedPathfinder = null;
-        if (pathfinder != observedPathfinder)
-        {
-            synchronized (cameraGuard)
-            {
-                observedPathfinder = pathfinder;
-                routeGeneration++;
-                invalidateWalkingCameraLocked();
-            }
-        }
+        observePathfinderSource(pathfinder);
 
         List<WorldPoint> rawPath = safePathCopy(pathfinder.getPath());
         List<WorldPoint> walkPath = safePathCopy(pathfinder.getWalkablePath());
@@ -552,7 +544,10 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
 
     void stopWalkingCamera()
     {
-        invalidateWalkingCameraRoute();
+        synchronized (cameraGuard)
+        {
+            invalidateWalkingCameraLocked();
+        }
     }
 
     void invalidateWalkingCameraRoute()
@@ -561,6 +556,20 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         {
             observedPathfinder = null;
             invalidateWalkingCameraLocked();
+        }
+    }
+
+    long observePathfinderSource(Pathfinder pathfinder)
+    {
+        synchronized (cameraGuard)
+        {
+            if (pathfinder != observedPathfinder)
+            {
+                observedPathfinder = pathfinder;
+                routeGeneration++;
+                invalidateWalkingCameraLocked();
+            }
+            return routeGeneration;
         }
     }
 
@@ -578,12 +587,13 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         {
             WorldPoint lookAhead = getCameraLookAhead(lastRawPath, lastObservedPathIndex, player);
             if (!canScheduleWalkingCamera(lookAhead, player, dispatchedTarget,
-                    targetGeneration, Rs2Walker.getCurrentTargetGeneration(), cameraUpdateQueued))
+                    targetGeneration, Rs2Walker.getCurrentTargetGeneration(), cameraUpdateQueued)
+                    || observedPathfinder == null)
             {
                 return false;
             }
             request = new CameraRequest(cameraEpoch, targetGeneration, lastRawPath,
-                    lastObservedPathIndex, lookAhead);
+                    lastObservedPathIndex, lookAhead, observedPathfinder);
             cameraUpdateQueued = true;
         }
 
@@ -671,6 +681,8 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
     {
         if (request == null || request.epoch != cameraEpoch
                 || request.targetGeneration != targetGeneration
+                || request.routeSource != observedPathfinder
+                || request.routeSource != Rs2PathApi.getPathfinder()
                 || request.path != lastRawPath || request.currentPathIndex != lastObservedPathIndex
                 || player == null || player.getPlane() != request.lookAhead.getPlane()
                 || !isRouteOwnershipCurrent(target, targetGeneration,
@@ -857,15 +869,18 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         private final List<WorldPoint> path;
         private final int currentPathIndex;
         private final WorldPoint lookAhead;
+        private final Pathfinder routeSource;
 
         private CameraRequest(long epoch, long targetGeneration, List<WorldPoint> path,
-                              int currentPathIndex, WorldPoint lookAhead)
+                              int currentPathIndex, WorldPoint lookAhead,
+                              Pathfinder routeSource)
         {
             this.epoch = epoch;
             this.targetGeneration = targetGeneration;
             this.path = path;
             this.currentPathIndex = currentPathIndex;
             this.lookAhead = lookAhead;
+            this.routeSource = routeSource;
         }
     }
 

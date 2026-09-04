@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.client.plugins.microbot.shortestpath.pathfinder.Pathfinder;
 import org.junit.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.ClassNode;
@@ -21,6 +22,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
 
 public class Rs2WalkerWalkingCameraTest
 {
@@ -197,6 +199,36 @@ public class Rs2WalkerWalkingCameraTest
     }
 
     @Test
+    public void stoppingCameraDoesNotResetTwoTickNoCandidateReplanProgress() throws Exception
+    {
+        Pathfinder source = mock(Pathfinder.class);
+        long generation = Rs2Walker.updateCurrentTargetOwnership(GOAL);
+        RuneLiteWebWalkRuntime runtime = new RuneLiteWebWalkRuntime(GOAL, 0, generation);
+        WebWalkSession session = new WebWalkSession(GOAL, 0, generation);
+        List<WorldPoint> path = List.of(PLAYER, point(6, 0));
+        try
+        {
+            long firstRouteGeneration = runtime.observePathfinderSource(source);
+            session.installRoute(new WebWalkRuntime.RouteSnapshot(
+                    firstRouteGeneration, path, path));
+            assertEquals(0, session.ticksWithoutCandidate(20));
+            assertEquals(1, session.ticksWithoutCandidate(21));
+
+            runtime.stopWalkingCamera();
+            long generationAfterStop = runtime.observePathfinderSource(source);
+            session.installRoute(new WebWalkRuntime.RouteSnapshot(
+                    generationAfterStop, path, path));
+
+            assertEquals(firstRouteGeneration, generationAfterStop);
+            assertEquals(2, session.ticksWithoutCandidate(22));
+        }
+        finally
+        {
+            Rs2Walker.clearWalkingRoute("walking-camera-test-cleanup");
+        }
+    }
+
+    @Test
     public void stopOrCancelSuppressesQueuedYaw() throws Exception
     {
         try (CameraHarness harness = new CameraHarness())
@@ -232,6 +264,21 @@ public class Rs2WalkerWalkingCameraTest
             harness.runNext();
 
             assertEquals(0, harness.yawWrites.get());
+        }
+    }
+
+    @Test
+    public void livePathfinderReplacementSuppressesQueuedYaw() throws Exception
+    {
+        try (CameraHarness harness = new CameraHarness())
+        {
+            assertTrue(harness.queue());
+            Rs2PathApi.setPathfinder(mock(Pathfinder.class));
+            harness.runNext();
+
+            assertEquals(0, harness.yawWrites.get());
+            assertEquals("stale source must stop before downstream camera checks",
+                    0, harness.humanChecks.get());
         }
     }
 
@@ -335,6 +382,7 @@ public class Rs2WalkerWalkingCameraTest
         private final AtomicBoolean human = new AtomicBoolean();
         private final AtomicBoolean failPlayerRead = new AtomicBoolean();
         private final AtomicInteger yawWrites = new AtomicInteger();
+        private final AtomicInteger humanChecks = new AtomicInteger();
         private final List<WorldPoint> path = List.of(
                 PLAYER, point(6, 0), point(9, 0), point(12, 0));
         private final RuneLiteWebWalkRuntime runtime;
@@ -342,6 +390,8 @@ public class Rs2WalkerWalkingCameraTest
         private CameraHarness()
         {
             long generation = Rs2Walker.updateCurrentTargetOwnership(GOAL);
+            Pathfinder source = mock(Pathfinder.class);
+            Rs2PathApi.setPathfinder(source);
             runtime = new RuneLiteWebWalkRuntime(GOAL, 0, generation,
                     callbacks::add,
                     () ->
@@ -352,8 +402,14 @@ public class Rs2WalkerWalkingCameraTest
                         }
                         return PLAYER;
                     },
-                    human::get, ignored -> yawWrites.incrementAndGet(),
+                    () ->
+                    {
+                        humanChecks.incrementAndGet();
+                        return human.get();
+                    },
+                    ignored -> yawWrites.incrementAndGet(),
                     System.nanoTime() - 1L);
+            runtime.observePathfinderSource(source);
             runtime.installWalkingCameraRoute(path, 0);
         }
 
