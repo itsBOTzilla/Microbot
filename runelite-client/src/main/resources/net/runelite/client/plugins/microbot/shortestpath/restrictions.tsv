@@ -1,8 +1,8 @@
 # Origin	Item IDs	Quests	Skills	isMembers	Varbits	Varplayers
-# Varrock museum south doors + interior gate were unconditionally restricted here (Feb 2025,
-# bulk commit, no stated reason) which made every interior target unroutable — the Kudos museum
-# script's interactions all dead-ended at the gate. The doors are ordinary openable scene doors
-# the runtime handles; restrictions removed 2026-08-08.
+# Varrock museum south doors are ordinary openable scene doors. The interior cleaning-area gate
+# is members-only, so its two endpoint tiles remain conditionally restricted on F2P worlds.
+3261 3446 0				Y
+3261 3447 0				Y
 # Gate between digsite and varrock						
 3296 3429 0					3637>152	
 3296 3428 0					3637>152	
