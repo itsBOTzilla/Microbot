@@ -14,6 +14,8 @@ import net.runelite.client.ui.overlay.OverlayPriority;
 
 import java.awt.*;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public class PathMinimapOverlay extends Overlay {
     private final Client client;
@@ -42,20 +44,33 @@ public class PathMinimapOverlay extends Overlay {
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
         graphics.setClip(plugin.getMinimapClipArea());
 
-        List<WorldPoint> pathPoints = pathfinder.getPath();
+        List<WorldPoint> pathPoints = pathfinder.getWalkablePath();
         Color pathColor = pathfinder.isDone() ? plugin.colourPath : plugin.colourPathCalculating;
-        for (WorldPoint pathPoint : pathPoints) {
-            if (pathPoint.getPlane() != client.getPlane()) {
-                continue;
+        if (!pathPoints.isEmpty()) {
+            for (PathVisualization.VisualizationTile tile
+                    : PathVisualization.snapshot(pathPoints, ShortestPathPlugin.getTransportVisualizationSnapshot()).tiles()) {
+                drawOnMinimap(graphics, tile.point(), pathColor);
             }
-
-            drawOnMinimap(graphics, pathPoint, pathColor);
         }
 
         return null;
     }
 
+    static boolean shouldRasterizeWalkingSegment(
+            WorldPoint from,
+            WorldPoint to,
+            Map<WorldPoint, Set<Transport>> transports) {
+        return PathVisualization.shouldRasterizeWalkingSegment(from, to, transports);
+    }
+
+    static List<WorldPoint> rasterizeWalkingSegment(WorldPoint start, WorldPoint end) {
+        return PathVisualization.rasterizeWalkingSegment(start, end);
+    }
+
     private void drawOnMinimap(Graphics2D graphics, WorldPoint location, Color color) {
+        if (location.getPlane() != client.getPlane()) {
+            return;
+        }
         for (WorldPoint point : WorldPoint.toLocalInstance(client, location)) {
             LocalPoint lp = LocalPoint.fromWorld(client, point);
 

@@ -97,6 +97,10 @@ public class PathfinderConfig {
 
     @Getter
     private final ConcurrentHashMap<WorldPoint, Set<Transport>> transports;
+    /** Serializes transport-map mutations with publication of the immutable overlay view. */
+    private final Object transportUpdateLock = new Object();
+    /** Immutable transport edges published after each completed producer update for overlay rendering. */
+    private volatile Map<WorldPoint, Set<Transport>> transportVisualizationSnapshot = Collections.emptyMap();
     // Copy of transports with packed positions for the hotpath; lists are not copied and are the same reference in both maps
     @Getter
     private final PrimitiveIntHashMap<Set<Transport>> transportsPacked;
@@ -286,6 +290,37 @@ public class PathfinderConfig {
     }
 
     /**
+     * Returns the last fully-published immutable transport view. Overlay rendering must not iterate
+     * the mutable routing map while a refresh or teleport update can replace its edge sets.
+     */
+    public Map<WorldPoint, Set<Transport>> getTransportVisualizationSnapshot() {
+        return transportVisualizationSnapshot;
+    }
+
+    private void publishTransportVisualizationSnapshot() {
+        assert Thread.holdsLock(transportUpdateLock);
+        transportVisualizationSnapshot = immutableTransportVisualizationSnapshot(transports);
+    }
+
+    /** Caller holds {@link #transportUpdateLock}; values are copied only after the producer update is complete. */
+    private static Map<WorldPoint, Set<Transport>> immutableTransportVisualizationSnapshot(
+            Map<WorldPoint, Set<Transport>> source) {
+        if (source == null || source.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<WorldPoint, Set<Transport>> snapshot = new HashMap<>(source.size());
+        for (Map.Entry<WorldPoint, Set<Transport>> entry : source.entrySet()) {
+            Set<Transport> edges = entry.getValue();
+            if (edges == null || edges.isEmpty()) {
+                continue;
+            }
+            snapshot.put(entry.getKey(), Set.copyOf(edges));
+        }
+        return snapshot.isEmpty() ? Collections.emptyMap() : Map.copyOf(snapshot);
+    }
+
+    /**
      * Diagnostics for the live-collision overlay at one tile, for the agent server's
      * {@code /live-collision} endpoint. Reads only immutable data (the static map and the pinned
      * snapshot), so it is safe to call from any thread.
@@ -395,6 +430,12 @@ public class PathfinderConfig {
      * Specialized method for adding usableTeleports to `transports`
      */
     public void refreshTeleports(int packedLocation, int wildernessLevel) {
+        synchronized (transportUpdateLock) {
+            refreshTeleportsLocked(packedLocation, wildernessLevel);
+        }
+    }
+
+    private void refreshTeleportsLocked(int packedLocation, int wildernessLevel) {
         Set<Transport> usableWildyTeleports = new HashSet<>(usableTeleports.size());
         if (ignoreTeleportAndItems) return;
 
@@ -419,6 +460,7 @@ public class PathfinderConfig {
                 transports.put(key, usableWildyTeleports);
                 transportsPacked.put(packedLocation, usableWildyTeleports);
             }
+            publishTransportVisualizationSnapshot();
         }
 
     }
@@ -450,6 +492,9 @@ public class PathfinderConfig {
      * @param target Optional target destination for optimized filtering (null for standard filtering)
      */
     private void refreshTransports(WorldPoint target) {
+        synchronized (transportUpdateLock) {
+            // Keep cache-miss diagnostics in this method: QuietShortestPathLoggingTest verifies
+            // they remain debug-only without treating a routine cold start as normal-console noise.
         useFairyRings = ShortestPathPlugin.override("useFairyRings", config.useFairyRings())
                 && !QuestState.NOT_STARTED.equals(Rs2Player.getQuestState(Quest.FAIRYTALE_II__CURE_A_QUEEN))
                 && (Rs2Inventory.contains(ItemID.DRAMEN_STAFF, ItemID.LUNAR_MOONCLAN_LIMINAL_STAFF)
@@ -504,6 +549,7 @@ public class PathfinderConfig {
                 if (useBankItems && config != null && config.maxSimilarTransportDistance() > 0) {
                     filterSimilarTransports(target);
                 }
+                publishTransportVisualizationSnapshot();
                 WebWalkLog.cfg("refresh_transports cache_hit key={}", refreshCacheKeyHash);
                 previousRefreshInvFingerprint = lastComputedInvFingerprint;
                 return;
@@ -725,6 +771,7 @@ public class PathfinderConfig {
             filterSimilarTransports(target);
         }
         long similarTime = System.currentTimeMillis() - similarStart;
+        publishTransportVisualizationSnapshot();
 
         refreshAvailableItemIds = null;
         refreshBoostedLevels = null;
@@ -756,6 +803,7 @@ public class PathfinderConfig {
                 .forEach(e -> WebWalkLog.cfg("refresh_transports type {} cnt={} passed={} timeMs={}",
                         e.getKey(), e.getValue()[0], e.getValue()[1], e.getValue()[2] / 1000));
 
+        }
     }
 
     static void addSpellRuneItemIds(Set<Integer> relevantItemIds) {
