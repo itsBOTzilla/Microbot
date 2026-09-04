@@ -45,7 +45,7 @@ public class WebWalkExecutorTest
     }
 
     @Test
-    public void checkpointApproachHandsOffAtFiveForWalkingAndRunning()
+    public void checkpointApproachHandsOffLogicallyWithoutImmediateDispatch()
     {
         for (boolean runEnabled : new boolean[] {false, true})
         {
@@ -57,14 +57,71 @@ public class WebWalkExecutorTest
 
             assertEquals(WebWalkExecutor.DecisionType.WAIT,
                     executor.decide(session, ready(101, point(6), 1, 2, point(14), 5,
-                            false, runEnabled)).getType());
+                            false, runEnabled, true)).getType());
 
             WebWalkExecutor.Decision handoff = executor.decide(session,
-                    ready(102, point(7), 1, 2, point(14), 5, false, runEnabled));
+                    ready(102, point(7), 1, 2, point(14), 5, false,
+                            runEnabled, true));
 
-            assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, handoff.getType());
-            assertEquals(point(14), handoff.getTarget());
+            assertEquals(WebWalkExecutor.DecisionType.WAIT, handoff.getType());
+            assertNull(session.getCheckpoint());
+            assertEquals(point(12), session.getActiveTarget());
+            assertEquals(WebWalkRuntime.DispatchMethod.MINIMAP, session.getActiveMethod());
+
+            WebWalkExecutor.Decision continuedProgress = executor.decide(session,
+                    ready(103, point(8), 1, 3, point(14), 5, false,
+                            runEnabled, true));
+
+            assertEquals(WebWalkExecutor.DecisionType.WAIT, continuedProgress.getType());
+            assertEquals(point(12), session.getActiveTarget());
         }
+    }
+
+    @Test
+    public void handedOffCommandAdvancesOnceOldTargetIsNearAndForwardTargetChanged()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(100, START, 0);
+        session.recordMovementDispatch(100, point(12), point(12), 12, false,
+                WebWalkRuntime.DispatchMethod.MINIMAP);
+        WebWalkExecutor executor = new WebWalkExecutor();
+
+        assertEquals(WebWalkExecutor.DecisionType.WAIT, executor.decide(session,
+                ready(102, point(7), 1, 2, point(14), 14, false,
+                        false, true)).getType());
+
+        WebWalkExecutor.Decision advance = executor.decide(session,
+                ready(104, point(11), 1, 11, point(20), 20, false,
+                        false, true));
+
+        assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, advance.getType());
+        assertEquals(point(20), advance.getTarget());
+        assertEquals(false, advance.isRedispatch());
+    }
+
+    @Test
+    public void handedOffMinimapTargetDoesNotSwitchToCanvasWhileStillProgressing()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(100, START, 0);
+        session.recordMovementDispatch(100, point(12), point(12), 12, false,
+                WebWalkRuntime.DispatchMethod.MINIMAP);
+        WebWalkExecutor executor = new WebWalkExecutor();
+
+        WebWalkExecutor.Decision handoff = executor.decide(session,
+                ready(102, point(7), 1, 2, point(12), 12, false,
+                        false, true));
+        assertEquals(WebWalkExecutor.DecisionType.WAIT, handoff.getType());
+        assertNull(session.getCheckpoint());
+
+        WebWalkExecutor.Decision nearAndProgressing = executor.decide(session,
+                ready(104, point(11), 1, 11, point(12), 12, false,
+                        false, true));
+
+        assertEquals(WebWalkExecutor.DecisionType.WAIT, nearAndProgressing.getType());
+        assertEquals(WebWalkRuntime.DispatchMethod.MINIMAP, session.getActiveMethod());
     }
 
     @Test
@@ -99,6 +156,100 @@ public class WebWalkExecutorTest
 
         assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, reached.getType());
         assertEquals(point(12), reached.getTarget());
+    }
+
+    @Test
+    public void reachedTargetCannotDispatchSameLogicalTargetEveryTick()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(100, point(8), 2);
+        session.recordMinimapDispatch(100, point(10), point(10), 3, false);
+        WebWalkExecutor executor = new WebWalkExecutor();
+
+        assertEquals(WebWalkExecutor.DecisionType.WAIT, executor.decide(session,
+                ready(101, point(9), 1, 2, point(10), 3, false)).getType());
+
+        WebWalkExecutor.Decision intervalElapsed = executor.decide(session,
+                ready(103, point(9), 1, 2, point(10), 3, false));
+
+        assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, intervalElapsed.getType());
+        assertEquals(true, intervalElapsed.isRedispatch());
+
+        session.recordMovementDispatch(103, point(10), point(10), 3, true,
+                WebWalkRuntime.DispatchMethod.MINIMAP);
+
+        assertEquals("the accepted retry exhausts the one-redispatch budget",
+                WebWalkExecutor.DecisionType.REPLAN,
+                executor.decide(session,
+                        ready(106, point(9), 1, 2, point(10), 3, false)).getType());
+    }
+
+    @Test
+    public void activeCanvasTargetSettlesThenReplansWithoutASecondClick()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(100, point(25), 25);
+        session.recordMovementDispatch(100, GOAL, GOAL, 30, false,
+                WebWalkRuntime.DispatchMethod.CANVAS);
+        WebWalkExecutor executor = new WebWalkExecutor();
+
+        assertEquals(WebWalkExecutor.DecisionType.WAIT,
+                executor.decide(session, ready(101, point(29), 1, 29, GOAL, 30,
+                        false, false, true)).getType());
+        assertEquals(WebWalkExecutor.DecisionType.WAIT,
+                executor.decide(session, ready(104, point(29), 1, 29, GOAL, 30,
+                        false, false, false)).getType());
+        assertEquals(WebWalkExecutor.DecisionType.REPLAN,
+                executor.decide(session, ready(105, point(29), 1, 29, GOAL, 30,
+                        false, false, false)).getType());
+    }
+
+    @Test
+    public void activeCanvasCheckpointCannotRedispatchBeforeReachingOneTile()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(100, point(25), 25);
+        session.recordMovementDispatch(100, GOAL, GOAL, 30, false,
+                WebWalkRuntime.DispatchMethod.CANVAS);
+        WebWalkExecutor executor = new WebWalkExecutor();
+
+        assertEquals(WebWalkExecutor.DecisionType.WAIT,
+                executor.decide(session, ready(101, point(28), 1, 28, GOAL, 30,
+                        false, false, true)).getType());
+        assertEquals(WebWalkExecutor.DecisionType.WAIT,
+                executor.decide(session, ready(104, point(28), 1, 28, GOAL, 30,
+                        false, false, false)).getType());
+        assertEquals(WebWalkExecutor.DecisionType.REPLAN,
+                executor.decide(session, ready(105, point(28), 1, 28, GOAL, 30,
+                        false, false, false)).getType());
+    }
+
+    @Test
+    public void handedOffCanvasTargetCannotRedispatchAfterDispatchTimeDistanceRace()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(100, point(24), 24);
+        session.recordMovementDispatch(100, GOAL, GOAL, 30, false,
+                WebWalkRuntime.DispatchMethod.CANVAS);
+        WebWalkExecutor executor = new WebWalkExecutor();
+
+        WebWalkExecutor.Decision handoff = executor.decide(session,
+                ready(101, point(25), 1, 25, GOAL, 30,
+                        false, false, true));
+        assertEquals(WebWalkExecutor.DecisionType.WAIT, handoff.getType());
+        assertNull(session.getCheckpoint());
+        assertEquals(GOAL, session.getActiveTarget());
+
+        assertEquals(WebWalkExecutor.DecisionType.WAIT,
+                executor.decide(session, ready(104, point(25), 1, 25, GOAL, 30,
+                        false, false, false)).getType());
+        assertEquals(WebWalkExecutor.DecisionType.REPLAN,
+                executor.decide(session, ready(105, point(25), 1, 25, GOAL, 30,
+                        false, false, false)).getType());
     }
 
     @Test
@@ -210,6 +361,49 @@ public class WebWalkExecutorTest
     }
 
     @Test
+    public void stalledMovementReplansAfterItsSingleRedispatchMakesNoProgress()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(100, START, 0);
+        session.recordMovementDispatch(100, point(10), point(10), 10, false,
+                WebWalkRuntime.DispatchMethod.MINIMAP);
+        WebWalkExecutor executor = new WebWalkExecutor();
+
+        WebWalkExecutor.Decision redispatch = executor.decide(session,
+                ready(104, START, 1, 0, point(12), 12, false));
+        assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, redispatch.getType());
+        assertEquals(true, redispatch.isRedispatch());
+
+        session.recordMovementDispatch(104, point(12), point(12), 12, true,
+                WebWalkRuntime.DispatchMethod.MINIMAP);
+
+        assertEquals(WebWalkExecutor.DecisionType.REPLAN, executor.decide(session,
+                ready(108, START, 1, 0, point(12), 12, false)).getType());
+    }
+
+    @Test
+    public void movementCommandTracksDistanceAndProgressTick()
+    {
+        WebWalkSession session = new WebWalkSession(GOAL, 0);
+        session.installRoute(route(1));
+        session.observe(100, START, 0);
+        session.recordMovementDispatch(100, point(10), point(10), 10, false,
+                WebWalkRuntime.DispatchMethod.CANVAS);
+
+        assertEquals(point(10), session.getActiveTarget());
+        assertEquals(WebWalkRuntime.DispatchMethod.CANVAS, session.getActiveMethod());
+        assertEquals(100, session.getDispatchTick());
+        assertEquals(10, session.getDistanceAtDispatch());
+        assertEquals(10, session.getLastObservedDistance());
+
+        session.observe(101, point(2), 2);
+
+        assertEquals(8, session.getLastObservedDistance());
+        assertEquals(101, session.getLastProgressTick());
+    }
+
+    @Test
     public void acceptedDispatchAwaitsBeforeTakingAnotherObservation()
     {
         RecordingRuntime runtime = new RecordingRuntime();
@@ -291,8 +485,18 @@ public class WebWalkExecutorTest
                                                      int clickIndex, boolean routeAction,
                                                      boolean runEnabled)
     {
+        return ready(tick, player, generation, pathIndex, clickTarget, clickIndex,
+                routeAction, runEnabled, false);
+    }
+
+    private static WebWalkRuntime.Observation ready(int tick, WorldPoint player, long generation,
+                                                     int pathIndex, WorldPoint clickTarget,
+                                                     int clickIndex, boolean routeAction,
+                                                     boolean runEnabled, boolean moving)
+    {
         return new WebWalkRuntime.Observation(tick, player, WebWalkRuntime.Status.READY,
-                route(generation), pathIndex, clickTarget, clickIndex, routeAction, runEnabled);
+                route(generation), pathIndex, clickTarget, clickIndex, routeAction,
+                runEnabled, moving);
     }
 
     private static WebWalkRuntime.RouteSnapshot route(long generation)

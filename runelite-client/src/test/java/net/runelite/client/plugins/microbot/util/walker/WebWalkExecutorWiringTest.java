@@ -232,7 +232,7 @@ public class WebWalkExecutorWiringTest
     }
 
     @Test
-    public void runtimeObserveAlwaysPropagatesRunStateToDirectObservations() throws IOException
+    public void runtimeObserveAlwaysPropagatesRunAndMovementStateToDirectObservations() throws IOException
     {
         AtomicInteger legacyConstructors = new AtomicInteger();
         AtomicInteger runAwareConstructors = new AtomicInteger();
@@ -247,7 +247,7 @@ public class WebWalkExecutorWiringTest
                 Type.getType(WebWalkRuntime.Status.class),
                 Type.getType(WebWalkRuntime.RouteSnapshot.class), Type.INT_TYPE,
                 Type.getType(WorldPoint.class), Type.INT_TYPE, Type.BOOLEAN_TYPE,
-                Type.BOOLEAN_TYPE);
+                Type.BOOLEAN_TYPE, Type.BOOLEAN_TYPE);
 
         try (InputStream stream = RuneLiteWebWalkRuntime.class.getResourceAsStream(
                 "RuneLiteWebWalkRuntime.class"))

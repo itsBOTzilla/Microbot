@@ -15,6 +15,7 @@ public final class WebWalkExecutor
     static final int CHECKPOINT_HANDOFF_DISTANCE = 5;
     static final int CHECKPOINT_REACHED_DISTANCE = 1;
     static final int NO_PROGRESS_TICKS = 2;
+    static final int MINIMUM_DISPATCH_INTERVAL_TICKS = 3;
     static final int MINIMAP_COMMAND_START_GRACE_TICKS = 4;
     static final int MAX_REDISPATCHES = 1;
     static final int MAX_REJECTED_DISPATCHES = 2;
@@ -46,14 +47,18 @@ public final class WebWalkExecutor
                         runtime.finish(WalkerState.EXIT, decision.getReason());
                         return WalkerState.EXIT;
                     case CLICK_MINIMAP:
-                        WebWalkRuntime.DispatchResult dispatch = runtime.dispatchMinimap(
-                                decision.getTarget(), decision.getPathIndex(), decision.isRedispatch());
+                        WebWalkRuntime.DispatchMethod preferredMethod = decision.isRedispatch()
+                                ? session.getActiveMethod() : WebWalkRuntime.DispatchMethod.NONE;
+                        WebWalkRuntime.DispatchResult dispatch = runtime.dispatchMovement(
+                                decision.getTarget(), decision.getPathIndex(), decision.isRedispatch(),
+                                preferredMethod);
                         if (dispatch.isAccepted())
                         {
                             int actualPathIndex = session.resolveActualPathIndex(
                                     dispatch.getActualTarget(), decision.getPathIndex());
-                            session.recordMinimapDispatch(observation.getTick(), decision.getTarget(),
-                                    dispatch.getActualTarget(), actualPathIndex, decision.isRedispatch());
+                            session.recordMovementDispatch(observation.getTick(), decision.getTarget(),
+                                    dispatch.getActualTarget(), actualPathIndex, decision.isRedispatch(),
+                                    dispatch.getMethod());
                         }
                         else
                         {
@@ -165,18 +170,62 @@ public final class WebWalkExecutor
             boolean reachedCheckpoint = session.isCheckpointReached(player, CHECKPOINT_REACHED_DISTANCE);
             boolean handoffCheckpoint = session.hasApproachedCheckpointForHandoff(player,
                     CHECKPOINT_HANDOFF_DISTANCE);
+            boolean sameActiveCanvasTarget = session.getActiveMethod()
+                    == WebWalkRuntime.DispatchMethod.CANVAS
+                    && checkpoint.equals(observation.getClickTarget());
             if (passedCheckpoint || reachedCheckpoint || handoffCheckpoint)
             {
+                boolean sameLogicalTarget = reachedCheckpoint && !passedCheckpoint
+                        && checkpoint.equals(observation.getClickTarget());
+                if (sameLogicalTarget
+                        && session.getRejectedDispatchCount() >= MAX_REJECTED_DISPATCHES)
+                {
+                    return Decision.replan("minimap-dispatch-rejected");
+                }
+                if (sameLogicalTarget && session.getRedispatchCount() >= MAX_REDISPATCHES)
+                {
+                    return Decision.replan("checkpoint-no-progress");
+                }
+                if (sameLogicalTarget && sameActiveCanvasTarget)
+                {
+                    if (session.ticksWithoutActiveTargetProgress(observation.getTick())
+                            < MINIMAP_COMMAND_START_GRACE_TICKS)
+                    {
+                        return Decision.waitFor("canvas-target-settle");
+                    }
+                    return Decision.replan("canvas-target-stalled");
+                }
+                if (sameLogicalTarget && !session.hasDispatchIntervalElapsed(observation.getTick(),
+                        MINIMUM_DISPATCH_INTERVAL_TICKS))
+                {
+                    return Decision.waitFor("movement-dispatch-interval");
+                }
+                if (sameLogicalTarget)
+                {
+                    return Decision.click(observation.getClickTarget(), observation.getClickPathIndex(),
+                            true, "active-target-near");
+                }
                 WebWalkLog.checkpointReleased(passedCheckpoint ? "passed"
                                 : reachedCheckpoint ? "reached" : "handoff",
                         checkpoint, session.getCheckpointPathIndex(), player,
                         observation.getTick());
-                session.clearCheckpoint();
+                if (handoffCheckpoint && !passedCheckpoint && !reachedCheckpoint)
+                {
+                    session.releaseCheckpoint();
+                }
+                else
+                {
+                    session.clearCheckpoint();
+                }
             }
             else if (progressed || session.ticksWithoutCommandProgress(observation.getTick())
                     < MINIMAP_COMMAND_START_GRACE_TICKS)
             {
                 return Decision.waitFor("checkpoint-progress");
+            }
+            else if (sameActiveCanvasTarget)
+            {
+                return Decision.replan("canvas-target-stalled");
             }
             else if (session.getRedispatchCount() >= MAX_REDISPATCHES)
             {
@@ -186,6 +235,77 @@ public final class WebWalkExecutor
             {
                 return Decision.click(observation.getClickTarget(), observation.getClickPathIndex(),
                         true, "checkpoint-redispatch");
+            }
+            else
+            {
+                return Decision.replan("checkpoint-no-forward-target");
+            }
+        }
+
+        if (session.getActiveTarget() != null)
+        {
+            boolean activeMovementHealthy = session.isActiveMovementHealthy(observation.getTick(),
+                    observation.isMoving(), NO_PROGRESS_TICKS);
+            boolean sameActiveTarget = session.getActiveTarget().equals(observation.getClickTarget());
+            if (sameActiveTarget
+                    && session.getActiveMethod() == WebWalkRuntime.DispatchMethod.CANVAS)
+            {
+                if (activeMovementHealthy
+                        || session.ticksWithoutActiveTargetProgress(observation.getTick())
+                                < MINIMAP_COMMAND_START_GRACE_TICKS)
+                {
+                    return Decision.waitFor("canvas-target-settle");
+                }
+                return Decision.replan("canvas-target-stalled");
+            }
+            if (session.isActiveTargetNear(observation.getPlayer(), CHECKPOINT_REACHED_DISTANCE))
+            {
+                if (sameActiveTarget && activeMovementHealthy)
+                {
+                    return Decision.waitFor("active-target-progress");
+                }
+                if (sameActiveTarget
+                        && session.getRejectedDispatchCount() >= MAX_REJECTED_DISPATCHES)
+                {
+                    return Decision.replan("minimap-dispatch-rejected");
+                }
+                if (sameActiveTarget && session.getRedispatchCount() >= MAX_REDISPATCHES)
+                {
+                    return Decision.replan("checkpoint-no-progress");
+                }
+                if (!session.hasDispatchIntervalElapsed(observation.getTick(),
+                        MINIMUM_DISPATCH_INTERVAL_TICKS))
+                {
+                    return Decision.waitFor("movement-dispatch-interval");
+                }
+                if (sameActiveTarget)
+                {
+                    return Decision.click(observation.getClickTarget(), observation.getClickPathIndex(),
+                            true, "active-target-near");
+                }
+                session.clearCheckpoint();
+            }
+            else if (activeMovementHealthy)
+            {
+                return Decision.waitFor("active-target-progress");
+            }
+            else if (session.ticksWithoutActiveTargetProgress(observation.getTick())
+                    < MINIMAP_COMMAND_START_GRACE_TICKS)
+            {
+                return Decision.waitFor("active-target-grace");
+            }
+            else if (session.getRejectedDispatchCount() >= MAX_REJECTED_DISPATCHES)
+            {
+                return Decision.replan("minimap-dispatch-rejected");
+            }
+            else if (session.getRedispatchCount() >= MAX_REDISPATCHES)
+            {
+                return Decision.replan("checkpoint-no-progress");
+            }
+            else if (observation.getClickTarget() != null)
+            {
+                return Decision.click(observation.getClickTarget(), observation.getClickPathIndex(),
+                        true, "active-target-stalled");
             }
             else
             {

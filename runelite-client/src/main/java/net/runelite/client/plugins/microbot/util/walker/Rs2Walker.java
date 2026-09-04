@@ -389,6 +389,7 @@ public class Rs2Walker {
         routeState.lastTransportHandledAtLocation = null;
         routeState.lastTransportOriginLocation = null;
         routeState.lastTransportDestinationLocation = null;
+        clearRecentDoorContext();
         // The interim target belongs to the PREVIOUS route's click; letting it survive into a fresh walk
         // makes the new walk yield to (and report progress against) a stale objective — repeatedly seen as
         // interim=<old goal> camping at Clock Tower when the script restarts walks every ~40s.
@@ -398,6 +399,16 @@ public class Rs2Walker {
             expectedTransportDestinations.clear();
         }
         WebWalkLog.tmark("walk_start", 0, target, Rs2Player.getWorldLocation(), "target_set");
+    }
+
+    private static void clearRecentDoorContext() {
+        recentlyOpenedStationaryDoors.clear();
+        recentDoorAttemptByEdge.clear();
+        routeState.lastDoorAttemptFrom = null;
+        routeState.lastDoorAttemptTo = null;
+        routeState.lastDoorAttemptPlayerPosition = null;
+        routeState.lastDoorAttemptAtMs = 0L;
+        routeState.nextDoorInteractionAllowedAtMs = 0L;
     }
 
     private static void clearRecentTransportContext() {
@@ -7357,11 +7368,44 @@ public class Rs2Walker {
         return false;
     }
 
-    private static boolean isDoorLikeCatalogTransportSegment(List<WorldPoint> path, int index) {
+    static boolean isDoorLikeCatalogTransportSegment(List<WorldPoint> path, int index) {
         if (path == null || index < 0 || index >= path.size() - 1) {
             return false;
         }
         return isDoorLikeCatalogTransportSegment(path.get(index), path.get(index + 1));
+    }
+
+    static List<WorldPoint> catalogTransportDispatchPath(List<WorldPoint> path, int index) {
+        if (path == null || index < 0 || index >= path.size() - 1) {
+            return path;
+        }
+        WorldPoint from = path.get(index);
+        WorldPoint to = path.get(index + 1);
+        if (from == null || to == null || from.getPlane() != to.getPlane()
+                || matchesDirectedTransportCatalogEdge(from, to)) {
+            return path;
+        }
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                if (dx == 0 && dy == 0) {
+                    continue;
+                }
+                WorldPoint catalogOrigin = new WorldPoint(
+                        from.getX() + dx, from.getY() + dy, from.getPlane());
+                Set<Transport> transports = Rs2PathApi.getTransports().get(catalogOrigin);
+                if (transports == null || transports.isEmpty()) {
+                    continue;
+                }
+                for (Transport transport : transports) {
+                    if (Objects.equals(transport.getDestination(), to)
+                            && isAdjacentSamePlaneTransport(transport)
+                            && Rs2DoorProbe.isDoorLikeCatalogTransport(transport)) {
+                        return List.of(catalogOrigin, to);
+                    }
+                }
+            }
+        }
+        return path;
     }
 
     private static boolean isDoorLikeCatalogTransportSegment(WorldPoint from, WorldPoint to) {
@@ -9063,9 +9107,12 @@ public class Rs2Walker {
         if (path == null || indexOfStartPoint < 0 || indexOfStartPoint >= path.size() - 1) {
             return false;
         }
-        if (isCatalogBackedTransportSegment(path, indexOfStartPoint)
-                && handleTransports(path, indexOfStartPoint)) {
-            return true;
+        if (isCatalogBackedTransportSegment(path, indexOfStartPoint)) {
+            List<WorldPoint> dispatchPath = catalogTransportDispatchPath(path, indexOfStartPoint);
+            int dispatchIndex = dispatchPath == path ? indexOfStartPoint : 0;
+            if (handleTransports(dispatchPath, dispatchIndex)) {
+                return true;
+            }
         }
         if (handleDoors(path, indexOfStartPoint, true)) {
             return true;
@@ -9916,16 +9963,17 @@ public class Rs2Walker {
             if (plZ == null) {
                 return false;
             }
-            int z = plZ.getPlane();
+            int z = before != null ? before.getPlane() : plZ.getPlane();
             // Instrumentation: the FIRST plane-change transport of a walk consistently costs ~9.5s
             // while the same kind mid-route costs ~2.2s (measured across two Falador castle runs).
             // The waits below bound at 1800 + 5000 + jitter, and a failed start returns false and is
             // retried, so two attempts would explain it — but that is inference. These timings say
             // which of start-detection, plane-detection or retry actually burns the seconds.
             long planeChangeStartedAt = System.currentTimeMillis();
-            boolean started = sleepUntil(() -> {
+            boolean started = hasPlaneChangeStarted(z, plZ,
+                    Rs2Player.isMoving(), Rs2Player.isAnimating()) || sleepUntil(() -> {
                 WorldPoint p = Rs2Player.getWorldLocation();
-                return p != null && (p.getPlane() != z || Rs2Player.isMoving() || Rs2Player.isAnimating());
+                return hasPlaneChangeStarted(z, p, Rs2Player.isMoving(), Rs2Player.isAnimating());
             }, 1800);
             long startWaitMs = System.currentTimeMillis() - planeChangeStartedAt;
             if (!started) {
@@ -9953,6 +10001,11 @@ public class Rs2Walker {
                     System.currentTimeMillis() - planeChangeStartedAt, tileObject.getId());
             return planeChanged;
         }
+    }
+
+    static boolean hasPlaneChangeStarted(int initialPlane, WorldPoint current,
+                                         boolean moving, boolean animating) {
+        return current != null && (current.getPlane() != initialPlane || moving || animating);
     }
 
     private static boolean isAdjacentSamePlaneTransport(Transport transport) {
