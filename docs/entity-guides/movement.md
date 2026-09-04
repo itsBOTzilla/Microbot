@@ -645,3 +645,26 @@ transports beyond the currently loaded scene.
 
 **Defensive check:** Feed the production Varrock sewer web edge to the path-transport extractor in
 a headless/off-scene test and assert the web reaches the missing-item planner.
+
+## 25. Revalidate quest targets at the walk-to-interaction handoff
+
+Use `Rs2Walker.walkWithStateUntil` when an NPC or object becoming locally actionable should
+end a full route. Its completion callback must only inspect state; perform the actual click
+after return and re-read the active step and live target first. `ARRIVED` can mean coordinate
+arrival or caller-condition satisfaction, so it is not an unconditional interaction permit.
+
+**Why this matters:** Waiting for another quest loop after route arrival adds visible idle time.
+Reusing the pre-walk target instead can click a stale NPC, object variant or completed step.
+Replacing full walking with `walkStep` would also omit doors and transports.
+
+Readiness collision checks use physical scene positions for both player and target, including
+inside instances. Convert only the full walker's destination to its expected template space.
+Do not compare template player coordinates against physical scene objects. Preserve one
+pending interaction while movement or animation is in progress; movement alone is not proof
+that an object action completed.
+
+**Where this applies:** `QuestScript` NPC/object handoffs, `QuestInteractionFlow`, and
+`QuestLocalApproach`. See [Quest Helper interaction responsiveness](../questhelper-interaction-responsiveness.md).
+
+**Defensive check:** Test same-invocation handoff, changed step/target after walking, closed
+walls and instance coordinates, failed dispatch, and no second click through short animation gaps.

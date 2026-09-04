@@ -30,7 +30,7 @@ public class QuestObjectInteractionDispatchTest
     {
         DispatchCalls calls = readApplyObjectStepCalls();
 
-        assertEquals("QuestScript must contain applyObjectStep", 1, calls.matchedMethods);
+        assertEquals("QuestScript must contain dispatchObjectStep", 1, calls.matchedMethods);
         assertTrue("Object steps must use the same raw-object interaction utility as walker transports",
                 calls.rawGameObjectInteractions > 0);
         assertEquals("Object steps must not use the duplicated tile-object wrapper click path",
@@ -114,41 +114,32 @@ public class QuestObjectInteractionDispatchTest
     }
 
     @Test
-    public void objectInteractionStartWaitIsBoundedToTwoGameTicks() throws IOException
+    public void objectDispatchDoesNotBlockWaitingForActivity() throws IOException
     {
         DispatchCalls calls = readApplyObjectStepCalls();
 
-        assertEquals("Object steps must not inherit the unrelated five-second default wait",
-                Integer.valueOf(1_200), calls.objectInteractionStartTimeout);
+        assertEquals("Pending attempts must be observed by later evaluations without blocking dispatch",
+                0, calls.blockingDispatchWaits);
     }
 
     @Test
-    public void itemDeselectionAloneDoesNotConfirmObjectInteraction()
+    public void dispatchedObjectActionRegistersPendingObservation() throws IOException
     {
-        assertFalse(QuestScript.isObjectInteractionConfirmed(
-                false, false, false, false, false));
-        assertTrue(QuestScript.isObjectInteractionConfirmed(
-                true, false, false, false, false));
-        assertTrue(QuestScript.isObjectInteractionConfirmed(
-                false, true, false, false, false));
-        assertTrue(QuestScript.isObjectInteractionConfirmed(
-                false, false, true, false, false));
-        assertTrue(QuestScript.isObjectInteractionConfirmed(
-                false, false, false, true, false));
-        assertTrue(QuestScript.isObjectInteractionConfirmed(
-                false, false, false, false, true));
+        DispatchCalls calls = readApplyObjectStepCalls();
+        assertTrue("Object dispatch must register the attempt for subsequent observation",
+                calls.beginInteractionOrder > calls.itemObjectInteractionOrder);
     }
 
     @Test
-    public void objectDispatchWaitsForPreexistingMovementToSettle() throws IOException
+    public void objectDispatchRevalidatesReadinessWithoutAnUnconditionalIdleWait() throws IOException
     {
         DispatchCalls calls = readApplyObjectStepCalls();
 
-        assertTrue(calls.preDispatchIdleWaitOrder > 0);
-        assertTrue(calls.preDispatchIdleWaitOrder < calls.rawGameObjectInteractionOrder);
-        assertFalse(QuestScript.isObjectInteractionIdle(true, false));
-        assertFalse(QuestScript.isObjectInteractionIdle(false, true));
-        assertTrue(QuestScript.isObjectInteractionIdle(false, false));
+        assertEquals(0, calls.preDispatchIdleWaitOrder);
+        assertTrue("Current input ownership and pending attempt must be checked before dispatch",
+                calls.currentCheckOrder > 0 && calls.currentCheckOrder < calls.rawGameObjectInteractionOrder);
+        assertTrue("Fresh target readiness must be checked before dispatch",
+                calls.readyCheckOrder > 0 && calls.readyCheckOrder < calls.rawGameObjectInteractionOrder);
     }
 
     private static DispatchCalls readApplyObjectStepCalls() throws IOException
@@ -172,8 +163,12 @@ public class QuestObjectInteractionDispatchTest
                 public MethodVisitor visitMethod(int access, String name, String descriptor,
                                                  String signature, String[] exceptions)
                 {
-                    boolean expectedMethod = name.equals("applyObjectStep")
+                    boolean expectedMethod = name.equals("dispatchObjectStep")
                             && descriptor.equals(expectedDescriptor);
+                    boolean approachMethod = name.equals("routeToObjectStep")
+                            || name.startsWith("lambda$routeToObjectStep$")
+                            || name.equals("isCurrentInteractionReady")
+                            || name.startsWith("lambda$isCurrentInteractionReady$");
                     if (expectedMethod)
                     {
                         calls.matchedMethods++;
@@ -192,7 +187,7 @@ public class QuestObjectInteractionDispatchTest
                             {
                                 lastStringConstant = (String) value;
                             }
-                            if (expectedMethod && value instanceof Integer)
+                            if ((expectedMethod || approachMethod) && value instanceof Integer)
                             {
                                 lastIntConstant = (Integer) value;
                             }
@@ -201,7 +196,7 @@ public class QuestObjectInteractionDispatchTest
                         @Override
                         public void visitInsn(int opcode)
                         {
-                            if (expectedMethod && opcode >= Opcodes.ICONST_M1 && opcode <= Opcodes.ICONST_5)
+                            if ((expectedMethod || approachMethod) && opcode >= Opcodes.ICONST_M1 && opcode <= Opcodes.ICONST_5)
                             {
                                 lastIntConstant = opcode - Opcodes.ICONST_0;
                             }
@@ -210,7 +205,7 @@ public class QuestObjectInteractionDispatchTest
                         @Override
                         public void visitIntInsn(int opcode, int operand)
                         {
-                            if (expectedMethod && (opcode == Opcodes.BIPUSH || opcode == Opcodes.SIPUSH))
+                            if ((expectedMethod || approachMethod) && (opcode == Opcodes.BIPUSH || opcode == Opcodes.SIPUSH))
                             {
                                 lastIntConstant = operand;
                             }
@@ -220,12 +215,34 @@ public class QuestObjectInteractionDispatchTest
                         public void visitMethodInsn(int opcode, String owner, String methodName,
                                                     String methodDescriptor, boolean isInterface)
                         {
-                            if (!expectedMethod)
+                            if (!expectedMethod && !approachMethod)
                             {
                                 return;
                             }
 
                             callOrder++;
+
+                            if (expectedMethod && owner.equals(Type.getInternalName(QuestScript.class)))
+                            {
+                                if (methodName.equals("canDispatchQuestStep") && calls.currentCheckOrder == 0)
+                                {
+                                    calls.currentCheckOrder = callOrder;
+                                }
+                                if (methodName.equals("isCurrentInteractionReady") && calls.readyCheckOrder == 0)
+                                {
+                                    calls.readyCheckOrder = callOrder;
+                                }
+                                if (methodName.equals("beginInteraction"))
+                                {
+                                    calls.beginInteractionOrder = callOrder;
+                                }
+                            }
+                            if (expectedMethod && (methodName.startsWith("sleepUntil")
+                                    || methodName.equals("waitForAnimation")
+                                    || methodName.equals("waitForObjectInteractionIdle")))
+                            {
+                                calls.blockingDispatchWaits++;
+                            }
 
                             if (owner.equals(Type.getInternalName(Rs2Inventory.class))
                                     && methodName.equals("use")
@@ -266,10 +283,9 @@ public class QuestObjectInteractionDispatchTest
                             {
                                 calls.wrapperClicks++;
                             }
-                            if (owner.equals(Type.getInternalName(net.runelite.client.plugins.microbot.util.walker.Rs2Walker.class))
-                                    && methodName.equals("walkTo")
-                                    && methodDescriptor.equals(Type.getMethodDescriptor(
-                                    Type.BOOLEAN_TYPE, Type.getType(WorldPoint.class), Type.INT_TYPE)))
+                            if (name.equals("routeToObjectStep")
+                                    && owner.equals(Type.getInternalName(QuestScript.class))
+                                    && methodName.equals("walkToInteraction"))
                             {
                                 calls.walkReachedDistances.add(lastIntConstant);
                             }
@@ -287,18 +303,6 @@ public class QuestObjectInteractionDispatchTest
                             {
                                 calls.fullObjectLineOfSightChecks++;
                             }
-                            if (owner.equals(Type.getInternalName(QuestScript.class))
-                                    && methodName.equals("sleepUntil")
-                                    && methodDescriptor.equals(Type.getMethodDescriptor(
-                                    Type.BOOLEAN_TYPE,
-                                    Type.getType(java.util.function.BooleanSupplier.class),
-                                    Type.INT_TYPE))
-                                    && calls.rawGameObjectInteractions > 0
-                                    && calls.objectInteractionStartTimeout == null)
-                            {
-                                calls.objectInteractionStartTimeout = lastIntConstant;
-                            }
-
                             lastIntConstant = null;
                             lastStringConstant = null;
                         }
@@ -327,7 +331,7 @@ public class QuestObjectInteractionDispatchTest
                 public MethodVisitor visitMethod(int access, String name, String descriptor,
                                                  String signature, String[] exceptions)
                 {
-                    boolean expectedMethod = name.equals("applyNpcStep")
+                    boolean expectedMethod = name.equals("dispatchNpcStep")
                             && descriptor.equals(expectedDescriptor);
                     return new MethodVisitor(Opcodes.ASM9)
                     {
@@ -384,8 +388,11 @@ public class QuestObjectInteractionDispatchTest
         private int rawGameObjectInteractionOrder;
         private int globalReachabilityChecks;
         private int fullObjectLineOfSightChecks;
+        private int currentCheckOrder;
+        private int readyCheckOrder;
+        private int beginInteractionOrder;
+        private int blockingDispatchWaits;
         private boolean itemObjectInteractionUsesUseAction;
         private final List<Integer> walkReachedDistances = new ArrayList<>();
-        private Integer objectInteractionStartTimeout;
     }
 }

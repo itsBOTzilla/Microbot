@@ -79,7 +79,7 @@ import java.util.stream.Collectors;
 
 @PluginDescriptor(
 	name = "Quest Helper",
-	version = "1.0.1",
+	version = "1.0.2",
 	description = "Helps you with questing",
 	tags = { "quest", "helper", "overlay" }
 )
