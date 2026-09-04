@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
 import org.junit.Test;
 import org.objectweb.asm.ClassReader;
@@ -12,6 +14,7 @@ import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -38,34 +41,148 @@ public class Rs2WalkerBankBootstrapTest
 	}
 
 	@Test
-	public void directContinuationClosesBootstrapBankBeforeWalking() throws IOException
+	public void directContinuationDelegatesBankCloseAndMovementToTheBehavioralGuard() throws IOException
 	{
 		AtomicBoolean methodFound = new AtomicBoolean();
-		AtomicInteger callIndex = new AtomicInteger();
-		AtomicInteger closesBankAt = new AtomicInteger(-1);
-		AtomicInteger continuesWalkAt = new AtomicInteger(-1);
-		String bankOwner = Type.getInternalName(Rs2Bank.class);
+		AtomicBoolean usesGuard = new AtomicBoolean();
 		String walkerOwner = Type.getInternalName(Rs2Walker.class);
 
 		visitMethodCalls("walkDirectAfterBankBootstrap", (owner, name) ->
 		{
 			methodFound.set(true);
-			int index = callIndex.getAndIncrement();
-			if (owner.equals(bankOwner) && name.equals("closeBank"))
-			{
-				closesBankAt.compareAndSet(-1, index);
-			}
-			if (owner.equals(walkerOwner) && name.equals("walkWithStateInternal"))
-			{
-				continuesWalkAt.compareAndSet(-1, index);
-			}
+			usesGuard.set(usesGuard.get()
+				|| owner.equals(walkerOwner) && name.equals("continueDirectAfterBankBootstrap"));
 		});
 
 		assertTrue("direct-route continuation helper is required", methodFound.get());
-		assertTrue("a bank left open for comparison must be closed before direct movement", closesBankAt.get() >= 0);
-		assertTrue("the direct route must continue after closing the bootstrap bank", continuesWalkAt.get() >= 0);
-		assertTrue("bank closure must be dispatched before direct movement",
-			closesBankAt.get() < continuesWalkAt.get());
+		assertTrue("direct continuation must use the close-state guard", usesGuard.get());
+	}
+
+	@Test
+	public void directContinuationAllowsMovementWhenBankIsAlreadyClosed()
+	{
+		AtomicInteger liveBankChecks = new AtomicInteger();
+		AtomicInteger closeCalls = new AtomicInteger();
+		AtomicInteger observedCloseChecks = new AtomicInteger();
+		AtomicInteger movementCalls = new AtomicInteger();
+
+		WalkerState state = continueDirect(() ->
+		{
+			liveBankChecks.incrementAndGet();
+			return false;
+		}, () ->
+		{
+			closeCalls.incrementAndGet();
+			return true;
+		}, () ->
+		{
+			observedCloseChecks.incrementAndGet();
+			return true;
+		}, () ->
+		{
+			movementCalls.incrementAndGet();
+			return WalkerState.MOVING;
+		});
+
+		assertEquals(WalkerState.MOVING, state);
+		assertEquals(1, liveBankChecks.get());
+		assertEquals(0, closeCalls.get());
+		assertEquals(0, observedCloseChecks.get());
+		assertEquals(1, movementCalls.get());
+	}
+
+	@Test
+	public void directContinuationClosesOpenBankAndAllowsOneMovementAfterObservedClose()
+	{
+		AtomicInteger closeCalls = new AtomicInteger();
+		AtomicInteger observedCloseChecks = new AtomicInteger();
+		AtomicInteger movementCalls = new AtomicInteger();
+
+		WalkerState state = continueDirect(() -> true, () ->
+		{
+			closeCalls.incrementAndGet();
+			return true;
+		}, () ->
+		{
+			observedCloseChecks.incrementAndGet();
+			return true;
+		}, () ->
+		{
+			movementCalls.incrementAndGet();
+			return WalkerState.ARRIVED;
+		});
+
+		assertEquals(WalkerState.ARRIVED, state);
+		assertEquals(1, closeCalls.get());
+		assertEquals(1, observedCloseChecks.get());
+		assertEquals(1, movementCalls.get());
+	}
+
+	@Test
+	public void directContinuationExitsWithoutMovementWhenCloseDispatchFails()
+	{
+		AtomicInteger observedCloseChecks = new AtomicInteger();
+		AtomicInteger movementCalls = new AtomicInteger();
+
+		WalkerState state = continueDirect(() -> true, () -> false, () ->
+		{
+			observedCloseChecks.incrementAndGet();
+			return true;
+		}, () ->
+		{
+			movementCalls.incrementAndGet();
+			return WalkerState.MOVING;
+		});
+
+		assertEquals(WalkerState.EXIT, state);
+		assertEquals(0, observedCloseChecks.get());
+		assertEquals(0, movementCalls.get());
+	}
+
+	@Test
+	public void directContinuationExitsWithoutMovementWhenBankRemainsOpen()
+	{
+		AtomicInteger movementCalls = new AtomicInteger();
+
+		WalkerState state = continueDirect(() -> true, () -> true, () -> false, () ->
+		{
+			movementCalls.incrementAndGet();
+			return WalkerState.MOVING;
+		});
+
+		assertEquals(WalkerState.EXIT, state);
+		assertEquals(0, movementCalls.get());
+	}
+
+	@Test
+	public void directContinuationRechecksLiveBankStateOnRetryAfterFailedClose()
+	{
+		AtomicInteger liveBankChecks = new AtomicInteger();
+		AtomicInteger closeCalls = new AtomicInteger();
+		AtomicInteger movementCalls = new AtomicInteger();
+		BooleanSupplier bankOpen = () -> liveBankChecks.getAndIncrement() == 0;
+		Supplier<WalkerState> movement = () ->
+		{
+			movementCalls.incrementAndGet();
+			return WalkerState.ARRIVED;
+		};
+
+		WalkerState first = continueDirect(bankOpen, () ->
+		{
+			closeCalls.incrementAndGet();
+			return false;
+		}, () -> true, movement);
+		WalkerState retry = continueDirect(bankOpen, () ->
+		{
+			closeCalls.incrementAndGet();
+			return false;
+		}, () -> true, movement);
+
+		assertEquals(WalkerState.EXIT, first);
+		assertEquals(WalkerState.ARRIVED, retry);
+		assertEquals(2, liveBankChecks.get());
+		assertEquals(1, closeCalls.get());
+		assertEquals(1, movementCalls.get());
 	}
 
 	@Test
@@ -122,6 +239,12 @@ public class Rs2WalkerBankBootstrapTest
 				}
 			}, 0);
 		}
+	}
+
+	private static WalkerState continueDirect(BooleanSupplier bankOpen, BooleanSupplier closeBank,
+		BooleanSupplier observedClosed, Supplier<WalkerState> movement)
+	{
+		return Rs2Walker.continueDirectAfterBankBootstrap(bankOpen, closeBank, observedClosed, movement);
 	}
 
 	@FunctionalInterface

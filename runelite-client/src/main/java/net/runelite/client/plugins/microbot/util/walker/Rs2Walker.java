@@ -51,6 +51,7 @@ import net.runelite.client.plugins.microbot.util.leaguetransport.SeasonalTranspo
 import net.runelite.client.plugins.microbot.util.logging.Rs2LogRateLimit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import org.slf4j.event.Level;
 import net.runelite.client.plugins.microbot.util.poh.PohTeleports;
 import net.runelite.client.plugins.microbot.util.poh.PohTransport;
@@ -12964,13 +12965,40 @@ public class Rs2Walker {
     private static WalkerState walkDirectAfterBankBootstrap(WorldPoint target, int distance) {
         // Check live state on every invocation. A previous close attempt may have failed and the
         // next walk call will skip bootstrap once the bank mirror has an epoch.
-        if (Rs2Bank.isOpen()) {
-            if (!Rs2Bank.closeBank() || !sleepUntil(() -> !Rs2Bank.isOpen(), 3_000)) {
-                WebWalkLog.spWarn("bank_cache_bootstrap | close_before_direct_failed goal={}", target);
-                return WalkerState.EXIT;
-            }
+        AtomicBoolean closeBeforeDirectFailed = new AtomicBoolean();
+        WalkerState state = continueDirectAfterBankBootstrap(
+                Rs2Bank::isOpen,
+                () -> {
+                    boolean closeDispatched = Rs2Bank.closeBank();
+                    if (!closeDispatched) {
+                        closeBeforeDirectFailed.set(true);
+                    }
+                    return closeDispatched;
+                },
+                () -> {
+                    boolean bankClosed = sleepUntil(() -> !Rs2Bank.isOpen(), 3_000);
+                    if (!bankClosed) {
+                        closeBeforeDirectFailed.set(true);
+                    }
+                    return bankClosed;
+                },
+                () -> walkWithStateInternal(target, distance));
+        if (closeBeforeDirectFailed.get()) {
+            WebWalkLog.spWarn("bank_cache_bootstrap | close_before_direct_failed goal={}", target);
         }
-        return walkWithStateInternal(target, distance);
+        return state;
+    }
+
+    /**
+     * Closes a bank left open by route comparison before allowing a direct walk to issue movement.
+     * The collaborators are parameters so the close-state decision can be verified without a live client.
+     */
+    static WalkerState continueDirectAfterBankBootstrap(BooleanSupplier bankOpen, BooleanSupplier closeBank,
+                                                         BooleanSupplier observedClosed, Supplier<WalkerState> movement) {
+        if (bankOpen.getAsBoolean() && (!closeBank.getAsBoolean() || !observedClosed.getAsBoolean())) {
+            return WalkerState.EXIT;
+        }
+        return movement.get();
     }
 
     /**
