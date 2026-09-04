@@ -135,6 +135,29 @@ public class WalkingCameraCoordinatorTest
     }
 
     @Test
+    public void delayedOldGenerationInvalidationCannotEraseCurrentRetirement()
+    {
+        WalkingCameraCoordinator coordinator = new WalkingCameraCoordinator(
+                Runnable::run, new ImmediateClientThread());
+        long initialRevision = coordinator.publishRoute(coordinator.getRouteRevision(),
+                TARGET_GENERATION, initialPath(), 0, INITIAL_ROUTE_SOURCE);
+        assertTrue(initialRevision >= 0L);
+
+        long replacementGeneration = TARGET_GENERATION + 1L;
+        coordinator.invalidateRoute(TARGET_GENERATION, INITIAL_ROUTE_SOURCE);
+        long currentRevision = coordinator.invalidateRoute(
+                replacementGeneration, REPLACEMENT_ROUTE_SOURCE);
+        assertEquals(currentRevision, coordinator.invalidateRoute(
+                TARGET_GENERATION, INITIAL_ROUTE_SOURCE));
+
+        assertEquals(-1L, coordinator.publishRoute(currentRevision,
+                replacementGeneration, replacementPath(), 0, REPLACEMENT_ROUTE_SOURCE));
+        assertTrue(coordinator.publishRoute(currentRevision,
+                replacementGeneration, replacementPath(), 0,
+                SECOND_REPLACEMENT_ROUTE_SOURCE) >= 0L);
+    }
+
+    @Test
     public void cancelledWalkInvalidatesQueuedYaw() throws Exception
     {
         try (Scenario scenario = new Scenario())

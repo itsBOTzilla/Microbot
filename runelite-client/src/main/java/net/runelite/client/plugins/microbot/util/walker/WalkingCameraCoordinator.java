@@ -87,8 +87,8 @@ final class WalkingCameraCoordinator
         List<WorldPoint> route = path == null ? Collections.emptyList() : List.copyOf(path);
         synchronized (routeMutex)
         {
-            selectInvalidatedSourcesGenerationLocked(targetGeneration);
-            if (routeRevision != expectedRouteRevision || routeSource == null
+            if (!selectInvalidatedSourcesGenerationLocked(targetGeneration)
+                    || routeRevision != expectedRouteRevision || routeSource == null
                     || invalidatedRouteSources.contains(routeSource))
             {
                 return -1L;
@@ -123,7 +123,10 @@ final class WalkingCameraCoordinator
     {
         synchronized (routeMutex)
         {
-            selectInvalidatedSourcesGenerationLocked(targetGeneration);
+            if (!selectInvalidatedSourcesGenerationLocked(targetGeneration))
+            {
+                return routeRevision;
+            }
             if (currentRouteSource != null)
             {
                 invalidatedRouteSources.add(currentRouteSource);
@@ -138,8 +141,18 @@ final class WalkingCameraCoordinator
         }
     }
 
-    private void selectInvalidatedSourcesGenerationLocked(long targetGeneration)
+    private boolean selectInvalidatedSourcesGenerationLocked(long targetGeneration)
     {
+        if (invalidatedSourcesTargetGenerationSet
+                && invalidatedSourcesTargetGeneration == targetGeneration)
+        {
+            return true;
+        }
+        if (invalidatedSourcesTargetGenerationSet
+                && targetGeneration - invalidatedSourcesTargetGeneration < 0L)
+        {
+            return false;
+        }
         if (!invalidatedSourcesTargetGenerationSet
                 || invalidatedSourcesTargetGeneration != targetGeneration)
         {
@@ -147,6 +160,7 @@ final class WalkingCameraCoordinator
             invalidatedSourcesTargetGeneration = targetGeneration;
             invalidatedSourcesTargetGenerationSet = true;
         }
+        return true;
     }
 
     void stopTravelling(long targetGeneration)
