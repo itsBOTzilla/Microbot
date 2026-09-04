@@ -163,7 +163,7 @@ public class AntibanPlugin extends Plugin {
 
     @Override
     protected void startUp() throws AWTException {
-        Rs2Antiban.setActivityIntensity(ActivityIntensity.EXTREME);
+        Rs2Antiban.setActivityIntensity(Rs2Antiban.DEFAULT_ACTIVITY_INTENSITY);
         final MasterPanel panel = injector.getInstance(MasterPanel.class);
         final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "antiban.png");
         navButton = NavigationButton.builder()
