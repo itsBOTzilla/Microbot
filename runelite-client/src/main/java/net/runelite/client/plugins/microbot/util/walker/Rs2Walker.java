@@ -127,10 +127,15 @@ public class Rs2Walker {
     private static final int CAMERA_LOOK_AHEAD_MAX_TILES = 12;
     private static final int CAMERA_MIN_DISPATCH_DISTANCE_TILES = 8;
     private static final int CAMERA_MEANINGFUL_TURN_DEGREES = 60;
-    private static final int CAMERA_MIN_TOLERANCE_PERCENT = 30;
-    private static final int CAMERA_MAX_TOLERANCE_PERCENT = 45;
-    private static final int CAMERA_MIN_UPDATE_INTERVAL_MS = 2_500;
-    private static final int CAMERA_MAX_UPDATE_INTERVAL_MS = 6_500;
+    private static final int CAMERA_MIN_TOLERANCE_PERCENT = 45;
+    private static final int CAMERA_MAX_TOLERANCE_PERCENT = 60;
+    private static final int CAMERA_MIN_STARTUP_GRACE_MS = 5_000;
+    private static final int CAMERA_MAX_STARTUP_GRACE_MS = 10_000;
+    private static final int CAMERA_MIN_UPDATE_INTERVAL_MS = 8_000;
+    private static final int CAMERA_MAX_UPDATE_INTERVAL_MS = 15_000;
+    private static final int CAMERA_MIN_YAW_STEP = 96;
+    private static final int CAMERA_MAX_YAW_STEP = 160;
+    private static final int CAMERA_YAW_UNITS = 2_048;
     private static final int CAMERA_DIRECTION_UNSET = -1;
     private static final WalkingCameraCoordinator WALKING_CAMERA_COORDINATOR =
             new WalkingCameraCoordinator(
@@ -410,8 +415,11 @@ public class Rs2Walker {
         routeState.walkSessionStartedAtMs = System.currentTimeMillis();
         routeState.firstMovementClickMarked = false;
         synchronized (currentTargetOwnershipMutex) {
-            NEXT_CAMERA_UPDATE_NANOS.set(0L);
-            WALKING_CAMERA_DEADLINE_SET.set(false);
+            int startupGraceMs = Rs2Random.logNormalBounded(
+                    CAMERA_MIN_STARTUP_GRACE_MS, CAMERA_MAX_STARTUP_GRACE_MS);
+            NEXT_CAMERA_UPDATE_NANOS.set(walkingCameraDeadlineNanos(
+                    System.nanoTime(), startupGraceMs));
+            WALKING_CAMERA_DEADLINE_SET.set(true);
             PREVIOUS_CAMERA_DIRECTION.set(CAMERA_DIRECTION_UNSET);
         }
         startupPhasesLogged.clear();
@@ -506,7 +514,6 @@ public class Rs2Walker {
         synchronized (currentTargetOwnershipMutex) {
             WALKING_CAMERA_COORDINATOR.invalidateRoute(
                     currentTargetGeneration.get(), Rs2PathApi.getPathfinder());
-            WALKING_CAMERA_DEADLINE_SET.set(false);
         }
     }
 
@@ -556,6 +563,22 @@ public class Rs2Walker {
         return deadlineSet && !meaningfulTurn && now - deadline < 0L;
     }
 
+    static long walkingCameraDeadlineNanos(long now, int delayMs) {
+        return now + TimeUnit.MILLISECONDS.toNanos(Math.max(0, delayMs));
+    }
+
+    static int boundedCameraYaw(int currentYaw, int targetYaw, int maxStep) {
+        int current = Math.floorMod(currentYaw, CAMERA_YAW_UNITS);
+        int target = Math.floorMod(targetYaw, CAMERA_YAW_UNITS);
+        int delta = Math.floorMod(target - current, CAMERA_YAW_UNITS);
+        if (delta > CAMERA_YAW_UNITS / 2) {
+            delta -= CAMERA_YAW_UNITS;
+        }
+        int stepLimit = Math.max(0, Math.min(maxStep, CAMERA_YAW_UNITS / 2));
+        int step = Math.max(-stepLimit, Math.min(stepLimit, delta));
+        return Math.floorMod(current + step, CAMERA_YAW_UNITS);
+    }
+
     private static void applyWalkingCameraUpdate(WalkingCameraCoordinator.Request request) {
         try {
             if (!WALKING_CAMERA_COORDINATOR.isCurrentRequest(request)
@@ -597,8 +620,11 @@ public class Rs2Walker {
             }
 
             int yaw = Rs2Camera.calculateCameraYaw(direction);
+            int yawStep = Rs2Random.nextInt(CAMERA_MIN_YAW_STEP,
+                    CAMERA_MAX_YAW_STEP, 1.0, true);
             if (!WALKING_CAMERA_COORDINATOR.dispatchIfCurrent(
-                    request, WALKING_CAMERA_FINAL_STATE, new WalkingCameraYawUpdate(yaw))) {
+                    request, WALKING_CAMERA_FINAL_STATE,
+                    new WalkingCameraYawUpdate(yaw, yawStep))) {
                 return;
             }
             setPreviousCameraDirectionIfCurrent(request, direction);
@@ -641,16 +667,19 @@ public class Rs2Walker {
     }
 
     private static final class WalkingCameraYawUpdate implements Runnable {
-        private final int yaw;
+        private final int targetYaw;
+        private final int maxStep;
 
-        private WalkingCameraYawUpdate(int yaw) {
-            this.yaw = yaw;
+        private WalkingCameraYawUpdate(int targetYaw, int maxStep) {
+            this.targetYaw = targetYaw;
+            this.maxStep = maxStep;
         }
 
         @Override
         public void run() {
-            // Running on the client thread makes Rs2Camera.setYaw a single target update rather
-            // than its off-thread smoothing loop, so a stale route cannot keep writing the camera.
+            // Rs2Camera's off-thread smoothing can outlive this route. On the client thread it
+            // performs one non-blocking target write, so cap that write to a gentle partial turn.
+            int yaw = boundedCameraYaw(Rs2Camera.getYaw(), targetYaw, maxStep);
             Rs2Camera.setYaw(yaw);
         }
     }

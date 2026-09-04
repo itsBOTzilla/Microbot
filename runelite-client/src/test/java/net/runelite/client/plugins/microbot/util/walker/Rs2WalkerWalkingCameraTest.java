@@ -95,8 +95,68 @@ public class Rs2WalkerWalkingCameraTest
     @Test
     public void onlyMeaningfulTurnsBypassNormalTiming()
     {
+        assertFalse("the initial direction must never bypass startup grace",
+                Rs2Walker.isMeaningfulCameraTurn(-1, 180));
         assertFalse(Rs2Walker.isMeaningfulCameraTurn(10, 30));
         assertTrue(Rs2Walker.isMeaningfulCameraTurn(10, 100));
+    }
+
+    @Test
+    public void startupGraceDefersTheFirstCorrectionUntilItsDeadline()
+    {
+        long start = 1_000L;
+        long deadline = Rs2Walker.walkingCameraDeadlineNanos(start, 6_000);
+
+        assertTrue(Rs2Walker.isWalkingCameraUpdateDeferred(
+                start, deadline, true, Rs2Walker.isMeaningfulCameraTurn(-1, 180)));
+        assertTrue(Rs2Walker.isWalkingCameraUpdateDeferred(
+                deadline - 1L, deadline, true, false));
+        assertFalse(Rs2Walker.isWalkingCameraUpdateDeferred(
+                deadline, deadline, true, false));
+    }
+
+    @Test
+    public void walkStartSamplesAndInstallsTheStartupGrace() throws Exception
+    {
+        MethodNode walkStart = findWalkerMethod("markWalkSessionStart");
+        int sample = invocationIndex(walkStart,
+                net.runelite.client.plugins.microbot.util.math.Rs2Random.class,
+                "logNormalBounded");
+        int deadline = invocationIndex(walkStart, Rs2Walker.class,
+                "walkingCameraDeadlineNanos");
+
+        assertTrue("walk start must sample its grace before installing the deadline",
+                sample >= 0 && sample < deadline);
+    }
+
+    @Test
+    public void cameraCadenceAndCorrectionBoundsAreConservative() throws Exception
+    {
+        int startupMin = walkerIntConstant("CAMERA_MIN_STARTUP_GRACE_MS");
+        int startupMax = walkerIntConstant("CAMERA_MAX_STARTUP_GRACE_MS");
+        int intervalMin = walkerIntConstant("CAMERA_MIN_UPDATE_INTERVAL_MS");
+        int intervalMax = walkerIntConstant("CAMERA_MAX_UPDATE_INTERVAL_MS");
+        int toleranceMin = walkerIntConstant("CAMERA_MIN_TOLERANCE_PERCENT");
+        int toleranceMax = walkerIntConstant("CAMERA_MAX_TOLERANCE_PERCENT");
+        int yawStepMin = walkerIntConstant("CAMERA_MIN_YAW_STEP");
+        int yawStepMax = walkerIntConstant("CAMERA_MAX_YAW_STEP");
+
+        assertTrue(startupMin >= 4_000);
+        assertTrue(startupMax - startupMin >= 2_000);
+        assertTrue(intervalMin >= 7_000);
+        assertTrue(intervalMax - intervalMin >= 4_000);
+        assertTrue(toleranceMin >= 45);
+        assertTrue(toleranceMax > toleranceMin && toleranceMax <= 70);
+        assertTrue(yawStepMin >= 64);
+        assertTrue(yawStepMax > yawStepMin && yawStepMax <= 192);
+    }
+
+    @Test
+    public void yawCorrectionUsesTheShortestBoundedStep()
+    {
+        assertEquals(72, Rs2Walker.boundedCameraYaw(2_000, 100, 120));
+        assertEquals(2_028, Rs2Walker.boundedCameraYaw(100, 2_000, 120));
+        assertEquals(550, Rs2Walker.boundedCameraYaw(500, 550, 120));
     }
 
     @Test
@@ -144,6 +204,8 @@ public class Rs2WalkerWalkingCameraTest
 
         MethodNode clientThreadAction = findWalkerNestedMethod(
                 "WalkingCameraCoordinator$GuardedClientAction.class", "call");
+        MethodNode yawUpdate = findWalkerNestedMethod(
+                "Rs2Walker$WalkingCameraYawUpdate.class", "run");
         int routeGuard = invocationIndex(clientThreadAction,
                 WalkingCameraCoordinator.class, "isCurrentFutureNodeLocked");
         int targetGuard = invocationIndex(clientThreadAction,
@@ -155,6 +217,10 @@ public class Rs2WalkerWalkingCameraTest
                 routeGuard >= 0 && routeGuard < cameraUpdate
                         && targetGuard >= 0 && targetGuard < cameraUpdate
                         && humanGuard >= 0 && humanGuard < cameraUpdate);
+        int currentYaw = invocationIndex(yawUpdate, Rs2Camera.class, "getYaw");
+        int yawWrite = invocationIndex(yawUpdate, Rs2Camera.class, "setYaw");
+        assertTrue("the client-thread update must cap a partial step from the live yaw",
+                currentYaw >= 0 && currentYaw < yawWrite);
     }
 
     @Test
@@ -202,6 +268,13 @@ public class Rs2WalkerWalkingCameraTest
     private static MethodNode findRuntimeMethod(String name) throws Exception
     {
         return findMethod(RuneLiteWebWalkRuntime.class, name, false);
+    }
+
+    private static int walkerIntConstant(String name) throws Exception
+    {
+        java.lang.reflect.Field field = Rs2Walker.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field.getInt(null);
     }
 
     private static MethodNode findWalkerMethod(String name) throws Exception
