@@ -48,6 +48,7 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
     private int lastObservedTick;
     private int pathRemaining;
     private List<WorldPoint> lastRawPath = Collections.emptyList();
+    private long walkingCameraRouteRevision = -1L;
 
     public RuneLiteWebWalkRuntime(WorldPoint target, int arrivalDistance)
     {
@@ -66,9 +67,11 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
     {
         if (!ownsCurrentRoute())
         {
+            stopWalkingCameraRoute();
             return new Observation(lastObservedTick, null, Status.CANCELLED,
                     null, -1, null, -1, false, false);
         }
+        long observedCameraRouteRevision = Rs2Walker.getWalkingCameraRouteRevision();
         ClientSample sample = readClientSample();
         lastObservedTick = sample.tick;
         if (!sample.loggedIn || sample.player == null)
@@ -112,11 +115,13 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         RouteSnapshot route = new RouteSnapshot(routeGeneration, rawPath, walkPath);
         if (Rs2Walker.runtimeArrived(target, arrivalDistance, rawPath, walkPath))
         {
+            stopWalkingCameraRoute();
             return new Observation(sample.tick, sample.player, Status.ARRIVED,
                     route, -1, null, -1, false, sample.runEnabled);
         }
         if (rawPath.isEmpty())
         {
+            stopWalkingCameraRoute();
             return new Observation(sample.tick, sample.player, Status.UNREACHABLE,
                     route, -1, null, -1, false, sample.runEnabled);
         }
@@ -131,10 +136,13 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         }
         if (currentIndex < 0)
         {
+            stopWalkingCameraRoute();
             return new Observation(sample.tick, sample.player, Status.READY,
                     route, -1, null, -1, false, sample.runEnabled);
         }
         lastObservedPathIndex = currentIndex;
+        walkingCameraRouteRevision = Rs2Walker.publishWalkingCameraRoute(
+                rawPath, currentIndex, targetGeneration, observedCameraRouteRevision);
         pathRemaining = Math.max(0, rawPath.size() - currentIndex - 1);
         routeActionIndex = routeActionIndex(rawPath, currentIndex, sample.player, reachable);
         boolean routeActionAvailable = routeActionIndex >= 0;
@@ -198,7 +206,8 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
             WorldPoint lookAhead = Rs2Walker.getCameraLookAhead(
                     lastRawPath, lastObservedPathIndex, player);
             Rs2Walker.updateWalkingCamera(
-                    lookAhead, player, result.getActualTarget(), targetGeneration);
+                    lookAhead, player, result.getActualTarget(), targetGeneration,
+                    walkingCameraRouteRevision);
         }
         return result;
     }
@@ -466,6 +475,10 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
 
     private Observation terminal(ClientSample sample, Status status)
     {
+        if (status != Status.WAITING_FOR_PATH)
+        {
+            stopWalkingCameraRoute();
+        }
         return new Observation(sample.tick, sample.player, status,
                 null, -1, null, -1, false, sample.runEnabled);
     }
@@ -473,6 +486,12 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
     private Observation waiting(ClientSample sample)
     {
         return terminal(sample, Status.WAITING_FOR_PATH);
+    }
+
+    private void stopWalkingCameraRoute()
+    {
+        Rs2Walker.stopWalkingCameraRoute(targetGeneration);
+        walkingCameraRouteRevision = -1L;
     }
 
     static boolean shouldWaitForPathfinder(Pathfinder pathfinder,

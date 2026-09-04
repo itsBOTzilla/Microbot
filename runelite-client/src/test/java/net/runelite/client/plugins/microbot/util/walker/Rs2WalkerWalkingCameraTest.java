@@ -130,33 +130,31 @@ public class Rs2WalkerWalkingCameraTest
     }
 
     @Test
-    public void cameraYawRequiresCurrentActiveRouteWithoutHumanInput()
-    {
-        assertTrue(Rs2Walker.canApplyWalkingCameraYaw(7L, 7L, true, false));
-        assertFalse(Rs2Walker.canApplyWalkingCameraYaw(6L, 7L, true, false));
-        assertFalse(Rs2Walker.canApplyWalkingCameraYaw(7L, 7L, false, false));
-        assertFalse(Rs2Walker.canApplyWalkingCameraYaw(7L, 7L, true, true));
-    }
-
-    @Test
     public void finalYawUpdateIsGuardedInsideOneClientThreadAction() throws Exception
     {
         MethodNode applyUpdate = findWalkerMethod("applyWalkingCameraUpdate");
-        MethodNode setYawIfCurrent = findWalkerMethod("setWalkingCameraYawIfCurrent");
+        MethodNode clientDispatcher = findWalkerNestedMethod(
+                "Rs2Walker$WalkingCameraClientThreadDispatcher.class", "dispatch");
 
         assertEquals("worker must not call the camera setter directly", -1,
                 invocationIndex(applyUpdate, Rs2Camera.class, "setYaw"));
         assertTrue("final yaw update must be dispatched through the client thread",
-                invocationIndex(setYawIfCurrent, ClientThread.class,
+                invocationIndex(clientDispatcher, ClientThread.class,
                         "runOnClientThreadOptional") >= 0);
 
         MethodNode clientThreadAction = findWalkerNestedMethod(
-                "Rs2Walker$WalkingCameraYawUpdate.class", "call");
-        int guard = invocationIndex(clientThreadAction, Rs2Walker.class,
-                "canApplyWalkingCameraYaw");
-        int cameraUpdate = invocationIndex(clientThreadAction, Rs2Camera.class, "setYaw");
-        assertTrue("route and human-input guards must run before the camera update",
-                guard >= 0 && guard < cameraUpdate);
+                "WalkingCameraCoordinator$GuardedClientAction.class", "call");
+        int routeGuard = invocationIndex(clientThreadAction,
+                WalkingCameraCoordinator.class, "isCurrentFutureNode");
+        int targetGuard = invocationIndex(clientThreadAction,
+                WalkingCameraCoordinator.FinalState.class, "isTargetCurrent");
+        int humanGuard = invocationIndex(clientThreadAction,
+                WalkingCameraCoordinator.FinalState.class, "isHumanInput");
+        int cameraUpdate = invocationIndex(clientThreadAction, Runnable.class, "run");
+        assertTrue("route, target, and human-input guards must run before the camera update",
+                routeGuard >= 0 && routeGuard < cameraUpdate
+                        && targetGuard >= 0 && targetGuard < cameraUpdate
+                        && humanGuard >= 0 && humanGuard < cameraUpdate);
     }
 
     @Test
@@ -174,6 +172,24 @@ public class Rs2WalkerWalkingCameraTest
                 acceptedCheck >= 0 && acceptedCheck < clickBookkeeping);
         assertTrue("camera work must begin after click bookkeeping",
                 clickBookkeeping < cameraUpdate);
+    }
+
+    @Test
+    public void routeLifecyclePublishesAndInvalidatesCameraRevision() throws Exception
+    {
+        MethodNode observe = findRuntimeMethod("observe");
+        MethodNode recalculatePath = findWalkerMethod("recalculatePath");
+        MethodNode clearTarget = findWalkerMethod("clearTargetLocked");
+
+        assertTrue("observed paths must publish their camera route revision",
+                invocationIndex(observe, Rs2Walker.class,
+                        "publishWalkingCameraRoute") >= 0);
+        assertTrue("same-target replans must invalidate queued camera work",
+                invocationIndex(recalculatePath, Rs2Walker.class,
+                        "invalidateWalkingCameraRoute") >= 0);
+        assertTrue("walk cancellation must invalidate queued camera work",
+                invocationIndex(clearTarget, Rs2Walker.class,
+                        "invalidateWalkingCameraRoute") >= 0);
     }
 
     private static MethodNode findRuntimeMethod(String name) throws Exception

@@ -89,9 +89,7 @@ import javax.inject.Named;
 import java.awt.*;
 import java.util.*;
 import java.util.List;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
@@ -134,12 +132,16 @@ public class Rs2Walker {
     private static final int CAMERA_MIN_UPDATE_INTERVAL_MS = 2_500;
     private static final int CAMERA_MAX_UPDATE_INTERVAL_MS = 6_500;
     private static final int CAMERA_DIRECTION_UNSET = -1;
-    private static final ExecutorService WALKING_CAMERA_EXECUTOR =
-            Executors.newSingleThreadExecutor(new WalkingCameraThreadFactory());
+    private static final WalkingCameraCoordinator WALKING_CAMERA_COORDINATOR =
+            new WalkingCameraCoordinator(
+                    Executors.newSingleThreadExecutor(new WalkingCameraThreadFactory()),
+                    new WalkingCameraClientThreadDispatcher());
+    private static final WalkingCameraCoordinator.FinalState WALKING_CAMERA_FINAL_STATE =
+            new WalkingCameraFinalState();
     private static final AtomicLong NEXT_CAMERA_UPDATE_NANOS = new AtomicLong();
+    private static final AtomicBoolean WALKING_CAMERA_DEADLINE_SET = new AtomicBoolean();
     private static final AtomicInteger PREVIOUS_CAMERA_DIRECTION =
             new AtomicInteger(CAMERA_DIRECTION_UNSET);
-    private static final AtomicBoolean CAMERA_UPDATE_IN_FLIGHT = new AtomicBoolean();
 
     /**
      * Active Microbot walk destination ({@code null} when no scripted walk). ShortestPath overlay
@@ -164,6 +166,7 @@ public class Rs2Walker {
 
     static long updateCurrentTargetOwnership(WorldPoint target) {
         synchronized (currentTargetOwnershipMutex) {
+            invalidateWalkingCameraRoute();
             return updateCurrentTargetOwnershipLocked(target);
         }
     }
@@ -408,6 +411,7 @@ public class Rs2Walker {
         routeState.firstMovementClickMarked = false;
         synchronized (currentTargetOwnershipMutex) {
             NEXT_CAMERA_UPDATE_NANOS.set(0L);
+            WALKING_CAMERA_DEADLINE_SET.set(false);
             PREVIOUS_CAMERA_DIRECTION.set(CAMERA_DIRECTION_UNSET);
         }
         startupPhasesLogged.clear();
@@ -477,22 +481,45 @@ public class Rs2Walker {
         return best;
     }
 
-    static void updateWalkingCamera(WorldPoint lookAhead, WorldPoint player,
-                                    WorldPoint dispatchedTarget, long targetGeneration) {
-        if (!canScheduleWalkingCamera(lookAhead, player, dispatchedTarget, targetGeneration,
-                getCurrentTargetGeneration(), CAMERA_UPDATE_IN_FLIGHT.get())) {
-            return;
-        }
-        if (!CAMERA_UPDATE_IN_FLIGHT.compareAndSet(false, true)) {
-            return;
-        }
+    static long getWalkingCameraRouteRevision() {
+        return WALKING_CAMERA_COORDINATOR.getRouteRevision();
+    }
 
-        try {
-            WALKING_CAMERA_EXECUTOR.execute(
-                    new WalkingCameraUpdate(lookAhead, targetGeneration));
-        } catch (RuntimeException ignored) {
-            CAMERA_UPDATE_IN_FLIGHT.set(false);
+    static long publishWalkingCameraRoute(List<WorldPoint> path, int currentPathIndex,
+                                          long targetGeneration,
+                                          long expectedRouteRevision) {
+        synchronized (currentTargetOwnershipMutex) {
+            if (currentTarget == null || currentTargetGeneration.get() != targetGeneration) {
+                return -1L;
+            }
+            return WALKING_CAMERA_COORDINATOR.publishRoute(expectedRouteRevision,
+                    targetGeneration, path, currentPathIndex);
         }
+    }
+
+    static void stopWalkingCameraRoute(long targetGeneration) {
+        WALKING_CAMERA_COORDINATOR.stopTravelling(targetGeneration);
+    }
+
+    private static void invalidateWalkingCameraRoute() {
+        WALKING_CAMERA_COORDINATOR.invalidateRoute();
+        WALKING_CAMERA_DEADLINE_SET.set(false);
+    }
+
+    static void updateWalkingCamera(WorldPoint lookAhead, WorldPoint player,
+                                    WorldPoint dispatchedTarget, long targetGeneration,
+                                    long routeRevision) {
+        if (!canScheduleWalkingCamera(lookAhead, player, dispatchedTarget, targetGeneration,
+                getCurrentTargetGeneration(),
+                WALKING_CAMERA_COORDINATOR.isUpdateInFlight())) {
+            return;
+        }
+        WalkingCameraCoordinator.Request request = WALKING_CAMERA_COORDINATOR.request(
+                lookAhead, targetGeneration, routeRevision);
+        if (request == null) {
+            return;
+        }
+        WALKING_CAMERA_COORDINATOR.trySchedule(request, new WalkingCameraUpdate(request));
     }
 
     static boolean canScheduleWalkingCamera(WorldPoint lookAhead, WorldPoint player,
@@ -519,17 +546,27 @@ public class Rs2Walker {
                 >= CAMERA_MEANINGFUL_TURN_DEGREES;
     }
 
-    private static void applyWalkingCameraUpdate(WorldPoint lookAhead, long targetGeneration) {
+    static boolean isWalkingCameraUpdateDeferred(long now, long deadline,
+                                                  boolean deadlineSet,
+                                                  boolean meaningfulTurn) {
+        return deadlineSet && !meaningfulTurn && now - deadline < 0L;
+    }
+
+    private static void applyWalkingCameraUpdate(WalkingCameraCoordinator.Request request) {
         try {
-            if (!isWalkingCameraGenerationCurrent(targetGeneration) || InputArbiter.isHuman()) {
+            if (!WALKING_CAMERA_COORDINATOR.isCurrentRequest(request)
+                    || !isWalkingCameraGenerationCurrent(request.getTargetGeneration())
+                    || InputArbiter.isHuman()) {
                 return;
             }
 
+            WorldPoint lookAhead = request.getLookAhead();
             int direction = Rs2Camera.angleToTile(lookAhead);
             long now = System.nanoTime();
             int previousDirection = PREVIOUS_CAMERA_DIRECTION.get();
             boolean meaningfulTurn = isMeaningfulCameraTurn(previousDirection, direction);
-            if (now < NEXT_CAMERA_UPDATE_NANOS.get() && !meaningfulTurn) {
+            if (isWalkingCameraUpdateDeferred(now, NEXT_CAMERA_UPDATE_NANOS.get(),
+                    WALKING_CAMERA_DEADLINE_SET.get(), meaningfulTurn)) {
                 return;
             }
 
@@ -537,7 +574,8 @@ public class Rs2Walker {
                     CAMERA_MAX_TOLERANCE_PERCENT, 1.0, true);
             Boolean centered = isCameraLookAheadCentered(lookAhead, tolerance);
             if (centered == null
-                    || !isWalkingCameraGenerationCurrent(targetGeneration)
+                    || !WALKING_CAMERA_COORDINATOR.isCurrentRequest(request)
+                    || !isWalkingCameraGenerationCurrent(request.getTargetGeneration())
                     || InputArbiter.isHuman()) {
                 return;
             }
@@ -546,23 +584,22 @@ public class Rs2Walker {
                     CAMERA_MAX_UPDATE_INTERVAL_MS);
             long nextUpdateNanos = System.nanoTime()
                     + TimeUnit.MILLISECONDS.toNanos(intervalMs);
-            if (!setNextCameraUpdateIfCurrent(targetGeneration, nextUpdateNanos)) {
+            if (!setNextCameraUpdateIfCurrent(request, nextUpdateNanos)) {
                 return;
             }
             if (centered) {
-                setPreviousCameraDirectionIfCurrent(targetGeneration, direction);
+                setPreviousCameraDirectionIfCurrent(request, direction);
                 return;
             }
 
             int yaw = Rs2Camera.calculateCameraYaw(direction);
-            if (!setWalkingCameraYawIfCurrent(targetGeneration, yaw)) {
+            if (!WALKING_CAMERA_COORDINATOR.dispatchIfCurrent(
+                    request, WALKING_CAMERA_FINAL_STATE, new WalkingCameraYawUpdate(yaw))) {
                 return;
             }
-            setPreviousCameraDirectionIfCurrent(targetGeneration, direction);
+            setPreviousCameraDirectionIfCurrent(request, direction);
         } catch (RuntimeException ignored) {
             // Camera behavior is optional; walking must continue after any camera failure.
-        } finally {
-            CAMERA_UPDATE_IN_FLIGHT.set(false);
         }
     }
 
@@ -572,61 +609,74 @@ public class Rs2Walker {
         }
     }
 
-    static boolean canApplyWalkingCameraYaw(long targetGeneration, long currentGeneration,
-                                            boolean targetActive, boolean humanInput) {
-        return targetActive && targetGeneration == currentGeneration && !humanInput;
-    }
-
-    private static boolean setWalkingCameraYawIfCurrent(long targetGeneration, int yaw) {
-        return Microbot.getClientThread().runOnClientThreadOptional(
-                new WalkingCameraYawUpdate(targetGeneration, yaw)).orElse(false);
-    }
-
-    private static boolean setNextCameraUpdateIfCurrent(long targetGeneration,
+    private static boolean setNextCameraUpdateIfCurrent(
+                                                         WalkingCameraCoordinator.Request request,
                                                          long nextUpdateNanos) {
         synchronized (currentTargetOwnershipMutex) {
-            if (currentTarget == null || currentTargetGeneration.get() != targetGeneration) {
+            if (currentTarget == null
+                    || currentTargetGeneration.get() != request.getTargetGeneration()
+                    || !WALKING_CAMERA_COORDINATOR.isCurrentRequest(request)) {
                 return false;
             }
             NEXT_CAMERA_UPDATE_NANOS.set(nextUpdateNanos);
+            WALKING_CAMERA_DEADLINE_SET.set(true);
             return true;
         }
     }
 
-    private static void setPreviousCameraDirectionIfCurrent(long targetGeneration,
+    private static void setPreviousCameraDirectionIfCurrent(
+                                                             WalkingCameraCoordinator.Request request,
                                                              int direction) {
         synchronized (currentTargetOwnershipMutex) {
-            if (currentTarget != null && currentTargetGeneration.get() == targetGeneration) {
+            if (currentTarget != null
+                    && currentTargetGeneration.get() == request.getTargetGeneration()
+                    && WALKING_CAMERA_COORDINATOR.isCurrentRequest(request)) {
                 PREVIOUS_CAMERA_DIRECTION.set(direction);
             }
         }
     }
 
-    private static final class WalkingCameraYawUpdate implements Callable<Boolean> {
-        private final long targetGeneration;
+    private static final class WalkingCameraYawUpdate implements Runnable {
         private final int yaw;
 
-        private WalkingCameraYawUpdate(long targetGeneration, int yaw) {
-            this.targetGeneration = targetGeneration;
+        private WalkingCameraYawUpdate(int yaw) {
             this.yaw = yaw;
         }
 
         @Override
-        public Boolean call() {
-            boolean targetActive;
-            long currentGeneration;
-            synchronized (currentTargetOwnershipMutex) {
-                targetActive = currentTarget != null;
-                currentGeneration = currentTargetGeneration.get();
-            }
-            if (!canApplyWalkingCameraYaw(targetGeneration, currentGeneration,
-                    targetActive, InputArbiter.isHuman())) {
-                return false;
-            }
+        public void run() {
             // Running on the client thread makes Rs2Camera.setYaw a single target update rather
             // than its off-thread smoothing loop, so a stale route cannot keep writing the camera.
             Rs2Camera.setYaw(yaw);
-            return true;
+        }
+    }
+
+    private static final class WalkingCameraClientThreadDispatcher
+            implements WalkingCameraCoordinator.ClientThreadDispatcher {
+        @Override
+        public Optional<Boolean> dispatch(java.util.concurrent.Callable<Boolean> action) {
+            if (Microbot.getClientThread() == null) {
+                return Optional.empty();
+            }
+            return Microbot.getClientThread().runOnClientThreadOptional(action);
+        }
+    }
+
+    private static final class WalkingCameraFinalState
+            implements WalkingCameraCoordinator.FinalState {
+        @Override
+        public WorldPoint getPlayerLocation() {
+            return Rs2Player.getWorldLocation();
+        }
+
+        @Override
+        public boolean isTargetCurrent(long targetGeneration) {
+            return isWalkingCameraGenerationCurrent(targetGeneration);
+        }
+
+        @Override
+        public boolean isHumanInput() {
+            return InputArbiter.isHuman();
         }
     }
 
@@ -9120,6 +9170,7 @@ public class Rs2Walker {
         }
         // Must not call setTarget(null)+setTarget(goal): that briefly clears {@link #currentTarget},
         // and processWalk on another thread treats null as cancel (isWalkCancelled).
+        invalidateWalkingCameraRoute();
         Rs2WalkerLifecycleRuntime.applyWalkerDestination(goal);
     }
 
@@ -9172,6 +9223,7 @@ public class Rs2Walker {
     }
 
     private static void clearTargetLocked(String clearReasonWhenNull) {
+        invalidateWalkingCameraRoute();
         updateCurrentTargetOwnershipLocked(null);
         // A completed/cancelled route owns its transport handoff context. Keeping the
         // timestamp alive made an unrelated walk started within 15 seconds inherit
@@ -13435,6 +13487,8 @@ public class Rs2Walker {
                     && worldView.getScene().isInstance()) {
                 localPoint = Rs2LocalPoint.fromWorldInstance(lookAhead);
             }
+            // Do not prefilter with isTileOnScreen: an off-screen future route tile is deliberately
+            // treated as outside the centered tolerance so this optional correction can face it.
             return localPoint == null
                     ? null : Rs2Camera.isTileCenteredOnScreen(localPoint, tolerance);
         }).orElse(null);
@@ -13450,17 +13504,15 @@ public class Rs2Walker {
     }
 
     private static final class WalkingCameraUpdate implements Runnable {
-        private final WorldPoint lookAhead;
-        private final long targetGeneration;
+        private final WalkingCameraCoordinator.Request request;
 
-        private WalkingCameraUpdate(WorldPoint lookAhead, long targetGeneration) {
-            this.lookAhead = lookAhead;
-            this.targetGeneration = targetGeneration;
+        private WalkingCameraUpdate(WalkingCameraCoordinator.Request request) {
+            this.request = request;
         }
 
         @Override
         public void run() {
-            applyWalkingCameraUpdate(lookAhead, targetGeneration);
+            applyWalkingCameraUpdate(request);
         }
     }
 }
