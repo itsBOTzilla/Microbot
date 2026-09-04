@@ -7,9 +7,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.PathfinderConfig;
@@ -176,24 +178,46 @@ public class PathTileOverlayTest
         config.setUsableTeleports(Set.of(teleport));
         int packedStart = WorldPointUtil.packWorldPoint(start);
         ExecutorService executor = Executors.newSingleThreadExecutor();
+        CountDownLatch initialPublication = new CountDownLatch(1);
+        CountDownLatch initialRead = new CountDownLatch(1);
+        CountDownLatch readerLoopStarted = new CountDownLatch(1);
+        CountDownLatch refreshesComplete = new CountDownLatch(1);
         Future<?> refreshes = executor.submit(() ->
         {
-            for (int i = 0; i < 250; i++)
+            try
             {
                 config.refreshTeleports(packedStart, 0);
+                initialPublication.countDown();
+                assertTrue("reader did not observe the initial immutable snapshot",
+                        initialRead.await(5, TimeUnit.SECONDS));
+                assertTrue("reader did not enter the concurrent snapshot loop",
+                        readerLoopStarted.await(5, TimeUnit.SECONDS));
+                for (int i = 0; i < 1_000; i++)
+                {
+                    config.refreshTeleports(packedStart, 0);
+                }
             }
+            finally
+            {
+                refreshesComplete.countDown();
+            }
+            return null;
         });
         try
         {
-            while (!refreshes.isDone())
+            assertTrue("producer did not publish an initial immutable snapshot",
+                    initialPublication.await(5, TimeUnit.SECONDS));
+            int observedSnapshots = assertCoherentSnapshot(config.getTransportVisualizationSnapshot(), teleport);
+            initialRead.countDown();
+            readerLoopStarted.countDown();
+            while (refreshesComplete.getCount() != 0)
             {
-                for (Set<Transport> edges : config.getTransportVisualizationSnapshot().values())
-                {
-                    assertEquals(Set.of(teleport), edges);
-                }
+                observedSnapshots += assertCoherentSnapshot(config.getTransportVisualizationSnapshot(), teleport);
             }
             refreshes.get();
-            Set<Transport> frozen = config.getTransportVisualizationSnapshot().get(start);
+            assertTrue("reader must observe a non-empty producer-published snapshot", observedSnapshots > 0);
+            Map<WorldPoint, Set<Transport>> frozenSnapshot = config.getTransportVisualizationSnapshot();
+            Set<Transport> frozen = frozenSnapshot.get(start);
             assertEquals(Set.of(teleport), frozen);
             try
             {
@@ -203,6 +227,24 @@ public class PathTileOverlayTest
             catch (UnsupportedOperationException expected)
             {
                 // Expected: rendering only receives the producer-published immutable snapshot.
+            }
+            try
+            {
+                frozenSnapshot.put(start, Set.of(teleport));
+                fail("producer snapshot must not retain a mutable transport map");
+            }
+            catch (UnsupportedOperationException expected)
+            {
+                // Expected: the outer producer-published map is immutable too.
+            }
+            try
+            {
+                frozenSnapshot.clear();
+                fail("producer snapshot must not retain a clearable transport map");
+            }
+            catch (UnsupportedOperationException expected)
+            {
+                // Expected: the outer producer-published map is immutable too.
             }
         }
         finally
@@ -258,6 +300,19 @@ public class PathTileOverlayTest
         Method size = snapshot.getClass().getDeclaredMethod("size");
         size.setAccessible(true);
         return (int) size.invoke(snapshot);
+    }
+
+    private static int assertCoherentSnapshot(Map<WorldPoint, Set<Transport>> snapshot, Transport expected)
+    {
+        if (snapshot.isEmpty())
+        {
+            return 0;
+        }
+        for (Set<Transport> edges : snapshot.values())
+        {
+            assertEquals(Set.of(expected), edges);
+        }
+        return 1;
     }
 
     private static void assertTile(Object tile, WorldPoint expectedPoint, int expectedAnchorIndex,

@@ -493,11 +493,8 @@ public class PathfinderConfig {
      */
     private void refreshTransports(WorldPoint target) {
         synchronized (transportUpdateLock) {
-            refreshTransportsLocked(target);
-        }
-    }
-
-    private void refreshTransportsLocked(WorldPoint target) {
+            // Keep cache-miss diagnostics in this method: QuietShortestPathLoggingTest verifies
+            // they remain debug-only without treating a routine cold start as normal-console noise.
         useFairyRings = ShortestPathPlugin.override("useFairyRings", config.useFairyRings())
                 && !QuestState.NOT_STARTED.equals(Rs2Player.getQuestState(Quest.FAIRYTALE_II__CURE_A_QUEEN))
                 && (Rs2Inventory.contains(ItemID.DRAMEN_STAFF, ItemID.LUNAR_MOONCLAN_LIMINAL_STAFF)
@@ -806,6 +803,7 @@ public class PathfinderConfig {
                 .forEach(e -> WebWalkLog.cfg("refresh_transports type {} cnt={} passed={} timeMs={}",
                         e.getKey(), e.getValue()[0], e.getValue()[1], e.getValue()[2] / 1000));
 
+        }
     }
 
     static void addSpellRuneItemIds(Set<Integer> relevantItemIds) {
