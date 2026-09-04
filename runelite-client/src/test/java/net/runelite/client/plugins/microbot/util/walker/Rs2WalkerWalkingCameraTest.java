@@ -144,7 +144,7 @@ public class Rs2WalkerWalkingCameraTest
     }
 
     @Test
-    public void startupCadenceToleranceAndYawBoundsRemainConservative() throws Exception
+    public void startupCadenceToleranceAndMotionBoundsRemainConservative() throws Exception
     {
         assertEquals(5_000, runtimeIntConstant("CAMERA_MIN_STARTUP_GRACE_MS"));
         assertEquals(10_000, runtimeIntConstant("CAMERA_MAX_STARTUP_GRACE_MS"));
@@ -152,8 +152,10 @@ public class Rs2WalkerWalkingCameraTest
         assertEquals(15_000, runtimeIntConstant("CAMERA_MAX_UPDATE_INTERVAL_MS"));
         assertEquals(45, runtimeIntConstant("CAMERA_MIN_TOLERANCE_PERCENT"));
         assertEquals(60, runtimeIntConstant("CAMERA_MAX_TOLERANCE_PERCENT"));
-        assertEquals(96, runtimeIntConstant("CAMERA_MIN_YAW_STEP"));
-        assertEquals(160, runtimeIntConstant("CAMERA_MAX_YAW_STEP"));
+        assertEquals(8, runtimeIntConstant("CAMERA_MIN_MOTION_STEP"));
+        assertEquals(24, runtimeIntConstant("CAMERA_MAX_MOTION_STEP"));
+        assertEquals(40, runtimeIntConstant("CAMERA_MIN_MOTION_DELAY_MS"));
+        assertEquals(70, runtimeIntConstant("CAMERA_MAX_MOTION_DELAY_MS"));
 
         long now = 2_000L;
         assertEquals(now + TimeUnit.SECONDS.toNanos(5),
@@ -168,6 +170,64 @@ public class Rs2WalkerWalkingCameraTest
         assertEquals(72, RuneLiteWebWalkRuntime.boundedCameraYaw(2_000, 100, 120));
         assertEquals(2_028, RuneLiteWebWalkRuntime.boundedCameraYaw(100, 2_000, 120));
         assertEquals(550, RuneLiteWebWalkRuntime.boundedCameraYaw(500, 550, 120));
+    }
+
+    @Test
+    public void smoothMotionUsesSmallProgressiveSteps()
+    {
+        int yaw = 0;
+        int target = 512;
+        int writes = 0;
+
+        while (Math.abs(RuneLiteWebWalkRuntime.shortestCameraYawDelta(yaw, target)) > 2)
+        {
+            int delta = RuneLiteWebWalkRuntime.shortestCameraYawDelta(yaw, target);
+            int step = RuneLiteWebWalkRuntime.cameraMotionStepMagnitude(delta);
+
+            assertTrue(step >= 1);
+            assertTrue(step <= 24);
+            yaw = Math.floorMod(yaw + Integer.signum(delta) * step, 2048);
+            writes++;
+            assertTrue("motion should converge", writes < 100);
+        }
+
+        assertTrue("a quarter turn must be spread across many writes", writes > 10);
+    }
+
+    @Test
+    public void weightedLookAheadHeadingBeginsTurningBeforeCorner()
+    {
+        List<WorldPoint> path = List.of(
+                PLAYER,
+                point(3, 0),
+                point(6, 0),
+                point(6, 3),
+                point(6, 6));
+
+        int direction = RuneLiteWebWalkRuntime.getCameraLookAheadDirection(path, 0, PLAYER);
+
+        assertTrue("heading should have started leaving the straight east leg", direction > 0);
+        assertTrue("heading should not snap directly north", direction < 90);
+    }
+
+    @Test
+    public void weightedLookAheadHeadingStaysStraightOnStraightRoute()
+    {
+        List<WorldPoint> path = List.of(
+                PLAYER,
+                point(3, 0),
+                point(6, 0),
+                point(9, 0));
+
+        assertEquals(0,
+                RuneLiteWebWalkRuntime.getCameraLookAheadDirection(path, 0, PLAYER));
+    }
+
+    @Test
+    public void motionDeltaUsesShortestWraparoundDirection()
+    {
+        assertEquals(148, RuneLiteWebWalkRuntime.shortestCameraYawDelta(2000, 100));
+        assertEquals(-148, RuneLiteWebWalkRuntime.shortestCameraYawDelta(100, 2000));
     }
 
     @Test
@@ -318,6 +378,17 @@ public class Rs2WalkerWalkingCameraTest
 
         assertTrue(accepted >= 0 && accepted < click);
         assertTrue(click < camera);
+    }
+
+    @Test
+    public void walkingCameraUpdateStartsMotionInsteadOfWritingOneShotYaw() throws Exception
+    {
+        MethodNode update = findRuntimeMethod("applyWalkingCameraUpdate");
+        int beginMotion = invocationIndex(update, RuneLiteWebWalkRuntime.class,
+                "beginOrRetargetCameraMotionLocked");
+
+        assertTrue("camera update must hand off to the cancellable motion state machine",
+                beginMotion >= 0);
     }
 
     @Test

@@ -11,10 +11,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
+import java.util.function.IntSupplier;
 import java.util.function.IntPredicate;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
+import java.util.concurrent.CompletableFuture;
 import net.runelite.api.Client;
 import net.runelite.api.Player;
 import net.runelite.api.WorldView;
@@ -55,8 +57,11 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
     private static final int CAMERA_MAX_STARTUP_GRACE_MS = 10_000;
     private static final int CAMERA_MIN_UPDATE_INTERVAL_MS = 8_000;
     private static final int CAMERA_MAX_UPDATE_INTERVAL_MS = 15_000;
-    private static final int CAMERA_MIN_YAW_STEP = 96;
-    private static final int CAMERA_MAX_YAW_STEP = 160;
+    private static final int CAMERA_MIN_MOTION_STEP = 8;
+    private static final int CAMERA_MAX_MOTION_STEP = 24;
+    private static final int CAMERA_MIN_MOTION_DELAY_MS = 40;
+    private static final int CAMERA_MAX_MOTION_DELAY_MS = 70;
+    private static final int CAMERA_MOTION_COMPLETE_TOLERANCE = 2;
     private static final int CAMERA_YAW_UNITS = 2_048;
     private static final int CAMERA_DIRECTION_UNSET = -1;
 
@@ -77,12 +82,17 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
     private final Consumer<Runnable> cameraDispatcher;
     private final Supplier<WorldPoint> cameraPlayer;
     private final BooleanSupplier cameraHumanInput;
+    private final IntSupplier cameraYawReader;
     private final IntConsumer cameraYawWriter;
+    private final CameraStepScheduler cameraStepScheduler;
     private long cameraEpoch;
     private boolean cameraUpdateQueued;
+    private boolean cameraMotionStepQueued;
+    private long cameraMotionScheduleToken;
+    private CameraMotion activeCameraMotion;
     private long nextCameraUpdateNanos;
     private boolean cameraDeadlineSet;
-    private int previousCameraDirection = CAMERA_DIRECTION_UNSET;
+    private boolean cameraCadenceInitialized;
 
     public RuneLiteWebWalkRuntime(WorldPoint target, int arrivalDistance)
     {
@@ -93,7 +103,11 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
     {
         this(target, arrivalDistance, targetGeneration,
                 action -> Microbot.getClientThread().invokeLater(action),
-                Rs2Player::getWorldLocation, InputArbiter::isHuman, Rs2Camera::setYawInstant,
+                Rs2Player::getWorldLocation, InputArbiter::isHuman,
+                Rs2Camera::getYaw, Rs2Camera::setYawInstant,
+                (action, delayMs) -> CompletableFuture
+                        .delayedExecutor(Math.max(0L, delayMs), TimeUnit.MILLISECONDS)
+                        .execute(() -> Microbot.getClientThread().invokeLater(action)),
                 walkingCameraDeadlineNanos(System.nanoTime(),
                         Rs2Random.logNormalBounded(CAMERA_MIN_STARTUP_GRACE_MS,
                                 CAMERA_MAX_STARTUP_GRACE_MS)));
@@ -106,13 +120,30 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
                            IntConsumer cameraYawWriter,
                            long initialCameraDeadlineNanos)
     {
+        this(target, arrivalDistance, targetGeneration, cameraDispatcher, cameraPlayer,
+                cameraHumanInput, Rs2Camera::getYaw, cameraYawWriter,
+                (action, ignoredDelayMs) -> cameraDispatcher.accept(action),
+                initialCameraDeadlineNanos);
+    }
+
+    RuneLiteWebWalkRuntime(WorldPoint target, int arrivalDistance, long targetGeneration,
+                           Consumer<Runnable> cameraDispatcher,
+                           Supplier<WorldPoint> cameraPlayer,
+                           BooleanSupplier cameraHumanInput,
+                           IntSupplier cameraYawReader,
+                           IntConsumer cameraYawWriter,
+                           CameraStepScheduler cameraStepScheduler,
+                           long initialCameraDeadlineNanos)
+    {
         this.target = Objects.requireNonNull(target, "target");
         this.arrivalDistance = Math.max(0, arrivalDistance);
         this.targetGeneration = targetGeneration;
         this.cameraDispatcher = Objects.requireNonNull(cameraDispatcher, "cameraDispatcher");
         this.cameraPlayer = Objects.requireNonNull(cameraPlayer, "cameraPlayer");
         this.cameraHumanInput = Objects.requireNonNull(cameraHumanInput, "cameraHumanInput");
+        this.cameraYawReader = Objects.requireNonNull(cameraYawReader, "cameraYawReader");
         this.cameraYawWriter = Objects.requireNonNull(cameraYawWriter, "cameraYawWriter");
+        this.cameraStepScheduler = Objects.requireNonNull(cameraStepScheduler, "cameraStepScheduler");
         this.nextCameraUpdateNanos = initialCameraDeadlineNanos;
         this.cameraDeadlineSet = true;
     }
@@ -632,6 +663,9 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         cameraEpoch++;
         lastRawPath = Collections.emptyList();
         lastObservedPathIndex = -1;
+        activeCameraMotion = null;
+        cameraMotionStepQueued = false;
+        cameraMotionScheduleToken++;
     }
 
     boolean scheduleWalkingCamera(WorldPoint player, WorldPoint dispatchedTarget)
@@ -694,9 +728,17 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
                     return;
                 }
 
-                int direction = Rs2Camera.angleToTile(request.lookAhead);
+                int direction = getCameraLookAheadDirection(
+                        request.path, request.currentPathIndex, player);
+                if (direction == CAMERA_DIRECTION_UNSET)
+                {
+                    direction = Rs2Camera.angleToTile(request.lookAhead);
+                }
+
                 long now = System.nanoTime();
-                boolean meaningfulTurn = isMeaningfulCameraTurn(previousCameraDirection, direction);
+                int actualDirection = cameraDirectionFromYaw(cameraYawReader.getAsInt());
+                boolean meaningfulTurn = cameraCadenceInitialized
+                        && isMeaningfulCameraTurn(actualDirection, direction);
                 if (isWalkingCameraUpdateDeferred(
                         now, nextCameraUpdateNanos, cameraDeadlineSet, meaningfulTurn))
                 {
@@ -710,15 +752,12 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
                         CAMERA_MAX_UPDATE_INTERVAL_MS);
                 nextCameraUpdateNanos = walkingCameraDeadlineNanos(now, intervalMs);
                 cameraDeadlineSet = true;
+                cameraCadenceInitialized = true;
                 if (!centered)
                 {
-                    int targetYaw = Rs2Camera.calculateCameraYaw(direction);
-                    int maxStep = Rs2Random.nextInt(CAMERA_MIN_YAW_STEP,
-                            CAMERA_MAX_YAW_STEP, 1.0, true);
-                    cameraYawWriter.accept(boundedCameraYaw(
-                            Rs2Camera.getYaw(), targetYaw, maxStep));
+                    beginOrRetargetCameraMotionLocked(
+                            Rs2Camera.calculateCameraYaw(direction), request);
                 }
-                previousCameraDirection = direction;
             }
             catch (RuntimeException ignored)
             {
@@ -727,6 +766,96 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
             finally
             {
                 cameraUpdateQueued = false;
+            }
+        }
+    }
+
+    private void beginOrRetargetCameraMotionLocked(int targetYaw, CameraRequest request)
+    {
+        int normalizedTarget = Math.floorMod(targetYaw, CAMERA_YAW_UNITS);
+        if (activeCameraMotion == null
+                || activeCameraMotion.request.epoch != request.epoch
+                || activeCameraMotion.request.routeSource != request.routeSource)
+        {
+            activeCameraMotion = new CameraMotion(request, normalizedTarget);
+        }
+        else
+        {
+            activeCameraMotion.targetYaw = normalizedTarget;
+        }
+
+        if (!cameraMotionStepQueued)
+        {
+            scheduleCameraMotionStepLocked(0);
+        }
+    }
+
+    private void scheduleCameraMotionStepLocked(int delayMs)
+    {
+        cameraMotionStepQueued = true;
+        long scheduleToken = ++cameraMotionScheduleToken;
+        try
+        {
+            cameraStepScheduler.schedule(() -> applyCameraMotionStep(scheduleToken), delayMs);
+        }
+        catch (RuntimeException ignored)
+        {
+            if (scheduleToken == cameraMotionScheduleToken)
+            {
+                cameraMotionStepQueued = false;
+                activeCameraMotion = null;
+            }
+        }
+    }
+
+    private void applyCameraMotionStep(long scheduleToken)
+    {
+        synchronized (cameraGuard)
+        {
+            if (scheduleToken != cameraMotionScheduleToken)
+            {
+                return;
+            }
+            cameraMotionStepQueued = false;
+            CameraMotion motion = activeCameraMotion;
+            if (motion == null)
+            {
+                return;
+            }
+
+            try
+            {
+                WorldPoint player = cameraPlayer.get();
+                if (!isCameraRequestCurrentLocked(motion.request, player)
+                        || cameraHumanInput.getAsBoolean())
+                {
+                    activeCameraMotion = null;
+                    return;
+                }
+
+                int currentYaw = Math.floorMod(cameraYawReader.getAsInt(), CAMERA_YAW_UNITS);
+                int delta = shortestCameraYawDelta(currentYaw, motion.targetYaw);
+                if (Math.abs(delta) <= CAMERA_MOTION_COMPLETE_TOLERANCE)
+                {
+                    activeCameraMotion = null;
+                    return;
+                }
+
+                int stepMagnitude = cameraMotionStepMagnitude(delta);
+                int nextYaw = Math.floorMod(
+                        currentYaw + Integer.signum(delta) * stepMagnitude, CAMERA_YAW_UNITS);
+                cameraYawWriter.accept(nextYaw);
+
+                if (activeCameraMotion == motion)
+                {
+                    int delayMs = Rs2Random.nextInt(CAMERA_MIN_MOTION_DELAY_MS,
+                            CAMERA_MAX_MOTION_DELAY_MS, 1.0, true);
+                    scheduleCameraMotionStepLocked(delayMs);
+                }
+            }
+            catch (RuntimeException ignored)
+            {
+                activeCameraMotion = null;
             }
         }
     }
@@ -757,6 +886,61 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
             }
         }
         return false;
+    }
+
+    static int getCameraLookAheadDirection(List<WorldPoint> path, int currentPathIndex,
+                                               WorldPoint player)
+    {
+        if (path == null || path.isEmpty() || player == null)
+        {
+            return CAMERA_DIRECTION_UNSET;
+        }
+
+        int startIndex = Math.max(0, currentPathIndex + 1);
+        if (startIndex >= path.size())
+        {
+            return CAMERA_DIRECTION_UNSET;
+        }
+
+        WorldPoint previous = player;
+        double weightedDx = 0.0;
+        double weightedDy = 0.0;
+        int travelled = 0;
+        int weight = 1;
+
+        for (int index = startIndex; index < path.size(); index++)
+        {
+            WorldPoint candidate = path.get(index);
+            if (candidate == null || candidate.getPlane() != player.getPlane())
+            {
+                break;
+            }
+
+            int segmentDistance = previous.distanceTo2D(candidate);
+            travelled += segmentDistance;
+            if (travelled > CAMERA_LOOK_AHEAD_MAX_TILES)
+            {
+                break;
+            }
+
+            int dx = candidate.getX() - previous.getX();
+            int dy = candidate.getY() - previous.getY();
+            if (dx != 0 || dy != 0)
+            {
+                weightedDx += dx * weight;
+                weightedDy += dy * weight;
+                weight++;
+            }
+            previous = candidate;
+        }
+
+        if (weightedDx == 0.0 && weightedDy == 0.0)
+        {
+            return CAMERA_DIRECTION_UNSET;
+        }
+
+        int direction = (int) Math.round(Math.toDegrees(Math.atan2(weightedDy, weightedDx)));
+        return Math.floorMod(direction, 360);
     }
 
     static WorldPoint getCameraLookAhead(List<WorldPoint> path, int currentPathIndex,
@@ -822,6 +1006,13 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         return Math.min(difference, 360 - difference);
     }
 
+    static int cameraDirectionFromYaw(int yaw)
+    {
+        int normalizedYaw = Math.floorMod(yaw, CAMERA_YAW_UNITS);
+        double degrees = (normalizedYaw - 1536) * (360.0 / CAMERA_YAW_UNITS);
+        return Math.floorMod((int) Math.round(degrees), 360);
+    }
+
     static boolean isMeaningfulCameraTurn(int previousDirection, int direction)
     {
         return previousDirection != CAMERA_DIRECTION_UNSET
@@ -841,18 +1032,33 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         return now + TimeUnit.MILLISECONDS.toNanos(Math.max(0, delayMs));
     }
 
-    static int boundedCameraYaw(int currentYaw, int targetYaw, int maxStep)
+    static int shortestCameraYawDelta(int currentYaw, int targetYaw)
     {
         int current = Math.floorMod(currentYaw, CAMERA_YAW_UNITS);
         int target = Math.floorMod(targetYaw, CAMERA_YAW_UNITS);
         int delta = Math.floorMod(target - current, CAMERA_YAW_UNITS);
-        if (delta > CAMERA_YAW_UNITS / 2)
+        return delta > CAMERA_YAW_UNITS / 2 ? delta - CAMERA_YAW_UNITS : delta;
+    }
+
+    static int cameraMotionStepMagnitude(int delta)
+    {
+        int magnitude = Math.abs(delta);
+        if (magnitude <= CAMERA_MOTION_COMPLETE_TOLERANCE)
         {
-            delta -= CAMERA_YAW_UNITS;
+            return magnitude;
         }
+        int proportional = (int) Math.ceil(magnitude * 0.18);
+        return Math.min(magnitude,
+                Math.max(CAMERA_MIN_MOTION_STEP,
+                        Math.min(CAMERA_MAX_MOTION_STEP, proportional)));
+    }
+
+    static int boundedCameraYaw(int currentYaw, int targetYaw, int maxStep)
+    {
+        int delta = shortestCameraYawDelta(currentYaw, targetYaw);
         int stepLimit = Math.max(0, Math.min(maxStep, CAMERA_YAW_UNITS / 2));
         int step = Math.max(-stepLimit, Math.min(stepLimit, delta));
-        return Math.floorMod(current + step, CAMERA_YAW_UNITS);
+        return Math.floorMod(currentYaw + step, CAMERA_YAW_UNITS);
     }
 
     static boolean shouldWaitForPathfinder(Pathfinder pathfinder,
@@ -916,6 +1122,24 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
         int getPathIndex()
         {
             return pathIndex;
+        }
+    }
+
+    @FunctionalInterface
+    interface CameraStepScheduler
+    {
+        void schedule(Runnable action, int delayMs);
+    }
+
+    private static final class CameraMotion
+    {
+        private final CameraRequest request;
+        private int targetYaw;
+
+        private CameraMotion(CameraRequest request, int targetYaw)
+        {
+            this.request = request;
+            this.targetYaw = targetYaw;
         }
     }
 
