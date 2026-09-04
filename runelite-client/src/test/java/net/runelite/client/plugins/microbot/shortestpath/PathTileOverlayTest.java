@@ -2,6 +2,8 @@ package net.runelite.client.plugins.microbot.shortestpath;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -9,6 +11,7 @@ import net.runelite.api.coords.WorldPoint;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.fail;
 
 public class PathTileOverlayTest
@@ -21,11 +24,11 @@ public class PathTileOverlayTest
         List<?> tiles = visualizationTiles(List.of(start, end), Map.of());
 
         assertEquals(5, tiles.size());
-        assertTile(tiles.get(0), start, 0, 1);
-        assertTile(tiles.get(1), new WorldPoint(3201, 3201, 0), -1, 2);
-        assertTile(tiles.get(2), new WorldPoint(3202, 3202, 0), -1, 3);
-        assertTile(tiles.get(3), new WorldPoint(3203, 3202, 0), -1, 4);
-        assertTile(tiles.get(4), end, 1, 5);
+        assertTile(tiles.get(0), start, 0, 0);
+        assertTile(tiles.get(1), new WorldPoint(3201, 3201, 0), -1, 1);
+        assertTile(tiles.get(2), new WorldPoint(3202, 3202, 0), -1, 2);
+        assertTile(tiles.get(3), new WorldPoint(3203, 3202, 0), -1, 3);
+        assertTile(tiles.get(4), end, 1, 4);
     }
 
     @Test
@@ -55,10 +58,10 @@ public class PathTileOverlayTest
                 List.of(start, landing, nextWalkingTile), Map.of(start, Set.of(ship)));
 
         assertEquals(4, tiles.size());
-        assertTile(tiles.get(0), start, 0, 1);
-        assertTile(tiles.get(1), landing, 1, 2);
-        assertTile(tiles.get(2), new WorldPoint(2957, 3143, 0), -1, 3);
-        assertTile(tiles.get(3), nextWalkingTile, 2, 4);
+        assertTile(tiles.get(0), start, 0, 0);
+        assertTile(tiles.get(1), landing, 1, 1);
+        assertTile(tiles.get(2), new WorldPoint(2957, 3143, 0), -1, 2);
+        assertTile(tiles.get(3), nextWalkingTile, 2, 3);
     }
 
     @Test
@@ -70,8 +73,39 @@ public class PathTileOverlayTest
         List<?> tiles = visualizationTiles(List.of(lower, upper), Map.of());
 
         assertEquals(2, tiles.size());
-        assertTile(tiles.get(0), lower, 0, 1);
-        assertTile(tiles.get(1), upper, 1, 2);
+        assertTile(tiles.get(0), lower, 0, 0);
+        assertTile(tiles.get(1), upper, 1, 1);
+    }
+
+    @Test
+    public void visualizationSnapshotIsSharedAndFreezesTransportEdges() throws Exception
+    {
+        WorldPoint start = new WorldPoint(3029, 3217, 0);
+        WorldPoint landing = new WorldPoint(2956, 3143, 0);
+        WorldPoint nextWalkingTile = new WorldPoint(2958, 3143, 0);
+        Set<Transport> liveEdges = new HashSet<>();
+        liveEdges.add(new Transport(start, landing, "ship", TransportType.SHIP, false, 10));
+        Map<WorldPoint, Set<Transport>> liveTransports = new HashMap<>();
+        liveTransports.put(start, liveEdges);
+        List<WorldPoint> anchors = List.of(start, landing, nextWalkingTile);
+
+        List<?> snapshot = visualizationTiles(anchors, liveTransports);
+        assertSame("both overlays must reuse the shared immutable visualization snapshot",
+                snapshot, visualizationTiles(anchors, liveTransports));
+        liveEdges.clear();
+
+        assertSame("rendering must not revisit a live mutable transport edge set", snapshot,
+                visualizationTiles(anchors, liveTransports));
+        assertEquals("the frozen ship edge must remain a boundary in the cached visualization", 4, snapshot.size());
+    }
+
+    @Test
+    public void travelledAndRemainingCountersAreZeroBasedAtBothEnds() throws Exception
+    {
+        assertEquals(0, visualizationCounter(TileCounter.TRAVELLED, 0, 5));
+        assertEquals(4, visualizationCounter(TileCounter.TRAVELLED, 4, 5));
+        assertEquals(4, visualizationCounter(TileCounter.REMAINING, 0, 5));
+        assertEquals(0, visualizationCounter(TileCounter.REMAINING, 4, 5));
     }
 
     private static List<?> visualizationTiles(List<WorldPoint> anchors, Map<WorldPoint, Set<Transport>> transports)
@@ -89,6 +123,15 @@ public class PathTileOverlayTest
         }
         visualizer.setAccessible(true);
         return (List<?>) visualizer.invoke(null, anchors, transports);
+    }
+
+    private static int visualizationCounter(TileCounter counterMode, int displayIndex, int visualizationSize)
+            throws Exception
+    {
+        Method counter = PathTileOverlay.class.getDeclaredMethod(
+                "visualizationCounter", TileCounter.class, int.class, int.class);
+        counter.setAccessible(true);
+        return (int) counter.invoke(null, counterMode, displayIndex, visualizationSize);
     }
 
     private static void assertTile(Object tile, WorldPoint expectedPoint, int expectedAnchorIndex,

@@ -1,11 +1,19 @@
 package net.runelite.client.plugins.microbot.shortestpath;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Method;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import net.runelite.api.coords.WorldPoint;
 import org.junit.Test;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -113,5 +121,49 @@ public class PathMinimapOverlayTest
                 null, origin, destination, Map.of(origin, Set.of(ship)));
 
         assertFalse(walking);
+    }
+
+    @Test
+    public void overlaysRenderTheWalkableAnchorsRatherThanTheRawPath() throws IOException
+    {
+        assertRenderUsesWalkablePath(PathMinimapOverlay.class);
+        assertRenderUsesWalkablePath(PathTileOverlay.class);
+    }
+
+    private static void assertRenderUsesWalkablePath(Class<?> overlayType) throws IOException
+    {
+        AtomicBoolean walkablePathRead = new AtomicBoolean();
+        String pathfinderOwner = Type.getInternalName(
+                net.runelite.client.plugins.microbot.shortestpath.pathfinder.Pathfinder.class);
+        try (InputStream stream = overlayType.getResourceAsStream(overlayType.getSimpleName() + ".class"))
+        {
+            assertTrue("compiled overlay must be available", stream != null);
+            new ClassReader(stream).accept(new ClassVisitor(Opcodes.ASM9)
+            {
+                @Override
+                public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                 String signature, String[] exceptions)
+                {
+                    if (!"render".equals(name))
+                    {
+                        return null;
+                    }
+                    return new MethodVisitor(Opcodes.ASM9)
+                    {
+                        @Override
+                        public void visitMethodInsn(int opcode, String owner, String name, String descriptor,
+                                                    boolean isInterface)
+                        {
+                            if (pathfinderOwner.equals(owner) && "getWalkablePath".equals(name))
+                            {
+                                walkablePathRead.set(true);
+                            }
+                        }
+                    };
+                }
+            }, 0);
+        }
+        assertTrue(overlayType.getSimpleName() + " must expand sparse walkable anchors, not raw path tiles",
+                walkablePathRead.get());
     }
 }

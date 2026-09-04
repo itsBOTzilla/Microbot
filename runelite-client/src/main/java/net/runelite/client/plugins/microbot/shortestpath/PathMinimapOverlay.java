@@ -44,7 +44,7 @@ public class PathMinimapOverlay extends Overlay {
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
         graphics.setClip(plugin.getMinimapClipArea());
 
-        List<WorldPoint> pathPoints = pathfinder.getPath();
+        List<WorldPoint> pathPoints = pathfinder.getWalkablePath();
         Color pathColor = pathfinder.isDone() ? plugin.colourPath : plugin.colourPathCalculating;
         if (!pathPoints.isEmpty()) {
             for (PathVisualization.VisualizationTile tile

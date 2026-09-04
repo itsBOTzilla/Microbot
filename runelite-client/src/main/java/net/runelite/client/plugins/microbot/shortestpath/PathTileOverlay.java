@@ -121,7 +121,7 @@ public class PathTileOverlay extends Overlay {
 
         final Pathfinder pathfinder = ShortestPathPlugin.getPathfinder();
         if (plugin.drawTiles && pathfinder != null) {
-            final List<WorldPoint> path = pathfinder.getPath();
+            final List<WorldPoint> path = pathfinder.getWalkablePath();
 
             int counter = 0;
             if (TileStyle.LINES.equals(plugin.pathStyle)) {
@@ -211,19 +211,23 @@ public class PathTileOverlay extends Overlay {
 
     private void drawVisualizationCounter(Graphics2D graphics, double x, double y,
                                           int displayIndex, int visualizationSize) {
-        if (displayIndex <= 0 || TileCounter.DISABLED.equals(plugin.showTileCounter)) {
+        if (displayIndex < 0 || TileCounter.DISABLED.equals(plugin.showTileCounter)) {
             return;
         }
         int n = plugin.tileCounterStep > 0 ? plugin.tileCounterStep : 1;
-        if (((displayIndex - 1) % n != 0) && displayIndex != visualizationSize) {
+        if ((displayIndex % n != 0) && displayIndex != visualizationSize - 1) {
             return;
         }
-        int counter = TileCounter.REMAINING.equals(plugin.showTileCounter)
-                ? visualizationSize - displayIndex : displayIndex;
+        int counter = visualizationCounter(plugin.showTileCounter, displayIndex, visualizationSize);
         if (n > 1 && counter == 0) {
             return;
         }
         drawCounterText(graphics, x, y, counter);
+    }
+
+    static int visualizationCounter(TileCounter counterMode, int displayIndex, int visualizationSize) {
+        return TileCounter.REMAINING.equals(counterMode)
+                ? visualizationSize - displayIndex - 1 : displayIndex;
     }
 
     private void drawLine(Graphics2D graphics, WorldPoint startLoc, WorldPoint endLoc, Color color, int counter) {
@@ -275,7 +279,7 @@ public class PathTileOverlay extends Overlay {
         if (ShortestPathPlugin.getPathfinder() == null) return;
         if (counter >= 0 && !TileCounter.DISABLED.equals(plugin.showTileCounter)) {
             int n = plugin.tileCounterStep > 0 ? plugin.tileCounterStep : 1;
-            int s = ShortestPathPlugin.getPathfinder().getPath().size();
+            int s = ShortestPathPlugin.getPathfinder().getWalkablePath().size();
             if ((counter % n != 0) && (s != (counter + 1))) {
                 return;
             }

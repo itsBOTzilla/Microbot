@@ -4,6 +4,8 @@ import net.runelite.api.coords.WorldPoint;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -11,6 +13,8 @@ import java.util.Set;
 /** Cache-only expansion of smoothed path anchors for overlay rendering. */
 final class PathVisualization
 {
+    private static volatile CachedVisualization cachedVisualization;
+
     private PathVisualization()
     {
     }
@@ -24,21 +28,46 @@ final class PathVisualization
             return Collections.emptyList();
         }
 
+        CachedVisualization cached = cachedVisualization;
+        if (cached != null && cached.matches(anchors, transports))
+        {
+            return cached.tiles;
+        }
+
+        synchronized (PathVisualization.class)
+        {
+            cached = cachedVisualization;
+            if (cached != null && cached.matches(anchors, transports))
+            {
+                return cached.tiles;
+            }
+
+            Map<WorldPoint, Set<WorldPoint>> transportEdges = snapshotTransportEdges(anchors, transports);
+            List<VisualizationTile> tiles = expandUncached(anchors, transportEdges);
+            cachedVisualization = new CachedVisualization(anchors, transports, transportEdges, tiles);
+            return tiles;
+        }
+    }
+
+    private static List<VisualizationTile> expandUncached(
+            List<WorldPoint> anchors,
+            Map<WorldPoint, Set<WorldPoint>> transportEdges)
+    {
         List<VisualizationTile> tiles = new ArrayList<>();
-        tiles.add(new VisualizationTile(anchors.get(0), 0, 1));
+        tiles.add(new VisualizationTile(anchors.get(0), 0, 0));
         for (int anchorIndex = 1; anchorIndex < anchors.size(); anchorIndex++)
         {
             WorldPoint from = anchors.get(anchorIndex - 1);
             WorldPoint to = anchors.get(anchorIndex);
-            if (shouldRasterizeWalkingSegment(from, to, transports))
+            if (shouldRasterizeFrozenWalkingSegment(from, to, transportEdges))
             {
                 List<WorldPoint> segment = rasterizeWalkingSegment(from, to);
                 for (int i = 1; i + 1 < segment.size(); i++)
                 {
-                    tiles.add(new VisualizationTile(segment.get(i), -1, tiles.size() + 1));
+                    tiles.add(new VisualizationTile(segment.get(i), -1, tiles.size()));
                 }
             }
-            tiles.add(new VisualizationTile(to, anchorIndex, tiles.size() + 1));
+            tiles.add(new VisualizationTile(to, anchorIndex, tiles.size()));
         }
         return List.copyOf(tiles);
     }
@@ -48,27 +77,53 @@ final class PathVisualization
             WorldPoint to,
             Map<WorldPoint, Set<Transport>> transports)
     {
+        return shouldRasterizeFrozenWalkingSegment(from, to,
+                snapshotTransportEdges(List.of(from), transports));
+    }
+
+    private static boolean shouldRasterizeFrozenWalkingSegment(
+            WorldPoint from,
+            WorldPoint to,
+            Map<WorldPoint, Set<WorldPoint>> transportEdges)
+    {
         if (from.getPlane() != to.getPlane())
         {
             return false;
         }
-        if (transports == null)
+        return !transportEdges.getOrDefault(from, Collections.emptySet()).contains(to);
+    }
+
+    private static Map<WorldPoint, Set<WorldPoint>> snapshotTransportEdges(
+            List<WorldPoint> anchors,
+            Map<WorldPoint, Set<Transport>> transports)
+    {
+        if (transports == null || transports.isEmpty())
         {
-            return true;
+            return Collections.emptyMap();
         }
-        Set<Transport> fromTransports = transports.get(from);
-        if (fromTransports == null)
+
+        Map<WorldPoint, Set<WorldPoint>> snapshot = new HashMap<>();
+        for (WorldPoint anchor : anchors)
         {
-            return true;
-        }
-        for (Transport transport : fromTransports)
-        {
-            if (to.equals(transport.getDestination()))
+            Set<Transport> liveEdges = transports.get(anchor);
+            if (liveEdges == null || liveEdges.isEmpty())
             {
-                return false;
+                continue;
+            }
+            Set<WorldPoint> destinations = new HashSet<>();
+            for (Transport transport : liveEdges)
+            {
+                if (transport != null && transport.getDestination() != null)
+                {
+                    destinations.add(transport.getDestination());
+                }
+            }
+            if (!destinations.isEmpty())
+            {
+                snapshot.put(anchor, Set.copyOf(destinations));
             }
         }
-        return true;
+        return snapshot.isEmpty() ? Collections.emptyMap() : Map.copyOf(snapshot);
     }
 
     /**
@@ -123,6 +178,30 @@ final class PathVisualization
         int displayIndex()
         {
             return displayIndex;
+        }
+    }
+
+    private static final class CachedVisualization
+    {
+        private final List<WorldPoint> anchors;
+        private final Map<WorldPoint, Set<Transport>> transports;
+        @SuppressWarnings("unused")
+        private final Map<WorldPoint, Set<WorldPoint>> transportEdges;
+        private final List<VisualizationTile> tiles;
+
+        private CachedVisualization(List<WorldPoint> anchors, Map<WorldPoint, Set<Transport>> transports,
+                                    Map<WorldPoint, Set<WorldPoint>> transportEdges,
+                                    List<VisualizationTile> tiles)
+        {
+            this.anchors = anchors;
+            this.transports = transports;
+            this.transportEdges = transportEdges;
+            this.tiles = tiles;
+        }
+
+        private boolean matches(List<WorldPoint> candidateAnchors, Map<WorldPoint, Set<Transport>> candidateTransports)
+        {
+            return anchors == candidateAnchors && transports == candidateTransports;
         }
     }
 }
