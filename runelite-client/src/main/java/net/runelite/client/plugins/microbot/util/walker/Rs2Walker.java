@@ -90,9 +90,7 @@ import java.awt.*;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.ThreadFactory;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.TimeUnit;
@@ -122,32 +120,6 @@ public class Rs2Walker {
     private static final AtomicLong currentTargetGeneration = new AtomicLong();
     static int nextWalkingDistance = 10;
 
-    private static final int CAMERA_LOOK_AHEAD_MIN_TILES = 6;
-    private static final int CAMERA_LOOK_AHEAD_PREFERRED_TILES = 9;
-    private static final int CAMERA_LOOK_AHEAD_MAX_TILES = 12;
-    private static final int CAMERA_MIN_DISPATCH_DISTANCE_TILES = 8;
-    private static final int CAMERA_MEANINGFUL_TURN_DEGREES = 60;
-    private static final int CAMERA_MIN_TOLERANCE_PERCENT = 45;
-    private static final int CAMERA_MAX_TOLERANCE_PERCENT = 60;
-    private static final int CAMERA_MIN_STARTUP_GRACE_MS = 5_000;
-    private static final int CAMERA_MAX_STARTUP_GRACE_MS = 10_000;
-    private static final int CAMERA_MIN_UPDATE_INTERVAL_MS = 8_000;
-    private static final int CAMERA_MAX_UPDATE_INTERVAL_MS = 15_000;
-    private static final int CAMERA_MIN_YAW_STEP = 96;
-    private static final int CAMERA_MAX_YAW_STEP = 160;
-    private static final int CAMERA_YAW_UNITS = 2_048;
-    private static final int CAMERA_DIRECTION_UNSET = -1;
-    private static final WalkingCameraCoordinator WALKING_CAMERA_COORDINATOR =
-            new WalkingCameraCoordinator(
-                    Executors.newSingleThreadExecutor(new WalkingCameraThreadFactory()),
-                    new WalkingCameraClientThreadDispatcher());
-    private static final WalkingCameraCoordinator.FinalState WALKING_CAMERA_FINAL_STATE =
-            new WalkingCameraFinalState();
-    private static final AtomicLong NEXT_CAMERA_UPDATE_NANOS = new AtomicLong();
-    private static final AtomicBoolean WALKING_CAMERA_DEADLINE_SET = new AtomicBoolean();
-    private static final AtomicInteger PREVIOUS_CAMERA_DIRECTION =
-            new AtomicInteger(CAMERA_DIRECTION_UNSET);
-
     /**
      * Active Microbot walk destination ({@code null} when no scripted walk). ShortestPath overlay
      * must not clear {@link Rs2PathApi#getPathfinder()} while this is non-null — otherwise
@@ -171,7 +143,6 @@ public class Rs2Walker {
 
     static long updateCurrentTargetOwnership(WorldPoint target) {
         synchronized (currentTargetOwnershipMutex) {
-            invalidateWalkingCameraRoute();
             return updateCurrentTargetOwnershipLocked(target);
         }
     }
@@ -414,14 +385,6 @@ public class Rs2Walker {
     private static void markWalkSessionStart(WorldPoint target) {
         routeState.walkSessionStartedAtMs = System.currentTimeMillis();
         routeState.firstMovementClickMarked = false;
-        synchronized (currentTargetOwnershipMutex) {
-            int startupGraceMs = Rs2Random.logNormalBounded(
-                    CAMERA_MIN_STARTUP_GRACE_MS, CAMERA_MAX_STARTUP_GRACE_MS);
-            NEXT_CAMERA_UPDATE_NANOS.set(walkingCameraDeadlineNanos(
-                    System.nanoTime(), startupGraceMs));
-            WALKING_CAMERA_DEADLINE_SET.set(true);
-            PREVIOUS_CAMERA_DIRECTION.set(CAMERA_DIRECTION_UNSET);
-        }
         startupPhasesLogged.clear();
         routeState.lastTransportHandledAtLocation = null;
         routeState.lastTransportOriginLocation = null;
@@ -454,263 +417,6 @@ public class Rs2Walker {
         }
         routeState.firstMovementClickMarked = true;
         WebWalkLog.tmark(phase, System.currentTimeMillis() - startedAt, target, at, detail);
-    }
-
-    static WorldPoint getCameraLookAhead(List<WorldPoint> path, int currentPathIndex,
-                                          WorldPoint player) {
-        if (path == null || path.isEmpty() || player == null) {
-            return null;
-        }
-        int startIndex = Math.max(0, currentPathIndex + 1);
-        if (startIndex >= path.size()) {
-            return null;
-        }
-
-        WorldPoint best = null;
-        int bestDistanceDifference = Integer.MAX_VALUE;
-        for (int index = startIndex; index < path.size(); index++) {
-            WorldPoint candidate = path.get(index);
-            if (candidate == null || candidate.getPlane() != player.getPlane()) {
-                break;
-            }
-            int distance = player.distanceTo2D(candidate);
-            if (distance > CAMERA_LOOK_AHEAD_MAX_TILES) {
-                break;
-            }
-            if (distance < CAMERA_LOOK_AHEAD_MIN_TILES) {
-                continue;
-            }
-            int distanceDifference = Math.abs(distance - CAMERA_LOOK_AHEAD_PREFERRED_TILES);
-            if (distanceDifference <= bestDistanceDifference) {
-                best = candidate;
-                bestDistanceDifference = distanceDifference;
-            }
-        }
-        return best;
-    }
-
-    static long getWalkingCameraRouteRevision() {
-        return WALKING_CAMERA_COORDINATOR.getRouteRevision();
-    }
-
-    static long publishWalkingCameraRoute(List<WorldPoint> path, int currentPathIndex,
-                                          long targetGeneration,
-                                          long expectedRouteRevision,
-                                          Pathfinder routeSource) {
-        synchronized (currentTargetOwnershipMutex) {
-            if (currentTarget == null || currentTargetGeneration.get() != targetGeneration) {
-                return -1L;
-            }
-            return WALKING_CAMERA_COORDINATOR.publishRoute(expectedRouteRevision,
-                    targetGeneration, path, currentPathIndex, routeSource);
-        }
-    }
-
-    static void stopWalkingCameraRoute(long targetGeneration) {
-        WALKING_CAMERA_COORDINATOR.stopTravelling(targetGeneration);
-    }
-
-    private static void invalidateWalkingCameraRoute() {
-        synchronized (currentTargetOwnershipMutex) {
-            WALKING_CAMERA_COORDINATOR.invalidateRoute(
-                    currentTargetGeneration.get(), Rs2PathApi.getPathfinder());
-        }
-    }
-
-    static void updateWalkingCamera(WorldPoint lookAhead, WorldPoint player,
-                                    WorldPoint dispatchedTarget, long targetGeneration,
-                                    long routeRevision) {
-        if (!canScheduleWalkingCamera(lookAhead, player, dispatchedTarget, targetGeneration,
-                getCurrentTargetGeneration(),
-                WALKING_CAMERA_COORDINATOR.isUpdateInFlight())) {
-            return;
-        }
-        WalkingCameraCoordinator.Request request = WALKING_CAMERA_COORDINATOR.request(
-                lookAhead, targetGeneration, routeRevision);
-        if (request == null) {
-            return;
-        }
-        WALKING_CAMERA_COORDINATOR.trySchedule(request, new WalkingCameraUpdate(request));
-    }
-
-    static boolean canScheduleWalkingCamera(WorldPoint lookAhead, WorldPoint player,
-                                            WorldPoint dispatchedTarget, long targetGeneration,
-                                            long currentGeneration, boolean updateInFlight) {
-        return lookAhead != null
-                && player != null
-                && dispatchedTarget != null
-                && lookAhead.getPlane() == player.getPlane()
-                && dispatchedTarget.getPlane() == player.getPlane()
-                && player.distanceTo2D(dispatchedTarget) >= CAMERA_MIN_DISPATCH_DISTANCE_TILES
-                && targetGeneration == currentGeneration
-                && !updateInFlight;
-    }
-
-    static int cameraDirectionDifference(int firstDirection, int secondDirection) {
-        int difference = Math.abs(firstDirection - secondDirection) % 360;
-        return Math.min(difference, 360 - difference);
-    }
-
-    static boolean isMeaningfulCameraTurn(int previousDirection, int direction) {
-        return previousDirection != CAMERA_DIRECTION_UNSET
-                && cameraDirectionDifference(previousDirection, direction)
-                >= CAMERA_MEANINGFUL_TURN_DEGREES;
-    }
-
-    static boolean isWalkingCameraUpdateDeferred(long now, long deadline,
-                                                  boolean deadlineSet,
-                                                  boolean meaningfulTurn) {
-        return deadlineSet && !meaningfulTurn && now - deadline < 0L;
-    }
-
-    static long walkingCameraDeadlineNanos(long now, int delayMs) {
-        return now + TimeUnit.MILLISECONDS.toNanos(Math.max(0, delayMs));
-    }
-
-    static int boundedCameraYaw(int currentYaw, int targetYaw, int maxStep) {
-        int current = Math.floorMod(currentYaw, CAMERA_YAW_UNITS);
-        int target = Math.floorMod(targetYaw, CAMERA_YAW_UNITS);
-        int delta = Math.floorMod(target - current, CAMERA_YAW_UNITS);
-        if (delta > CAMERA_YAW_UNITS / 2) {
-            delta -= CAMERA_YAW_UNITS;
-        }
-        int stepLimit = Math.max(0, Math.min(maxStep, CAMERA_YAW_UNITS / 2));
-        int step = Math.max(-stepLimit, Math.min(stepLimit, delta));
-        return Math.floorMod(current + step, CAMERA_YAW_UNITS);
-    }
-
-    private static void applyWalkingCameraUpdate(WalkingCameraCoordinator.Request request) {
-        try {
-            if (!WALKING_CAMERA_COORDINATOR.isCurrentRequest(request)
-                    || !isWalkingCameraGenerationCurrent(request.getTargetGeneration())
-                    || InputArbiter.isHuman()) {
-                return;
-            }
-
-            WorldPoint lookAhead = request.getLookAhead();
-            int direction = Rs2Camera.angleToTile(lookAhead);
-            long now = System.nanoTime();
-            int previousDirection = PREVIOUS_CAMERA_DIRECTION.get();
-            boolean meaningfulTurn = isMeaningfulCameraTurn(previousDirection, direction);
-            if (isWalkingCameraUpdateDeferred(now, NEXT_CAMERA_UPDATE_NANOS.get(),
-                    WALKING_CAMERA_DEADLINE_SET.get(), meaningfulTurn)) {
-                return;
-            }
-
-            int tolerance = Rs2Random.nextInt(CAMERA_MIN_TOLERANCE_PERCENT,
-                    CAMERA_MAX_TOLERANCE_PERCENT, 1.0, true);
-            Boolean centered = isCameraLookAheadCentered(lookAhead, tolerance);
-            if (centered == null
-                    || !WALKING_CAMERA_COORDINATOR.isCurrentRequest(request)
-                    || !isWalkingCameraGenerationCurrent(request.getTargetGeneration())
-                    || InputArbiter.isHuman()) {
-                return;
-            }
-
-            int intervalMs = Rs2Random.logNormalBounded(CAMERA_MIN_UPDATE_INTERVAL_MS,
-                    CAMERA_MAX_UPDATE_INTERVAL_MS);
-            long nextUpdateNanos = System.nanoTime()
-                    + TimeUnit.MILLISECONDS.toNanos(intervalMs);
-            if (!setNextCameraUpdateIfCurrent(request, nextUpdateNanos)) {
-                return;
-            }
-            if (centered) {
-                setPreviousCameraDirectionIfCurrent(request, direction);
-                return;
-            }
-
-            int yaw = Rs2Camera.calculateCameraYaw(direction);
-            int yawStep = Rs2Random.nextInt(CAMERA_MIN_YAW_STEP,
-                    CAMERA_MAX_YAW_STEP, 1.0, true);
-            if (!WALKING_CAMERA_COORDINATOR.dispatchIfCurrent(
-                    request, WALKING_CAMERA_FINAL_STATE,
-                    new WalkingCameraYawUpdate(yaw, yawStep))) {
-                return;
-            }
-            setPreviousCameraDirectionIfCurrent(request, direction);
-        } catch (RuntimeException ignored) {
-            // Camera behavior is optional; walking must continue after any camera failure.
-        }
-    }
-
-    private static boolean isWalkingCameraGenerationCurrent(long targetGeneration) {
-        synchronized (currentTargetOwnershipMutex) {
-            return currentTarget != null && currentTargetGeneration.get() == targetGeneration;
-        }
-    }
-
-    private static boolean setNextCameraUpdateIfCurrent(
-                                                         WalkingCameraCoordinator.Request request,
-                                                         long nextUpdateNanos) {
-        synchronized (currentTargetOwnershipMutex) {
-            if (currentTarget == null
-                    || currentTargetGeneration.get() != request.getTargetGeneration()
-                    || !WALKING_CAMERA_COORDINATOR.isCurrentRequest(request)) {
-                return false;
-            }
-            NEXT_CAMERA_UPDATE_NANOS.set(nextUpdateNanos);
-            WALKING_CAMERA_DEADLINE_SET.set(true);
-            return true;
-        }
-    }
-
-    private static void setPreviousCameraDirectionIfCurrent(
-                                                             WalkingCameraCoordinator.Request request,
-                                                             int direction) {
-        synchronized (currentTargetOwnershipMutex) {
-            if (currentTarget != null
-                    && currentTargetGeneration.get() == request.getTargetGeneration()
-                    && WALKING_CAMERA_COORDINATOR.isCurrentRequest(request)) {
-                PREVIOUS_CAMERA_DIRECTION.set(direction);
-            }
-        }
-    }
-
-    private static final class WalkingCameraYawUpdate implements Runnable {
-        private final int targetYaw;
-        private final int maxStep;
-
-        private WalkingCameraYawUpdate(int targetYaw, int maxStep) {
-            this.targetYaw = targetYaw;
-            this.maxStep = maxStep;
-        }
-
-        @Override
-        public void run() {
-            // Rs2Camera's off-thread smoothing can outlive this route. On the client thread it
-            // performs one non-blocking target write, so cap that write to a gentle partial turn.
-            int yaw = boundedCameraYaw(Rs2Camera.getYaw(), targetYaw, maxStep);
-            Rs2Camera.setYaw(yaw);
-        }
-    }
-
-    private static final class WalkingCameraClientThreadDispatcher
-            implements WalkingCameraCoordinator.ClientThreadDispatcher {
-        @Override
-        public Optional<Boolean> dispatch(java.util.concurrent.Callable<Boolean> action) {
-            if (Microbot.getClientThread() == null) {
-                return Optional.empty();
-            }
-            return Microbot.getClientThread().runOnClientThreadOptional(action);
-        }
-    }
-
-    private static final class WalkingCameraFinalState
-            implements WalkingCameraCoordinator.FinalState {
-        @Override
-        public WorldPoint getPlayerLocation() {
-            return Rs2Player.getWorldLocation();
-        }
-
-        @Override
-        public boolean isTargetCurrent(long targetGeneration) {
-            return currentTarget != null && currentTargetGeneration.get() == targetGeneration;
-        }
-
-        @Override
-        public boolean isHumanInput() {
-            return InputArbiter.isHuman();
-        }
     }
 
     private static void markStartupPhase(String phase, WorldPoint target, String detail) {
@@ -9203,7 +8909,6 @@ public class Rs2Walker {
         }
         // Must not call setTarget(null)+setTarget(goal): that briefly clears {@link #currentTarget},
         // and processWalk on another thread treats null as cancel (isWalkCancelled).
-        invalidateWalkingCameraRoute();
         Rs2WalkerLifecycleRuntime.applyWalkerDestination(goal);
     }
 
@@ -9256,7 +8961,6 @@ public class Rs2Walker {
     }
 
     private static void clearTargetLocked(String clearReasonWhenNull) {
-        invalidateWalkingCameraRoute();
         updateCurrentTargetOwnershipLocked(null);
         // A completed/cancelled route owns its transport handoff context. Keeping the
         // timestamp alive made an unrelated walk started within 15 seconds inherit
@@ -13507,45 +13211,5 @@ public class Rs2Walker {
                     .orElse(Collections.emptyList()));
         }
         return origins;
-    }
-
-    private static Boolean isCameraLookAheadCentered(WorldPoint lookAhead, int tolerance) {
-        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
-            WorldView worldView = Microbot.getClient().getTopLevelWorldView();
-            if (worldView == null || worldView.getPlane() != lookAhead.getPlane()) {
-                return null;
-            }
-            LocalPoint localPoint = LocalPoint.fromWorld(worldView, lookAhead);
-            if (localPoint == null && worldView.getScene() != null
-                    && worldView.getScene().isInstance()) {
-                localPoint = Rs2LocalPoint.fromWorldInstance(lookAhead);
-            }
-            // Do not prefilter with isTileOnScreen: an off-screen future route tile is deliberately
-            // treated as outside the centered tolerance so this optional correction can face it.
-            return localPoint == null
-                    ? null : Rs2Camera.isTileCenteredOnScreen(localPoint, tolerance);
-        }).orElse(null);
-    }
-
-    private static final class WalkingCameraThreadFactory implements ThreadFactory {
-        @Override
-        public Thread newThread(Runnable runnable) {
-            Thread thread = new Thread(runnable, "microbot-walking-camera");
-            thread.setDaemon(true);
-            return thread;
-        }
-    }
-
-    private static final class WalkingCameraUpdate implements Runnable {
-        private final WalkingCameraCoordinator.Request request;
-
-        private WalkingCameraUpdate(WalkingCameraCoordinator.Request request) {
-            this.request = request;
-        }
-
-        @Override
-        public void run() {
-            applyWalkingCameraUpdate(request);
-        }
     }
 }

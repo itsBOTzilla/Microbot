@@ -1,11 +1,15 @@
 package net.runelite.client.plugins.microbot.util.walker;
 
 import java.io.InputStream;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import net.runelite.api.coords.WorldPoint;
-import net.runelite.client.callback.ClientThread;
-import net.runelite.client.plugins.microbot.util.camera.Rs2Camera;
 import org.junit.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.ClassNode;
@@ -21,272 +25,278 @@ import static org.junit.Assert.assertTrue;
 public class Rs2WalkerWalkingCameraTest
 {
     private static final WorldPoint PLAYER = new WorldPoint(3200, 3200, 0);
+    private static final WorldPoint GOAL = new WorldPoint(3250, 3250, 0);
 
     @Test
     public void nullOrEmptyPathHasNoLookAhead()
     {
-        assertNull(Rs2Walker.getCameraLookAhead(null, 0, PLAYER));
-        assertNull(Rs2Walker.getCameraLookAhead(Collections.emptyList(), 0, PLAYER));
+        assertNull(RuneLiteWebWalkRuntime.getCameraLookAhead(null, 0, PLAYER));
+        assertNull(RuneLiteWebWalkRuntime.getCameraLookAhead(
+                Collections.emptyList(), 0, PLAYER));
     }
 
     @Test
     public void ignoresNodesAtOrBehindCurrentPathIndex()
     {
-        List<WorldPoint> path = List.of(
-                point(9, 0),
-                point(8, 0),
-                PLAYER,
-                point(6, 0));
+        List<WorldPoint> path = List.of(point(9, 0), point(8, 0), PLAYER, point(6, 0));
 
-        assertEquals(point(6, 0), Rs2Walker.getCameraLookAhead(path, 2, PLAYER));
+        assertEquals(point(6, 0),
+                RuneLiteWebWalkRuntime.getCameraLookAhead(path, 2, PLAYER));
     }
 
     @Test
     public void selectsDistanceClosestToNineAndBreaksTiesForward()
     {
         List<WorldPoint> path = List.of(
-                PLAYER,
-                point(6, 0),
-                point(8, 0),
-                point(10, 0),
-                point(12, 0));
+                PLAYER, point(6, 0), point(8, 0), point(10, 0), point(12, 0));
 
-        assertEquals(point(10, 0), Rs2Walker.getCameraLookAhead(path, 0, PLAYER));
+        assertEquals(point(10, 0),
+                RuneLiteWebWalkRuntime.getCameraLookAhead(path, 0, PLAYER));
     }
 
     @Test
     public void planeChangeEndsLookAheadSearch()
     {
         List<WorldPoint> path = List.of(
-                PLAYER,
-                point(6, 0),
-                new WorldPoint(3207, 3200, 1),
-                point(9, 0));
+                PLAYER, point(6, 0), new WorldPoint(3207, 3200, 1), point(9, 0));
 
-        assertEquals(point(6, 0), Rs2Walker.getCameraLookAhead(path, 0, PLAYER));
+        assertEquals(point(6, 0),
+                RuneLiteWebWalkRuntime.getCameraLookAhead(path, 0, PLAYER));
     }
 
     @Test
     public void firstExitFromHorizonPreventsFoldBackSelection()
     {
-        List<WorldPoint> path = List.of(
-                PLAYER,
-                point(6, 0),
-                point(13, 0),
-                point(9, 0));
+        List<WorldPoint> path = List.of(PLAYER, point(6, 0), point(13, 0), point(9, 0));
 
-        assertEquals(point(6, 0), Rs2Walker.getCameraLookAhead(path, 0, PLAYER));
+        assertEquals(point(6, 0),
+                RuneLiteWebWalkRuntime.getCameraLookAhead(path, 0, PLAYER));
+    }
+
+    @Test
+    public void accumulatedRouteHorizonStopsAnEntirelyNearbyUShapeFoldingForward()
+    {
+        List<WorldPoint> path = new ArrayList<>();
+        path.add(PLAYER);
+        for (int x = 1; x <= 9; x++)
+        {
+            path.add(point(x, 0));
+        }
+        for (int y = 1; y <= 6; y++)
+        {
+            path.add(point(9, y));
+        }
+        for (int x = 8; x >= 0; x--)
+        {
+            path.add(point(x, 6));
+        }
+
+        assertEquals(point(9, 3),
+                RuneLiteWebWalkRuntime.getCameraLookAhead(path, 0, PLAYER));
     }
 
     @Test
     public void routeWithNoNodeInLookAheadBandReturnsNull()
     {
-        assertNull(Rs2Walker.getCameraLookAhead(
+        assertNull(RuneLiteWebWalkRuntime.getCameraLookAhead(
                 List.of(PLAYER, point(1, 0), point(5, 0)), 0, PLAYER));
     }
 
     @Test
     public void directionDifferenceWrapsAcrossNorth()
     {
-        assertEquals(10, Rs2Walker.cameraDirectionDifference(355, 5));
-        assertEquals(10, Rs2Walker.cameraDirectionDifference(5, 355));
+        assertEquals(10, RuneLiteWebWalkRuntime.cameraDirectionDifference(355, 5));
+        assertEquals(10, RuneLiteWebWalkRuntime.cameraDirectionDifference(5, 355));
     }
 
     @Test
-    public void onlyMeaningfulTurnsBypassNormalTiming()
+    public void initialDirectionNeverBypassesStartupGrace()
     {
-        assertFalse("the initial direction must never bypass startup grace",
-                Rs2Walker.isMeaningfulCameraTurn(-1, 180));
-        assertFalse(Rs2Walker.isMeaningfulCameraTurn(10, 30));
-        assertTrue(Rs2Walker.isMeaningfulCameraTurn(10, 100));
+        assertFalse(RuneLiteWebWalkRuntime.isMeaningfulCameraTurn(-1, 180));
+        assertFalse(RuneLiteWebWalkRuntime.isMeaningfulCameraTurn(10, 30));
+        assertTrue(RuneLiteWebWalkRuntime.isMeaningfulCameraTurn(10, 100));
     }
 
     @Test
-    public void startupGraceDefersTheFirstCorrectionUntilItsDeadline()
+    public void startupGraceDefersUntilItsDeadlineIncludingNanoTimeZero()
     {
-        long start = 1_000L;
-        long deadline = Rs2Walker.walkingCameraDeadlineNanos(start, 6_000);
+        long deadline = RuneLiteWebWalkRuntime.walkingCameraDeadlineNanos(0L, 6_000);
 
-        assertTrue(Rs2Walker.isWalkingCameraUpdateDeferred(
-                start, deadline, true, Rs2Walker.isMeaningfulCameraTurn(-1, 180)));
-        assertTrue(Rs2Walker.isWalkingCameraUpdateDeferred(
+        assertTrue(RuneLiteWebWalkRuntime.isWalkingCameraUpdateDeferred(
+                0L, deadline, true, false));
+        assertTrue(RuneLiteWebWalkRuntime.isWalkingCameraUpdateDeferred(
                 deadline - 1L, deadline, true, false));
-        assertFalse(Rs2Walker.isWalkingCameraUpdateDeferred(
+        assertFalse(RuneLiteWebWalkRuntime.isWalkingCameraUpdateDeferred(
                 deadline, deadline, true, false));
     }
 
     @Test
-    public void walkStartSamplesAndInstallsTheStartupGrace() throws Exception
+    public void deadlineComparisonSurvivesNanoTimeWraparound()
     {
-        MethodNode walkStart = findWalkerMethod("markWalkSessionStart");
-        int sample = invocationIndex(walkStart,
-                net.runelite.client.plugins.microbot.util.math.Rs2Random.class,
-                "logNormalBounded");
-        int deadline = invocationIndex(walkStart, Rs2Walker.class,
-                "walkingCameraDeadlineNanos");
+        long deadline = Long.MAX_VALUE - 5L;
 
-        assertTrue("walk start must sample its grace before installing the deadline",
-                sample >= 0 && sample < deadline);
+        assertTrue(RuneLiteWebWalkRuntime.isWalkingCameraUpdateDeferred(
+                deadline - 1L, deadline, true, false));
+        assertFalse(RuneLiteWebWalkRuntime.isWalkingCameraUpdateDeferred(
+                Long.MIN_VALUE + 5L, deadline, true, false));
     }
 
     @Test
-    public void cameraCadenceAndCorrectionBoundsAreConservative() throws Exception
+    public void startupCadenceToleranceAndYawBoundsRemainConservative() throws Exception
     {
-        int startupMin = walkerIntConstant("CAMERA_MIN_STARTUP_GRACE_MS");
-        int startupMax = walkerIntConstant("CAMERA_MAX_STARTUP_GRACE_MS");
-        int intervalMin = walkerIntConstant("CAMERA_MIN_UPDATE_INTERVAL_MS");
-        int intervalMax = walkerIntConstant("CAMERA_MAX_UPDATE_INTERVAL_MS");
-        int toleranceMin = walkerIntConstant("CAMERA_MIN_TOLERANCE_PERCENT");
-        int toleranceMax = walkerIntConstant("CAMERA_MAX_TOLERANCE_PERCENT");
-        int yawStepMin = walkerIntConstant("CAMERA_MIN_YAW_STEP");
-        int yawStepMax = walkerIntConstant("CAMERA_MAX_YAW_STEP");
+        assertEquals(5_000, runtimeIntConstant("CAMERA_MIN_STARTUP_GRACE_MS"));
+        assertEquals(10_000, runtimeIntConstant("CAMERA_MAX_STARTUP_GRACE_MS"));
+        assertEquals(8_000, runtimeIntConstant("CAMERA_MIN_UPDATE_INTERVAL_MS"));
+        assertEquals(15_000, runtimeIntConstant("CAMERA_MAX_UPDATE_INTERVAL_MS"));
+        assertEquals(45, runtimeIntConstant("CAMERA_MIN_TOLERANCE_PERCENT"));
+        assertEquals(60, runtimeIntConstant("CAMERA_MAX_TOLERANCE_PERCENT"));
+        assertEquals(96, runtimeIntConstant("CAMERA_MIN_YAW_STEP"));
+        assertEquals(160, runtimeIntConstant("CAMERA_MAX_YAW_STEP"));
 
-        assertEquals(5_000, startupMin);
-        assertEquals(10_000, startupMax);
-        assertEquals(8_000, intervalMin);
-        assertEquals(15_000, intervalMax);
-        assertEquals(45, toleranceMin);
-        assertEquals(60, toleranceMax);
-        assertEquals(96, yawStepMin);
-        assertEquals(160, yawStepMax);
+        long now = 2_000L;
+        assertEquals(now + TimeUnit.SECONDS.toNanos(5),
+                RuneLiteWebWalkRuntime.walkingCameraDeadlineNanos(now, 5_000));
+        assertEquals(now + TimeUnit.SECONDS.toNanos(15),
+                RuneLiteWebWalkRuntime.walkingCameraDeadlineNanos(now, 15_000));
     }
 
     @Test
     public void yawCorrectionUsesTheShortestBoundedStep()
     {
-        assertEquals(72, Rs2Walker.boundedCameraYaw(2_000, 100, 120));
-        assertEquals(2_028, Rs2Walker.boundedCameraYaw(100, 2_000, 120));
-        assertEquals(550, Rs2Walker.boundedCameraYaw(500, 550, 120));
+        assertEquals(72, RuneLiteWebWalkRuntime.boundedCameraYaw(2_000, 100, 120));
+        assertEquals(2_028, RuneLiteWebWalkRuntime.boundedCameraYaw(100, 2_000, 120));
+        assertEquals(550, RuneLiteWebWalkRuntime.boundedCameraYaw(500, 550, 120));
     }
 
     @Test
-    public void rejectedOrShortDispatchCannotScheduleCameraWork()
+    public void schedulingRequiresLongCurrentSamePlaneDispatch()
     {
-        assertFalse(Rs2Walker.canScheduleWalkingCamera(
+        assertFalse(RuneLiteWebWalkRuntime.canScheduleWalkingCamera(
                 point(9, 0), PLAYER, null, 7L, 7L, false));
-        assertFalse(Rs2Walker.canScheduleWalkingCamera(
+        assertFalse(RuneLiteWebWalkRuntime.canScheduleWalkingCamera(
                 point(9, 0), PLAYER, point(7, 0), 7L, 7L, false));
-    }
-
-    @Test
-    public void acceptedLongDispatchCanScheduleCameraWork()
-    {
-        assertTrue(Rs2Walker.canScheduleWalkingCamera(
+        assertFalse(RuneLiteWebWalkRuntime.canScheduleWalkingCamera(
+                point(9, 0), PLAYER, point(8, 0), 6L, 7L, false));
+        assertFalse(RuneLiteWebWalkRuntime.canScheduleWalkingCamera(
+                point(9, 0), PLAYER, point(8, 0), 7L, 7L, true));
+        assertTrue(RuneLiteWebWalkRuntime.canScheduleWalkingCamera(
                 point(9, 0), PLAYER, point(8, 0), 7L, 7L, false));
     }
 
     @Test
-    public void staleGenerationCannotScheduleCameraWork()
+    public void sameTargetReplanSuppressesQueuedYaw() throws Exception
     {
-        assertFalse(Rs2Walker.canScheduleWalkingCamera(
-                point(9, 0), PLAYER, point(8, 0), 6L, 7L, false));
+        try (CameraHarness harness = new CameraHarness())
+        {
+            assertTrue(harness.queue());
+            harness.runtime.invalidateWalkingCameraRoute();
+            harness.runNext();
+
+            assertEquals(0, harness.yawWrites.get());
+        }
     }
 
     @Test
-    public void inFlightUpdatePreventsAnotherCameraWorkItem()
+    public void stopOrCancelSuppressesQueuedYaw() throws Exception
     {
-        assertFalse(Rs2Walker.canScheduleWalkingCamera(
-                point(9, 0), PLAYER, point(8, 0), 7L, 7L, true));
+        try (CameraHarness harness = new CameraHarness())
+        {
+            assertTrue(harness.queue());
+            harness.runtime.stopWalkingCamera();
+            harness.runNext();
+
+            assertEquals(0, harness.yawWrites.get());
+        }
     }
 
     @Test
-    public void finalYawUpdateIsGuardedInsideOneClientThreadAction() throws Exception
+    public void humanTakeoverSuppressesQueuedYaw() throws Exception
     {
-        MethodNode applyUpdate = findWalkerMethod("applyWalkingCameraUpdate");
-        MethodNode clientDispatcher = findWalkerNestedMethod(
-                "Rs2Walker$WalkingCameraClientThreadDispatcher.class", "dispatch");
+        try (CameraHarness harness = new CameraHarness())
+        {
+            assertTrue(harness.queue());
+            harness.human.set(true);
+            harness.runNext();
 
-        assertEquals("worker must not call the camera setter directly", -1,
-                invocationIndex(applyUpdate, Rs2Camera.class, "setYaw"));
-        assertTrue("final yaw update must be dispatched through the client thread",
-                invocationIndex(clientDispatcher, ClientThread.class,
-                        "runOnClientThreadOptional") >= 0);
-
-        MethodNode clientThreadAction = findWalkerNestedMethod(
-                "WalkingCameraCoordinator$GuardedClientAction.class", "call");
-        MethodNode yawUpdate = findWalkerNestedMethod(
-                "Rs2Walker$WalkingCameraYawUpdate.class", "run");
-        int routeGuard = invocationIndex(clientThreadAction,
-                WalkingCameraCoordinator.class, "isCurrentFutureNodeLocked");
-        int targetGuard = invocationIndex(clientThreadAction,
-                WalkingCameraCoordinator.FinalState.class, "isTargetCurrent");
-        int humanGuard = invocationIndex(clientThreadAction,
-                WalkingCameraCoordinator.FinalState.class, "isHumanInput");
-        int cameraUpdate = invocationIndex(clientThreadAction, Runnable.class, "run");
-        assertTrue("route, target, and human-input guards must run before the camera update",
-                routeGuard >= 0 && routeGuard < cameraUpdate
-                        && targetGuard >= 0 && targetGuard < cameraUpdate
-                        && humanGuard >= 0 && humanGuard < cameraUpdate);
-        int currentYaw = invocationIndex(yawUpdate, Rs2Camera.class, "getYaw");
-        int yawWrite = invocationIndex(yawUpdate, Rs2Camera.class, "setYaw");
-        assertTrue("the client-thread update must cap a partial step from the live yaw",
-                currentYaw >= 0 && currentYaw < yawWrite);
+            assertEquals(0, harness.yawWrites.get());
+        }
     }
 
     @Test
-    public void cameraHookRunsOnlyAfterAcceptedClickBookkeeping() throws Exception
+    public void routeProgressPastLookAheadSuppressesQueuedYaw() throws Exception
     {
-        MethodNode dispatchMovement = findRuntimeMethod("dispatchMinimap");
-        int acceptedCheck = invocationIndex(dispatchMovement, WebWalkRuntime.DispatchResult.class,
+        try (CameraHarness harness = new CameraHarness())
+        {
+            assertTrue(harness.queue());
+            harness.runtime.installWalkingCameraRoute(harness.path, 2);
+            harness.runNext();
+
+            assertEquals(0, harness.yawWrites.get());
+        }
+    }
+
+    @Test
+    public void callbackFailureReleasesQueuedGate() throws Exception
+    {
+        try (CameraHarness harness = new CameraHarness())
+        {
+            harness.failPlayerRead.set(true);
+            assertTrue(harness.queue());
+            harness.runNext();
+            harness.failPlayerRead.set(false);
+
+            assertTrue(harness.queue());
+        }
+    }
+
+    @Test
+    public void queuedCallbackBlocksDuplicateWork() throws Exception
+    {
+        try (CameraHarness harness = new CameraHarness())
+        {
+            assertTrue(harness.queue());
+            assertFalse(harness.queue());
+        }
+    }
+
+    @Test
+    public void acceptedDispatchQueuesCameraAfterClickBookkeeping() throws Exception
+    {
+        MethodNode dispatch = findRuntimeMethod("dispatchMinimap");
+        int accepted = invocationIndex(dispatch, WebWalkRuntime.DispatchResult.class,
                 "isAccepted");
-        int clickBookkeeping = invocationIndex(dispatchMovement, Rs2Walker.class,
-                "markFirstMovementClick");
-        int cameraUpdate = invocationIndex(dispatchMovement, Rs2Walker.class,
-                "updateWalkingCamera");
+        int click = invocationIndex(dispatch, Rs2Walker.class, "markFirstMovementClick");
+        int camera = invocationIndex(dispatch, RuneLiteWebWalkRuntime.class,
+                "scheduleWalkingCamera");
 
-        assertTrue("dispatch acceptance must be checked before click bookkeeping",
-                acceptedCheck >= 0 && acceptedCheck < clickBookkeeping);
-        assertTrue("camera work must begin after click bookkeeping",
-                clickBookkeeping < cameraUpdate);
+        assertTrue(accepted >= 0 && accepted < click);
+        assertTrue(click < camera);
     }
 
     @Test
-    public void routeLifecyclePublishesAndInvalidatesCameraRevision() throws Exception
+    public void replanInvalidatesCameraBeforeRestartingPathfinder() throws Exception
     {
-        MethodNode observe = findRuntimeMethod("observe");
-        MethodNode recalculatePath = findWalkerMethod("recalculatePath");
-        MethodNode clearTarget = findWalkerMethod("clearTargetLocked");
-        MethodNode invalidateCamera = findWalkerMethod("invalidateWalkingCameraRoute");
+        MethodNode replan = findRuntimeMethod("replan");
+        int invalidate = invocationIndex(replan, RuneLiteWebWalkRuntime.class,
+                "invalidateWalkingCameraRoute");
+        int recalculate = invocationIndex(replan, Rs2Walker.class, "recalculatePath");
 
-        assertTrue("observed paths must publish their camera route revision",
-                invocationIndex(observe, Rs2Walker.class,
-                        "publishWalkingCameraRoute") >= 0);
-        assertTrue("same-target replans must invalidate queued camera work",
-                invocationIndex(recalculatePath, Rs2Walker.class,
-                        "invalidateWalkingCameraRoute") >= 0);
-        assertTrue("walk cancellation must invalidate queued camera work",
-                invocationIndex(clearTarget, Rs2Walker.class,
-                        "invalidateWalkingCameraRoute") >= 0);
-        int currentPathfinder = invocationIndex(invalidateCamera,
-                Rs2PathApi.class, "getPathfinder");
-        int invalidateRoute = invocationIndex(invalidateCamera,
-                WalkingCameraCoordinator.class, "invalidateRoute");
-        assertTrue("route invalidation must retire the currently installed pathfinder",
-                currentPathfinder >= 0 && currentPathfinder < invalidateRoute);
+        assertTrue(invalidate >= 0 && invalidate < recalculate);
     }
 
-    private static MethodNode findRuntimeMethod(String name) throws Exception
+    private static int runtimeIntConstant(String name) throws Exception
     {
-        return findMethod(RuneLiteWebWalkRuntime.class, name, false);
-    }
-
-    private static int walkerIntConstant(String name) throws Exception
-    {
-        java.lang.reflect.Field field = Rs2Walker.class.getDeclaredField(name);
+        java.lang.reflect.Field field = RuneLiteWebWalkRuntime.class.getDeclaredField(name);
         field.setAccessible(true);
         return field.getInt(null);
     }
 
-    private static MethodNode findWalkerMethod(String name) throws Exception
+    private static MethodNode findRuntimeMethod(String name) throws Exception
     {
-        return findMethod(Rs2Walker.class, name, false);
-    }
-
-    private static MethodNode findWalkerNestedMethod(String resourceName, String name)
-            throws Exception
-    {
-        try (InputStream input = Rs2Walker.class.getResourceAsStream(resourceName)) {
-            assertNotNull(resourceName + " resource missing", input);
+        try (InputStream input = RuneLiteWebWalkRuntime.class.getResourceAsStream(
+                "RuneLiteWebWalkRuntime.class"))
+        {
+            assertNotNull(input);
             ClassNode classNode = new ClassNode();
             new ClassReader(input).accept(classNode, 0);
             return classNode.methods.stream()
@@ -296,29 +306,16 @@ public class Rs2WalkerWalkingCameraTest
         }
     }
 
-    private static MethodNode findMethod(Class<?> owner, String name, boolean prefix)
-            throws Exception
-    {
-        String resourceName = owner.getSimpleName() + ".class";
-        try (InputStream input = owner.getResourceAsStream(resourceName)) {
-            assertNotNull(resourceName + " resource missing", input);
-            ClassNode classNode = new ClassNode();
-            new ClassReader(input).accept(classNode, 0);
-            return classNode.methods.stream()
-                    .filter(method -> prefix ? method.name.startsWith(name)
-                            : method.name.equals(name))
-                    .findFirst()
-                    .orElseThrow(() -> new AssertionError(name + " method missing"));
-        }
-    }
-
     private static int invocationIndex(MethodNode method, Class<?> owner, String name)
     {
         String internalOwner = org.objectweb.asm.Type.getInternalName(owner);
-        for (int index = 0; index < method.instructions.size(); index++) {
-            if (method.instructions.get(index) instanceof MethodInsnNode) {
+        for (int index = 0; index < method.instructions.size(); index++)
+        {
+            if (method.instructions.get(index) instanceof MethodInsnNode)
+            {
                 MethodInsnNode invocation = (MethodInsnNode) method.instructions.get(index);
-                if (invocation.owner.equals(internalOwner) && invocation.name.equals(name)) {
+                if (invocation.owner.equals(internalOwner) && invocation.name.equals(name))
+                {
                     return index;
                 }
             }
@@ -330,5 +327,50 @@ public class Rs2WalkerWalkingCameraTest
     {
         return new WorldPoint(PLAYER.getX() + xOffset, PLAYER.getY() + yOffset,
                 PLAYER.getPlane());
+    }
+
+    private static final class CameraHarness implements AutoCloseable
+    {
+        private final Queue<Runnable> callbacks = new ArrayDeque<>();
+        private final AtomicBoolean human = new AtomicBoolean();
+        private final AtomicBoolean failPlayerRead = new AtomicBoolean();
+        private final AtomicInteger yawWrites = new AtomicInteger();
+        private final List<WorldPoint> path = List.of(
+                PLAYER, point(6, 0), point(9, 0), point(12, 0));
+        private final RuneLiteWebWalkRuntime runtime;
+
+        private CameraHarness()
+        {
+            long generation = Rs2Walker.updateCurrentTargetOwnership(GOAL);
+            runtime = new RuneLiteWebWalkRuntime(GOAL, 0, generation,
+                    callbacks::add,
+                    () ->
+                    {
+                        if (failPlayerRead.get())
+                        {
+                            throw new IllegalStateException("test player read failed");
+                        }
+                        return PLAYER;
+                    },
+                    human::get, ignored -> yawWrites.incrementAndGet(),
+                    System.nanoTime() - 1L);
+            runtime.installWalkingCameraRoute(path, 0);
+        }
+
+        private boolean queue()
+        {
+            return runtime.scheduleWalkingCamera(PLAYER, point(8, 0));
+        }
+
+        private void runNext()
+        {
+            callbacks.remove().run();
+        }
+
+        @Override
+        public void close()
+        {
+            Rs2Walker.clearWalkingRoute("walking-camera-test-cleanup");
+        }
     }
 }
