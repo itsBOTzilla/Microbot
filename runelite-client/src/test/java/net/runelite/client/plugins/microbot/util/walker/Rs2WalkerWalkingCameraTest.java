@@ -309,7 +309,7 @@ public class Rs2WalkerWalkingCameraTest
     @Test
     public void acceptedDispatchQueuesCameraAfterClickBookkeeping() throws Exception
     {
-        MethodNode dispatch = findRuntimeMethod("dispatchMinimap");
+        MethodNode dispatch = findRuntimeMethod("dispatchMovement");
         int accepted = invocationIndex(dispatch, WebWalkRuntime.DispatchResult.class,
                 "isAccepted");
         int click = invocationIndex(dispatch, Rs2Walker.class, "markFirstMovementClick");

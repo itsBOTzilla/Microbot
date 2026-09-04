@@ -524,7 +524,8 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
             boolean catalogEdge = isExecutableCatalogTransportBoundary(path, index, reachable);
             List<WorldPoint> dispatchPath = catalogEdge
                     ? Rs2Walker.catalogTransportDispatchPath(path, index) : path;
-            WorldPoint actionOrigin = dispatchPath == null || dispatchPath.isEmpty()
+            WorldPoint actionOrigin = dispatchPath == path
+                    || dispatchPath == null || dispatchPath.isEmpty()
                     ? from : dispatchPath.get(0);
             int distance = actionOrigin.distanceTo2D(player);
             boolean catalogDoorEdge = catalogEdge
