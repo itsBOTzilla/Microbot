@@ -13,6 +13,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.PathfinderConfig;
 import org.junit.Test;
@@ -181,7 +182,9 @@ public class PathTileOverlayTest
         CountDownLatch initialPublication = new CountDownLatch(1);
         CountDownLatch initialRead = new CountDownLatch(1);
         CountDownLatch readerLoopStarted = new CountDownLatch(1);
+        CountDownLatch inLoopSnapshotRead = new CountDownLatch(1);
         CountDownLatch refreshesComplete = new CountDownLatch(1);
+        AtomicInteger inLoopSnapshotReads = new AtomicInteger();
         Future<?> refreshes = executor.submit(() ->
         {
             try
@@ -192,6 +195,9 @@ public class PathTileOverlayTest
                         initialRead.await(5, TimeUnit.SECONDS));
                 assertTrue("reader did not enter the concurrent snapshot loop",
                         readerLoopStarted.await(5, TimeUnit.SECONDS));
+                config.refreshTeleports(packedStart, 0);
+                assertTrue("reader did not perform a concurrent in-loop snapshot read",
+                        inLoopSnapshotRead.await(5, TimeUnit.SECONDS));
                 for (int i = 0; i < 1_000; i++)
                 {
                     config.refreshTeleports(packedStart, 0);
@@ -207,15 +213,20 @@ public class PathTileOverlayTest
         {
             assertTrue("producer did not publish an initial immutable snapshot",
                     initialPublication.await(5, TimeUnit.SECONDS));
-            int observedSnapshots = assertCoherentSnapshot(config.getTransportVisualizationSnapshot(), teleport);
+            assertEquals(1, assertCoherentSnapshot(config.getTransportVisualizationSnapshot(), teleport));
             initialRead.countDown();
             readerLoopStarted.countDown();
             while (refreshesComplete.getCount() != 0)
             {
-                observedSnapshots += assertCoherentSnapshot(config.getTransportVisualizationSnapshot(), teleport);
+                if (assertCoherentSnapshot(config.getTransportVisualizationSnapshot(), teleport) > 0)
+                {
+                    inLoopSnapshotReads.incrementAndGet();
+                    inLoopSnapshotRead.countDown();
+                }
             }
             refreshes.get();
-            assertTrue("reader must observe a non-empty producer-published snapshot", observedSnapshots > 0);
+            assertTrue("reader must observe a non-empty producer-published snapshot in the concurrent loop",
+                    inLoopSnapshotReads.get() > 0);
             Map<WorldPoint, Set<Transport>> frozenSnapshot = config.getTransportVisualizationSnapshot();
             Set<Transport> frozen = frozenSnapshot.get(start);
             assertEquals(Set.of(teleport), frozen);
