@@ -141,14 +141,14 @@ public class Rs2WalkerWalkingCameraTest
         int yawStepMin = walkerIntConstant("CAMERA_MIN_YAW_STEP");
         int yawStepMax = walkerIntConstant("CAMERA_MAX_YAW_STEP");
 
-        assertTrue(startupMin >= 4_000);
-        assertTrue(startupMax - startupMin >= 2_000);
-        assertTrue(intervalMin >= 7_000);
-        assertTrue(intervalMax - intervalMin >= 4_000);
-        assertTrue(toleranceMin >= 45);
-        assertTrue(toleranceMax > toleranceMin && toleranceMax <= 70);
-        assertTrue(yawStepMin >= 64);
-        assertTrue(yawStepMax > yawStepMin && yawStepMax <= 192);
+        assertEquals(5_000, startupMin);
+        assertEquals(10_000, startupMax);
+        assertEquals(8_000, intervalMin);
+        assertEquals(15_000, intervalMax);
+        assertEquals(45, toleranceMin);
+        assertEquals(60, toleranceMax);
+        assertEquals(96, yawStepMin);
+        assertEquals(160, yawStepMax);
     }
 
     @Test
