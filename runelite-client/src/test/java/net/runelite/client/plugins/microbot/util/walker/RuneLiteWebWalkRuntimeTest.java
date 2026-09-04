@@ -98,7 +98,7 @@ public class RuneLiteWebWalkRuntimeTest
         WorldPoint player = new WorldPoint(3220, 3490, 0);
         WorldPoint foldedFrom = new WorldPoint(3221, 3490, 0);
         WorldPoint doorOrigin = new WorldPoint(3222, 3490, 0);
-        WorldPoint doorDestination = new WorldPoint(3222, 3491, 0);
+        WorldPoint doorDestination = new WorldPoint(3223, 3490, 0);
         List<WorldPoint> foldedPath = List.of(player, foldedFrom, doorDestination);
         PathfinderConfig previousConfig = ShortestPathPlugin.pathfinderConfig;
         PathfinderConfig config = mock(PathfinderConfig.class);
