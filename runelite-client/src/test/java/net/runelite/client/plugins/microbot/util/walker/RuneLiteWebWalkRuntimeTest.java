@@ -40,6 +40,120 @@ import static org.mockito.Mockito.when;
 public class RuneLiteWebWalkRuntimeTest
 {
     @Test
+    public void catalogDoorDoesNotPreemptApproachWhileOriginIsTwoTilesAway()
+    {
+        WorldPoint player = new WorldPoint(3220, 3488, 0);
+        WorldPoint approach = new WorldPoint(3221, 3489, 0);
+        WorldPoint doorOrigin = new WorldPoint(3222, 3490, 0);
+        WorldPoint doorDestination = new WorldPoint(3222, 3491, 0);
+        List<WorldPoint> path = List.of(player, approach, doorOrigin, doorDestination);
+        PathfinderConfig previousConfig = ShortestPathPlugin.pathfinderConfig;
+        PathfinderConfig config = mock(PathfinderConfig.class);
+        java.util.concurrent.ConcurrentHashMap<WorldPoint, Set<Transport>> transports =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        transports.put(doorOrigin, Set.of(new Transport(doorOrigin, doorDestination,
+                "Door", TransportType.TRANSPORT, false, "Open", "Door", 32464)));
+        when(config.getTransports()).thenReturn(transports);
+        try
+        {
+            ShortestPathPlugin.pathfinderConfig = config;
+            assertEquals(-1, RuneLiteWebWalkRuntime.routeActionIndex(path, 0, player,
+                    Set.of(player, approach, doorOrigin)));
+        }
+        finally
+        {
+            ShortestPathPlugin.pathfinderConfig = previousConfig;
+        }
+    }
+
+    @Test
+    public void foldedCatalogDoorEdgeRestoresItsActualTransportOriginForDispatch()
+    {
+        WorldPoint foldedFrom = new WorldPoint(3221, 3490, 0);
+        WorldPoint doorOrigin = new WorldPoint(3222, 3490, 0);
+        WorldPoint doorDestination = new WorldPoint(3222, 3491, 0);
+        List<WorldPoint> foldedPath = List.of(foldedFrom, doorDestination);
+        PathfinderConfig previousConfig = ShortestPathPlugin.pathfinderConfig;
+        PathfinderConfig config = mock(PathfinderConfig.class);
+        java.util.concurrent.ConcurrentHashMap<WorldPoint, Set<Transport>> transports =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        transports.put(doorOrigin, Set.of(new Transport(doorOrigin, doorDestination,
+                "Door", TransportType.TRANSPORT, false, "Open", "Door", 32464)));
+        when(config.getTransports()).thenReturn(transports);
+        try
+        {
+            ShortestPathPlugin.pathfinderConfig = config;
+            assertEquals(List.of(doorOrigin, doorDestination),
+                    Rs2Walker.catalogTransportDispatchPath(foldedPath, 0));
+        }
+        finally
+        {
+            ShortestPathPlugin.pathfinderConfig = previousConfig;
+        }
+    }
+
+    @Test
+    public void foldedDoorFromUnreachableOppositeSideIsNotAnExecutionBoundary()
+    {
+        WorldPoint player = new WorldPoint(3221, 3490, 0);
+        WorldPoint nearSide = new WorldPoint(3222, 3490, 0);
+        WorldPoint oppositeSide = new WorldPoint(3222, 3491, 0);
+        List<WorldPoint> path = List.of(player, nearSide, oppositeSide);
+        PathfinderConfig previousConfig = ShortestPathPlugin.pathfinderConfig;
+        PathfinderConfig config = mock(PathfinderConfig.class);
+        java.util.concurrent.ConcurrentHashMap<WorldPoint, Set<Transport>> transports =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        transports.put(oppositeSide, Set.of(new Transport(oppositeSide, nearSide,
+                "Door", TransportType.TRANSPORT, false, "Open", "Door", 32464)));
+        transports.put(nearSide, Set.of(new Transport(nearSide, oppositeSide,
+                "Door", TransportType.TRANSPORT, false, "Open", "Door", 32464)));
+        when(config.getTransports()).thenReturn(transports);
+        Set<WorldPoint> reachable = Set.of(player, nearSide);
+        try
+        {
+            ShortestPathPlugin.pathfinderConfig = config;
+            assertFalse(RuneLiteWebWalkRuntime.isExecutableCatalogTransportBoundary(
+                    path, 0, reachable));
+            assertEquals(1, RuneLiteWebWalkRuntime.routeActionIndex(path, 0, player, reachable));
+            RuneLiteWebWalkRuntime.ForwardCandidate candidate =
+                    RuneLiteWebWalkRuntime.selectForwardCandidate(path, player, reachable, 12,
+                            index -> RuneLiteWebWalkRuntime.isExecutableCatalogTransportBoundary(
+                                    path, index, reachable));
+            assertEquals(nearSide, candidate.getTarget());
+            assertTrue(RuneLiteWebWalkRuntime.isExecutableCatalogTransportBoundary(
+                    path, 1, reachable));
+        }
+        finally
+        {
+            ShortestPathPlugin.pathfinderConfig = previousConfig;
+        }
+    }
+
+    @Test
+    public void activeMinimapCommandDoesNotThrashToCanvasForSameLogicalTarget()
+    {
+        AtomicInteger canvasCalls = new AtomicInteger();
+        AtomicInteger minimapCalls = new AtomicInteger();
+
+        WebWalkRuntime.DispatchResult result = RuneLiteWebWalkRuntime.dispatchMovementTarget(
+                point(0), point(5), WebWalkRuntime.DispatchMethod.MINIMAP,
+                () -> { },
+                () -> {
+                    canvasCalls.incrementAndGet();
+                    return true;
+                },
+                () -> {
+                    minimapCalls.incrementAndGet();
+                    return WebWalkRuntime.DispatchResult.accepted(point(5));
+                });
+
+        assertTrue(result.isAccepted());
+        assertEquals(WebWalkRuntime.DispatchMethod.MINIMAP, result.getMethod());
+        assertEquals(0, canvasCalls.get());
+        assertEquals(1, minimapCalls.get());
+    }
+
+    @Test
     public void completedPathfinderForPreviousGoalRemainsWaiting()
     {
         WorldPoint previousGoal = new WorldPoint(3096, 9867, 0);
@@ -408,8 +522,8 @@ public class RuneLiteWebWalkRuntimeTest
                 public MethodVisitor visitMethod(int access, String name, String descriptor,
                                                  String signature, String[] exceptions)
                 {
-                    boolean dispatchMethod = name.equals("dispatchMinimap");
-                    boolean dispatchLambda = name.startsWith("lambda$dispatchMinimap$");
+                    boolean dispatchMethod = name.equals("dispatchMovement");
+                    boolean dispatchLambda = name.startsWith("lambda$dispatchMovement$");
                     if (!dispatchMethod && !dispatchLambda)
                     {
                         return null;
@@ -499,8 +613,8 @@ public class RuneLiteWebWalkRuntimeTest
                 public MethodVisitor visitMethod(int access, String name, String descriptor,
                                                  String signature, String[] exceptions)
                 {
-                    boolean movementBoundary = name.equals("dispatchMinimap")
-                            || name.startsWith("lambda$dispatchMinimap$");
+                    boolean movementBoundary = name.equals("dispatchMovement")
+                            || name.startsWith("lambda$dispatchMovement$");
                     boolean routeActionBoundary = name.equals("interactRouteEdge");
                     if (!movementBoundary && !routeActionBoundary)
                     {

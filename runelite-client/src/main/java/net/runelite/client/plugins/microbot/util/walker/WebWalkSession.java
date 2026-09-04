@@ -15,10 +15,16 @@ public final class WebWalkSession
     private List<WorldPoint> rawPath = Collections.emptyList();
     private WorldPoint lastPlayer;
     private int lastPathIndex = -1;
-    private int lastProgressTick = Integer.MIN_VALUE;
+    private int lastObservedProgressTick = Integer.MIN_VALUE;
     private WorldPoint checkpoint;
     private int checkpointPathIndex = -1;
     private int checkpointInitialDistance = -1;
+    private WorldPoint activeTarget;
+    private WebWalkRuntime.DispatchMethod activeMethod = WebWalkRuntime.DispatchMethod.NONE;
+    private int dispatchTick = Integer.MIN_VALUE;
+    private int distanceAtDispatch = -1;
+    private int lastObservedDistance = -1;
+    private int lastProgressTick = Integer.MIN_VALUE;
     private int commandTick = Integer.MIN_VALUE;
     private int redispatchCount;
     private int rejectedDispatchCount;
@@ -79,6 +85,36 @@ public final class WebWalkSession
         return checkpointPathIndex;
     }
 
+    public WorldPoint getActiveTarget()
+    {
+        return activeTarget;
+    }
+
+    public WebWalkRuntime.DispatchMethod getActiveMethod()
+    {
+        return activeMethod;
+    }
+
+    public int getDispatchTick()
+    {
+        return dispatchTick;
+    }
+
+    public int getDistanceAtDispatch()
+    {
+        return distanceAtDispatch;
+    }
+
+    public int getLastObservedDistance()
+    {
+        return lastObservedDistance;
+    }
+
+    public int getLastProgressTick()
+    {
+        return lastProgressTick;
+    }
+
     boolean isCheckpointReached(WorldPoint player, int reachedDistance)
     {
         return checkpoint != null && player != null
@@ -130,7 +166,7 @@ public final class WebWalkSession
         rawPath = route.getRawPath();
         lastPlayer = null;
         lastPathIndex = -1;
-        lastProgressTick = Integer.MIN_VALUE;
+        lastObservedProgressTick = Integer.MIN_VALUE;
         clearPendingCommand();
         noCandidateSinceTick = Integer.MIN_VALUE;
     }
@@ -145,8 +181,9 @@ public final class WebWalkSession
         lastPathIndex = Math.max(lastPathIndex, pathIndex);
         if (!initialized || progressed)
         {
-            lastProgressTick = tick;
+            lastObservedProgressTick = tick;
         }
+        observeActiveTargetDistance(tick, player);
         if (progressed)
         {
             redispatchCount = 0;
@@ -160,15 +197,29 @@ public final class WebWalkSession
     public void recordMinimapDispatch(int tick, WorldPoint requestedTarget, WorldPoint actualTarget,
                                       int pathIndex, boolean redispatch)
     {
+        recordMovementDispatch(tick, requestedTarget, actualTarget, pathIndex, redispatch,
+                WebWalkRuntime.DispatchMethod.MINIMAP);
+    }
+
+    public void recordMovementDispatch(int tick, WorldPoint requestedTarget, WorldPoint actualTarget,
+                                       int pathIndex, boolean redispatch,
+                                       WebWalkRuntime.DispatchMethod method)
+    {
         Objects.requireNonNull(requestedTarget, "requestedTarget");
         checkpoint = Objects.requireNonNull(actualTarget, "actualTarget");
         checkpointPathIndex = pathIndex;
         checkpointInitialDistance = lastPlayer == null || lastPlayer.getPlane() != checkpoint.getPlane()
                 ? -1 : lastPlayer.distanceTo2D(checkpoint);
+        activeTarget = checkpoint;
+        activeMethod = Objects.requireNonNull(method, "method");
+        dispatchTick = tick;
+        distanceAtDispatch = checkpointInitialDistance;
+        lastObservedDistance = checkpointInitialDistance;
+        lastProgressTick = tick;
         commandTick = tick;
-        if (lastProgressTick == Integer.MIN_VALUE)
+        if (lastObservedProgressTick == Integer.MIN_VALUE)
         {
-            lastProgressTick = tick;
+            lastObservedProgressTick = tick;
         }
         redispatchCount = redispatch ? redispatchCount + 1 : 0;
         rejectedDispatchCount = 0;
@@ -251,8 +302,32 @@ public final class WebWalkSession
 
     public int ticksWithoutCommandProgress(int tick)
     {
-        int baseline = Math.max(commandTick, lastProgressTick);
+        int baseline = Math.max(commandTick, lastObservedProgressTick);
         return baseline == Integer.MIN_VALUE ? 0 : Math.max(0, tick - baseline);
+    }
+
+    public int ticksWithoutActiveTargetProgress(int tick)
+    {
+        int baseline = Math.max(dispatchTick, lastProgressTick);
+        return baseline == Integer.MIN_VALUE ? 0 : Math.max(0, tick - baseline);
+    }
+
+    public boolean isActiveTargetNear(WorldPoint player, int distance)
+    {
+        return activeTarget != null && player != null
+                && activeTarget.getPlane() == player.getPlane()
+                && player.distanceTo2D(activeTarget) <= distance;
+    }
+
+    public boolean isActiveMovementHealthy(int tick, boolean moving, int progressTimeoutTicks)
+    {
+        return activeTarget != null && moving
+                && ticksWithoutActiveTargetProgress(tick) <= progressTimeoutTicks;
+    }
+
+    public boolean hasDispatchIntervalElapsed(int tick, int minimumTicks)
+    {
+        return dispatchTick == Integer.MIN_VALUE || tick - dispatchTick >= minimumTicks;
     }
 
     public int ticksWithoutCandidate(int tick)
@@ -277,12 +352,17 @@ public final class WebWalkSession
         rawPath = Collections.emptyList();
         lastPlayer = null;
         lastPathIndex = -1;
-        lastProgressTick = Integer.MIN_VALUE;
+        lastObservedProgressTick = Integer.MIN_VALUE;
         clearPendingCommand();
         noCandidateSinceTick = Integer.MIN_VALUE;
     }
 
     public void clearCheckpoint()
+    {
+        clearMovementCommand();
+    }
+
+    void releaseCheckpoint()
     {
         checkpoint = null;
         checkpointPathIndex = -1;
@@ -291,9 +371,34 @@ public final class WebWalkSession
         redispatchCount = 0;
     }
 
+    private void clearMovementCommand()
+    {
+        releaseCheckpoint();
+        activeTarget = null;
+        activeMethod = WebWalkRuntime.DispatchMethod.NONE;
+        dispatchTick = Integer.MIN_VALUE;
+        distanceAtDispatch = -1;
+        lastObservedDistance = -1;
+        lastProgressTick = Integer.MIN_VALUE;
+    }
+
+    private void observeActiveTargetDistance(int tick, WorldPoint player)
+    {
+        if (activeTarget == null || player == null || activeTarget.getPlane() != player.getPlane())
+        {
+            return;
+        }
+        int distance = player.distanceTo2D(activeTarget);
+        if (lastObservedDistance < 0 || distance < lastObservedDistance)
+        {
+            lastProgressTick = tick;
+        }
+        lastObservedDistance = distance;
+    }
+
     private void clearPendingCommand()
     {
-        clearCheckpoint();
+        clearMovementCommand();
         rejectedDispatchCount = 0;
         routeActionFailureCount = 0;
         routeActionPending = false;

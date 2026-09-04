@@ -36,6 +36,12 @@ public interface WebWalkRuntime
 
     DispatchResult dispatchMinimap(WorldPoint requestedTarget, int pathIndex, boolean redispatch);
 
+    default DispatchResult dispatchMovement(WorldPoint requestedTarget, int pathIndex,
+                                             boolean redispatch, DispatchMethod preferredMethod)
+    {
+        return dispatchMinimap(requestedTarget, pathIndex, redispatch);
+    }
+
     ActionResult interactRouteEdge(Observation observation);
 
     void replan(WebWalkSession session, String reason);
@@ -93,18 +99,27 @@ public interface WebWalkRuntime
         private final int clickPathIndex;
         private final boolean routeActionAvailable;
         private final boolean runEnabled;
+        private final boolean moving;
 
         public Observation(int tick, WorldPoint player, Status status, RouteSnapshot route,
                            int pathIndex, WorldPoint clickTarget, int clickPathIndex,
                            boolean routeActionAvailable)
         {
             this(tick, player, status, route, pathIndex, clickTarget, clickPathIndex,
-                    routeActionAvailable, false);
+                    routeActionAvailable, false, false);
         }
 
         public Observation(int tick, WorldPoint player, Status status, RouteSnapshot route,
                            int pathIndex, WorldPoint clickTarget, int clickPathIndex,
                            boolean routeActionAvailable, boolean runEnabled)
+        {
+            this(tick, player, status, route, pathIndex, clickTarget, clickPathIndex,
+                    routeActionAvailable, runEnabled, false);
+        }
+
+        public Observation(int tick, WorldPoint player, Status status, RouteSnapshot route,
+                           int pathIndex, WorldPoint clickTarget, int clickPathIndex,
+                           boolean routeActionAvailable, boolean runEnabled, boolean moving)
         {
             this.tick = tick;
             this.player = player;
@@ -115,6 +130,7 @@ public interface WebWalkRuntime
             this.clickPathIndex = clickPathIndex;
             this.routeActionAvailable = routeActionAvailable;
             this.runEnabled = runEnabled;
+            this.moving = moving;
         }
 
         public int getTick()
@@ -160,6 +176,11 @@ public interface WebWalkRuntime
         public boolean isRunEnabled()
         {
             return runEnabled;
+        }
+
+        public boolean isMoving()
+        {
+            return moving;
         }
     }
 

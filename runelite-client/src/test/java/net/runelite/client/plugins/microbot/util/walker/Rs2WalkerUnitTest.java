@@ -60,6 +60,62 @@ import static org.mockito.Mockito.when;
 public class Rs2WalkerUnitTest {
 
     @Test
+    public void newWalkClearsPreviousRouteDoorSuppression() throws Exception {
+        Field openedField = Rs2Walker.class.getDeclaredField("recentlyOpenedStationaryDoors");
+        openedField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<WorldPoint, Long> opened = (Map<WorldPoint, Long>) openedField.get(null);
+
+        Field attemptsField = Rs2Walker.class.getDeclaredField("recentDoorAttemptByEdge");
+        attemptsField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<String, Long> attempts = (Map<String, Long>) attemptsField.get(null);
+
+        Field stateField = Rs2Walker.class.getDeclaredField("routeState");
+        stateField.setAccessible(true);
+        WalkerRouteState state = (WalkerRouteState) stateField.get(null);
+
+        WorldPoint door = new WorldPoint(3222, 3491, 0);
+        opened.put(door, System.currentTimeMillis());
+        attempts.put("3222,3490,p0<->3222,3491,p0", System.currentTimeMillis());
+        state.lastDoorAttemptFrom = new WorldPoint(3222, 3490, 0);
+        state.lastDoorAttemptTo = door;
+        state.lastDoorAttemptPlayerPosition = new WorldPoint(3222, 3490, 0);
+        state.lastDoorAttemptAtMs = System.currentTimeMillis();
+        state.nextDoorInteractionAllowedAtMs = System.currentTimeMillis() + 10_000L;
+        Object previousPlayerState = swapMicrobotStatic(
+                "rs2PlayerStateCache", playerStateAt(new WorldPoint(3222, 3491, 0)));
+
+        try {
+            java.lang.reflect.Method start = Rs2Walker.class.getDeclaredMethod(
+                    "markWalkSessionStart", WorldPoint.class);
+            start.setAccessible(true);
+            start.invoke(null, new WorldPoint(3222, 3490, 0));
+
+            assertTrue(opened.isEmpty());
+            assertTrue(attempts.isEmpty());
+            assertNull(state.lastDoorAttemptFrom);
+            assertNull(state.lastDoorAttemptTo);
+            assertNull(state.lastDoorAttemptPlayerPosition);
+            assertEquals(0L, state.lastDoorAttemptAtMs);
+            assertEquals(0L, state.nextDoorInteractionAllowedAtMs);
+        } finally {
+            opened.clear();
+            attempts.clear();
+            state.lastDoorAttemptFrom = null;
+            state.lastDoorAttemptTo = null;
+            state.lastDoorAttemptPlayerPosition = null;
+            swapMicrobotStatic("rs2PlayerStateCache", previousPlayerState);
+        }
+    }
+
+    @Test
+    public void completedPlaneChangeCountsAsStartedBeforeMovementProbe() {
+        assertTrue(Rs2Walker.hasPlaneChangeStarted(1,
+                new WorldPoint(3212, 3472, 0), false, false));
+    }
+
+    @Test
     public void shipNpcActionFallsBackToTravelWhenDestinationLabelIsNotAnNpcAction() {
         String[] captainTobiasActions = {"Talk-to", null, "Travel"};
 
