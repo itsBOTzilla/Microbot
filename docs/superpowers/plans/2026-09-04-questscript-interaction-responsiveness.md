@@ -177,10 +177,10 @@ These are proposed targets, not performance claims. Measure dispatch, not merely
 
 Implementation is complete only when source checks pass, the approved build is qualified, and live handoffs meet the acceptance matrix. If live access/restart is unavailable, report source-tested and staged status explicitly, with live acceptance outstanding. This planning task ends with this document; no source behavior has been changed.
 
-## Execution record � September 4
+## Execution record - September 4
 
 - Implementation branch: `fix/questscript-interaction-responsiveness`, based on fork `origin/main` (`76261375b4`), in the isolated `Microbot-QuestScript-Responsiveness` worktree. The reviewed QuestScript and required full-walker API were already present on fork main. Unrelated dirty source in the primary checkout was preserved.
-- Tasks 1�4: source implementation and deterministic policy/flow, collision, dialogue widget, item-dispatch structure and actual shutdown tests are present. The supplied user logs provide the baseline arrival-to-interaction gaps; no new live baseline session was run.
+- Tasks 1-4: source implementation and deterministic policy/flow, collision, dialogue widget, item-dispatch structure and actual shutdown tests are present. The supplied user logs provide the baseline arrival-to-interaction gaps; no new live baseline session was run.
 - Task 5: focused quest/walker suites, client-thread/queryable guardrails and Checkstyle were run. The scoped NPC lookup repair removed an obsolete guardrail exception; no new exception was added. The build and PR evidence belong in the PR's validation record.
 - Task 6: live matrix remains pending. At qualification discovery there was no running Java game client, no Agent Server listener on port 8081, and no `.agent-token`. The source tests do not prove live NPC index reuse, object variant swaps, input takeover, or latency percentiles.
 - Ruling: use physical scene collision checks for readiness and convert only the full walker's target to template coordinates. This preserves instance safety; a canonical/physical mismatch would suppress nearby interactions.
