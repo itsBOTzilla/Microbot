@@ -8,7 +8,6 @@ import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.Script;
-import net.runelite.client.plugins.microbot.api.tileobject.models.TileObjectType;
 import net.runelite.client.plugins.microbot.questhelper.logic.PiratesTreasure;
 import net.runelite.client.plugins.microbot.questhelper.logic.QuestRegistry;
 import net.runelite.client.plugins.microbot.questhelper.questinfo.QuestHelperQuest;
@@ -35,9 +34,10 @@ import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.shop.Rs2Shop;
 import net.runelite.client.plugins.microbot.util.tile.Rs2Tile;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
+import net.runelite.client.plugins.microbot.util.walker.WalkerState;
+import net.runelite.client.plugins.microbot.util.input.InputArbiter;
 import net.runelite.client.plugins.microbot.util.widget.Rs2Widget;
 import net.runelite.client.plugins.microbot.api.npc.models.Rs2NpcModel;
-import net.runelite.client.plugins.microbot.api.tileobject.Rs2TileObjectQueryable;
 import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
 import net.runelite.client.plugins.microbot.api.tileitem.Rs2TileItemQueryable;
 import net.runelite.client.plugins.microbot.api.tileitem.models.Rs2TileItemModel;
@@ -54,6 +54,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntPredicate;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -62,8 +63,9 @@ import javax.swing.SwingUtilities;
 import org.slf4j.event.Level;
 import net.runelite.api.coords.WorldArea;
 
+@lombok.extern.slf4j.Slf4j
 public class QuestScript extends Script {
-    public static double version = 0.3;
+    public static double version = 0.4;
 
     private static final long MISSING_REQUIREMENT_NOTIFY_INTERVAL_MS = 10_000L;
     private static final Map<Integer, Long> lastMissingRequirementNotice = new HashMap<>();
@@ -79,8 +81,7 @@ public class QuestScript extends Script {
     private static final AtomicBoolean obtainItemsPromptInFlight = new AtomicBoolean(false);
     private static volatile Boolean obtainItemsSessionChoice;
 
-    boolean unreachableTarget = false;
-    int unreachableTargetCheckDist = 1;
+    volatile boolean unreachableTarget = false;
 
     private QuestHelperConfig config;
     private QuestHelperPlugin mQuestPlugin;
@@ -92,16 +93,40 @@ public class QuestScript extends Script {
 
     QuestStep dialogueStartedStep = null;
 
-    /**
-     * Epoch millis at which the post-dialogue cooldown expires. While
-     * {@code System.currentTimeMillis() < dialogueCooldownEndsAt}, the main tick
-     * returns early to avoid re-clicking the quest NPC and interrupting scripted
-     * animations or cutscenes that play between dialogue exchanges. Set on the
-     * transition from in-dialogue to not-in-dialogue; zero means no cooldown.
-     */
-    private long dialogueCooldownEndsAt = 0;
+    private static final AtomicLong interactionResetGeneration = new AtomicLong();
+    private long observedResetGeneration;
+    private final QuestDialogueAdvance dialogueAdvance = new QuestDialogueAdvance();
+    private PendingInteraction pendingInteraction;
+    private long interactionSequence;
+    private long targetReadyAt;
+    private QuestStep lastCustomStep;
+    private long nextCustomAttemptAt;
+    private boolean customActionPending;
 
+    private static WorldPoint scenePlayerLocation() {
+        Player player = Microbot.getClient().getLocalPlayer();
+        return player == null ? null : player.getWorldLocation();
+    }
 
+    private WorldPoint routeLocation(WorldPoint scenePoint) {
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            LocalPoint local = LocalPoint.fromWorld(Microbot.getClient().getTopLevelWorldView(), scenePoint);
+            return local == null ? null : WorldPoint.fromLocalInstance(Microbot.getClient(), local);
+        }).orElse(null);
+    }
+
+    private boolean isSceneTileWalkable(WorldPoint point) {
+        WorldView view = Microbot.getClient().getTopLevelWorldView();
+        LocalPoint local = LocalPoint.fromWorld(view, point);
+        if (local == null || view.getCollisionMaps() == null || point.getPlane() != view.getPlane()) return false;
+        CollisionData map = view.getCollisionMaps()[point.getPlane()];
+        if (map == null) return false;
+        int[][] flags = map.getFlags();
+        int x = local.getSceneX();
+        int y = local.getSceneY();
+        return x >= 0 && x < flags.length && y >= 0 && y < flags[x].length
+                && (flags[x][y] & CollisionDataFlag.BLOCK_MOVEMENT_FULL) == 0;
+    }
 
     public boolean run(QuestHelperConfig config, QuestHelperPlugin mQuestPlugin) {
         this.config = config;
@@ -110,15 +135,28 @@ public class QuestScript extends Script {
 
         mainScheduledFuture = scheduledExecutorService.scheduleWithFixedDelay(() -> {
             try {
-                if (!config.startStopQuestHelper()) return;
-                if (!Microbot.isLoggedIn()) return;
-                if (!super.run()) return;
-                if (getQuestHelperPlugin().getSelectedQuest() == null) return;
+                if (!config.startStopQuestHelper() || !Microbot.isLoggedIn() || !super.run()) {
+                    clearInteractionState();
+                    return;
+                }
+                if (getQuestHelperPlugin().getSelectedQuest() == null) {
+                    clearInteractionState();
+                    return;
+                }
 
-                if (Rs2Player.isAnimating())
-                    Rs2Player.waitForAnimation();
+                if (observedResetGeneration != interactionResetGeneration.get()) {
+                    clearInteractionState();
+                    observedResetGeneration = interactionResetGeneration.get();
+                }
 
                 QuestStep questStep = getQuestHelperPlugin().getSelectedQuest().getCurrentStep().getActiveStep();
+                if (questStep == null) {
+                    clearInteractionState();
+                    return;
+                }
+
+                observePendingInteraction(questStep);
+                if (Microbot.getVarbitValue(4606) > 0) return;
 
                 if (Rs2Dialogue.isInDialogue() && dialogueStartedStep == null)
                     dialogueStartedStep = questStep;
@@ -136,12 +174,16 @@ public class QuestScript extends Script {
 
                         for (var dialogChoice : dialogChoices) {
                             if (dialogChoice.getText().endsWith(choice.getChoice())) {
-                                Rs2Keyboard.keyPress(dialogChoice.getOnKeyListener()[7].toString().charAt(0));
+                                if (allowDialogueAdvance()) {
+                                    Rs2Keyboard.keyPress(dialogChoice.getOnKeyListener()[7].toString().charAt(0));
+                                }
                                 return;
                             }
                         }
                     }
                 }
+
+                if (!Rs2Dialogue.isInDialogue() && (pendingInteraction != null || Rs2Player.isAnimating())) return;
 
                 if (questStep != null && !questStep.getWidgetsToHighlight().isEmpty()) {
                     var visibleWidgetHighlights = questStep.getWidgetsToHighlight().stream()
@@ -214,22 +256,14 @@ public class QuestScript extends Script {
                     }
                 }
 
-                /**
-                 * Execute custom logic for the quest
-                 */
-                var questLogic = QuestRegistry.getQuest(getQuestHelperPlugin().getSelectedQuest().getQuest().getId());
-                if (questLogic instanceof PiratesTreasure) {
-                    ((PiratesTreasure) questLogic).setMQuestPlugin(mQuestPlugin);
-                }
-                if (questLogic != null) {
-                    if (!questLogic.executeCustomLogic()) {
-                        return;
-                    }
-                }
+                boolean dialogueAdvanceReserved = Rs2Dialogue.isInDialogue();
+                if (dialogueAdvanceReserved && !QuestInteractionFlow.allowGenericDialogue(
+                        this::allowDialogueAdvance, this::executeQuestCustomLogic)) return;
 
                 if (getQuestHelperPlugin().getSelectedQuest() != null && !Microbot.getClientThread().runOnClientThreadOptional(() ->
                         getQuestHelperPlugin().getSelectedQuest().isCompleted()).orElse(null)) {
                     if (Rs2Widget.isWidgetVisible(ComponentID.DIALOG_OPTION_OPTIONS) && getQuestHelperPlugin().getSelectedQuest().getQuest().getId() != Quest.COOKS_ASSISTANT.getId() && !Rs2Bank.isOpen()) {
+                        if (!dialogueAdvanceReserved && !allowDialogueAdvance()) return;
                         boolean hasOption = Rs2Dialogue.handleQuestOptionDialogueSelection();
                         //if there is no quest option in the dialogue, just click player location to remove
                         // the dialogue to avoid getting stuck in an infinite loop of dialogues
@@ -261,19 +295,19 @@ public class QuestScript extends Script {
                     }
 
                     if (Rs2Dialogue.isInDialogue() && dialogueStartedStep == questStep) {
-                        Rs2Walker.clearWalkingRoute("quest-helper:dialogue-space-step");
-                        Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
+                        if (Rs2Dialogue.hasContinue() && (dialogueAdvanceReserved || allowDialogueAdvance())) {
+                            Rs2Walker.clearWalkingRoute("quest-helper:dialogue-space-step");
+                            Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
+                        }
                         return;
                     } else {
-                        if (dialogueStartedStep != null) {
-                            dialogueCooldownEndsAt = System.currentTimeMillis() + Rs2Random.between(4000, 7000);
-                        }
                         dialogueStartedStep = null;
+                        if (!Rs2Dialogue.isInDialogue()) dialogueAdvance.reset();
                     }
 
-                    if (System.currentTimeMillis() < dialogueCooldownEndsAt) {
-                        return;
-                    }
+                    if (pendingInteraction != null || Rs2Player.isAnimating()) return;
+
+                    if (!runIdleCustomLogic(questStep)) return;
 
                     boolean isInCutscene = Microbot.getVarbitValue(4606) > 0;
                     if (isInCutscene) {
@@ -317,15 +351,17 @@ public class QuestScript extends Script {
                         applyPuzzleStep((PuzzleStep) getQuestHelperPlugin().getSelectedQuest().getCurrentStep());
                     }
 
-                    sleepUntil(() -> Rs2Player.isInteracting() || Rs2Player.isMoving() || Rs2Player.isAnimating() || Rs2Dialogue.isInDialogue(), 500);
-                    sleepUntil(() -> !Rs2Player.isInteracting() && !Rs2Player.isMoving() && !Rs2Player.isAnimating());
+                    if (!(questStep instanceof NpcStep) && !(questStep instanceof ObjectStep)) {
+                        sleepUntil(() -> Rs2Player.isInteracting() || Rs2Player.isMoving() || Rs2Player.isAnimating() || Rs2Dialogue.isInDialogue(), 500);
+                        sleepUntil(() -> !Rs2Player.isInteracting() && !Rs2Player.isMoving() && !Rs2Player.isAnimating());
+                    }
                 }
 
             } catch (Exception ex) {
                 System.out.println(ex.getMessage());
                 ex.printStackTrace(System.out);
             }
-        }, 0, Rs2Random.between(400, 1000), TimeUnit.MILLISECONDS);
+        }, 0, 200, TimeUnit.MILLISECONDS);
         return true;
     }
 
@@ -1293,10 +1329,12 @@ public class QuestScript extends Script {
 	@Override
 	public void shutdown() {
 		super.shutdown();
+        clearInteractionState();
 		reset();
 	}
 
     public static void reset() {
+        interactionResetGeneration.incrementAndGet();
         itemsMissing = new ArrayList<>();
         itemRequirements = new ArrayList<>();
         grandExchangeItems = new ArrayList<>();
@@ -1326,32 +1364,270 @@ public class QuestScript extends Script {
         return true;
     }
 
-    public boolean applyNpcStep(NpcStep step) {
-        List<Rs2NpcModel> npcs = step.getNpcs().stream()
-                .map(Rs2NpcModel::new)
-                .collect(Collectors.toList());
-        Rs2NpcModel npc = npcs.stream().findFirst().orElse(null);
+    private boolean executeQuestCustomLogic() {
+        var questLogic = QuestRegistry.getQuest(getQuestHelperPlugin().getSelectedQuest().getQuest().getId());
+        if (questLogic instanceof PiratesTreasure) ((PiratesTreasure) questLogic).setMQuestPlugin(mQuestPlugin);
+        return questLogic == null || questLogic.executeCustomLogic();
+    }
 
-        if (step.isAllowMultipleHighlights()) {
-            npc = npcs.stream()
-                    .filter(x -> !npcsHandled.contains(x.getIndex()))
-                    .findFirst()
-                    .orElseGet(() -> npcs.stream()
-                            .min(Comparator.comparing(x -> Rs2Player.getWorldLocation().distanceTo(x.getWorldLocation())))
-                            .orElse(null));
+    private boolean runIdleCustomLogic(QuestStep step) {
+        long now = System.nanoTime();
+        if (lastCustomStep == step && now - nextCustomAttemptAt < 0) return !customActionPending;
+        lastCustomStep = step;
+        nextCustomAttemptAt = now + 600_000_000L;
+        customActionPending = !executeQuestCustomLogic();
+        return !customActionPending;
+    }
+
+    private void clearInteractionState() {
+        pendingInteraction = null;
+        unreachableTarget = false;
+        lastCustomStep = null;
+        customActionPending = false;
+        targetReadyAt = 0;
+        dialogueStartedStep = null;
+        dialogueAdvance.reset();
+    }
+
+    private boolean canDispatchQuestStep(QuestStep step) {
+        return pendingInteraction == null && isCurrentQuestStep(step) && !Rs2Player.isAnimating()
+                && !Rs2Dialogue.isInDialogue();
+    }
+
+    private boolean isCurrentQuestStep(QuestStep step) {
+        if (Thread.currentThread().isInterrupted() || InputArbiter.isHuman() || Microbot.pauseAllScripts.get()
+                || !Microbot.isLoggedIn() || config == null || !config.startStopQuestHelper()
+                || observedResetGeneration != interactionResetGeneration.get()
+                || mainScheduledFuture == null || mainScheduledFuture.isCancelled()) return false;
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            QuestHelperPlugin plugin = getQuestHelperPlugin();
+            return plugin != null && plugin.getSelectedQuest() != null
+                    && plugin.getSelectedQuest().getCurrentStep() != null
+                    && plugin.getSelectedQuest().getCurrentStep().getActiveStep() == step
+                    && Microbot.getVarbitValue(4606) == 0;
+        }).orElse(false);
+    }
+
+    private Rs2NpcModel findQuestNpc(NpcStep step) {
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            WorldPoint player = scenePlayerLocation();
+            if (player == null) return null;
+            List<Rs2NpcModel> live = Microbot.getRs2NpcCache().getStream()
+                    .filter(npc -> step.getNpcs().stream().anyMatch(highlight -> highlight == npc.getActor()))
+                    .collect(Collectors.toList());
+            return live.stream().min(Comparator
+                    .comparingInt((Rs2NpcModel npc) -> step.isAllowMultipleHighlights()
+                            && npcsHandled.contains(npc.getIndex()) ? 1 : 0)
+                    .thenComparingInt(npc -> npc.getWorldLocation().distanceTo(player))).orElse(null);
+        }).orElse(null);
+    }
+
+    private TileObject findQuestObject(ObjectStep step) {
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            WorldPoint player = scenePlayerLocation();
+            if (player == null) return null;
+            return Microbot.getRs2TileObjectCache().getStream()
+                    .filter(object -> step.getObjects().stream().anyMatch(highlight -> highlight == object.getTileObject()))
+                    .min(Comparator.comparingInt((Rs2TileObjectModel object) -> objectsHandeled.contains(object.getHash()) ? 1 : 0)
+                            .thenComparingInt(object -> object.getWorldLocation().distanceTo(player)))
+                    .map(Rs2TileObjectModel::getTileObject).orElse(null);
+        }).orElse(null);
+    }
+
+    private boolean isCurrentInteractionReady(QuestStep step) {
+        if (!isCurrentQuestStep(step) || unreachableTarget) {
+            targetReadyAt = 0;
+            return false;
         }
+        boolean ready = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            WorldPoint player = scenePlayerLocation();
+            if (player == null) return false;
+            if (step instanceof NpcStep) {
+                Rs2NpcModel npc = findQuestNpc((NpcStep) step);
+                if (npc == null || npc.getLocalLocation() == null || npc.getWorldLocation().distanceTo(player) > 8
+                        || !Rs2Camera.isTileOnScreen(npc.getLocalLocation()) || !npc.hasLineOfSight()) return false;
+                // Local collision flood does not plan routes through closed doors.
+                if (!QuestLocalApproach.reachable(Microbot.getClient().getTopLevelWorldView(), player, 8).contains(npc.getWorldLocation())) return false;
+                if (step instanceof NpcEmoteStep || ((NpcStep) step).getIconItemID() != -1) return true;
+                NPCComposition composition = Microbot.getClient().getNpcDefinition(npc.getId());
+                if (composition != null && composition.getConfigs() != null) composition = composition.transform();
+                String action = chooseCorrectNPCOption(step, npc);
+                return composition != null && composition.getActions() != null
+                        && java.util.Arrays.stream(composition.getActions()).anyMatch(action::equalsIgnoreCase);
+            }
+            if (step instanceof ObjectStep) {
+                TileObject tile = findQuestObject((ObjectStep) step);
+                if (tile == null) return false;
+                Rs2TileObjectModel object = new Rs2TileObjectModel(tile);
+                if (object.getWorldLocation().distanceTo(player) > 8 || object.getLocalLocation() == null
+                        || !(Rs2Camera.isTileOnScreen(object.getLocalLocation()) || object.getCanvasLocation() != null)
+                        || !Rs2GameObject.hasLineOfSight(player, tile)) return false;
+                WorldArea area = tile instanceof GameObject ? Rs2GameObject.getWorldArea((GameObject) tile)
+                        : object.getWorldLocation().toWorldArea();
+                Set<WorldPoint> reachable = QuestLocalApproach.reachable(Microbot.getClient().getTopLevelWorldView(), player, 8);
+                if (!QuestLocalApproach.adjacentReachable(area, reachable)) return false;
+                if (selectObjectApproachTile(area, player, reachable::contains,
+                        point -> Rs2GameObject.hasLineOfSight(point, tile)) == null) return false;
+                return ((ObjectStep) step).getIconItemID() != -1 || !chooseCorrectObjectOption(step, object).isEmpty();
+            }
+            return false;
+        }).orElse(false);
+        if (ready && targetReadyAt == 0) {
+            targetReadyAt = System.nanoTime();
+            log.debug("[QuestInteraction] phase=target_ready attempt={} step={}", interactionSequence + 1,
+                    step.getClass().getSimpleName());
+        } else if (!ready) {
+            targetReadyAt = 0;
+        }
+        return ready;
+    }
 
-        // canReach() pathfinds through closed doors (the walker opens them en route), so canReach==true
-        // doesn't mean a direct click will succeed. Require line-of-sight too, or we walk instead.
-        if (npc != null && npc.getLocalLocation() != null && Rs2Camera.isTileOnScreen(npc.getLocalLocation())
-                && (Microbot.getClient().isInInstancedRegion() || (Rs2Walker.canReach(npc.getWorldLocation()) && npc.hasLineOfSight()))) {
+    private WalkerState walkToInteraction(QuestStep step, WorldPoint target, int distance) {
+        long started = System.nanoTime();
+        WalkerState result = Rs2Walker.walkWithStateUntil(target, distance,
+                () -> !isCurrentQuestStep(step) || isCurrentInteractionReady(step));
+        if (result == WalkerState.ARRIVED) unreachableTarget = false;
+        log.debug("[QuestInteraction] phase=walk_return step={} target={} result={} elapsed={}ms",
+                step.getClass().getSimpleName(), target, result, (System.nanoTime() - started) / 1_000_000L);
+        return result;
+    }
+
+    private boolean allowDialogueAdvance() {
+        Object page = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            List<Widget> roots = new ArrayList<>();
+            int[] groups = {193, 217, 219, 229, 231, 11};
+            for (int group : groups) {
+                // Some dialogue groups have multiple independent roots (e.g. item messages).
+                for (int child = 0; child < 20; child++) {
+                    Widget root = Microbot.getClient().getWidget(group, child);
+                    if (root != null) roots.add(root);
+                }
+            }
+            Widget chatboxContinue = Microbot.getClient().getWidget(162, 44);
+            if (chatboxContinue != null) roots.add(chatboxContinue);
+            return QuestDialoguePage.snapshot(roots, Rs2Dialogue.hasContinue());
+        }).orElse(null);
+        return page != null && dialogueAdvance.shouldAdvance(page, System.nanoTime());
+    }
+
+    private void beginInteraction(QuestStep step, int id, long identity, WorldPoint location,
+                                  String action, int itemId, int quantity) {
+        long now = System.nanoTime();
+        pendingInteraction = new PendingInteraction(step, id, identity, location, action, itemId, quantity,
+                ++interactionSequence, now);
+        traceInteraction("dispatch", pendingInteraction, "accepted");
+        log.debug("[QuestInteraction] phase=dispatch_timing attempt={} readyToDispatch={}ms",
+                interactionSequence, targetReadyAt == 0 ? -1 : (now - targetReadyAt) / 1_000_000L);
+        targetReadyAt = 0;
+    }
+
+    private void traceInteraction(String phase, PendingInteraction pending, String reason) {
+        log.debug("[QuestInteraction] phase={} attempt={} step={} id={} location={} action={} elapsed={}ms reason={}",
+                phase, pending.sequence, pending.step.getClass().getSimpleName(), pending.id, pending.location,
+                pending.action, pending.attempt.elapsedMillis(System.nanoTime()), reason);
+    }
+
+    private void observePendingInteraction(QuestStep currentStep) {
+        PendingInteraction pending = pendingInteraction;
+        if (pending == null) return;
+        if (pending.step != currentStep) {
+            traceInteraction("complete", pending, "step-changed");
+            pendingInteraction = null;
+            return;
+        }
+        boolean dialogue = Rs2Dialogue.isInDialogue();
+        boolean itemChanged = pending.itemId != -1 && Rs2Inventory.itemQuantity(pending.itemId) != pending.quantity;
+        boolean valid = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            WorldPoint player = Rs2Player.getWorldLocation();
+            if (player == null || player.getPlane() != pending.location.getPlane()) return false;
+            if (pending.step instanceof NpcStep) {
+                return Microbot.getRs2NpcCache().getStream()
+                        .anyMatch(npc -> npc.getId() == pending.id && npc.getIndex() == pending.identity);
+            }
+            return Microbot.getRs2TileObjectCache().getStream()
+                    .anyMatch(object -> object.getId() == pending.id && object.getHash() == pending.identity);
+        }).orElse(false);
+        boolean animating = Rs2Player.isAnimating();
+        boolean nearTarget = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            WorldPoint player = scenePlayerLocation();
+            return player != null && player.distanceTo(pending.location) <= 2;
+        }).orElse(false);
+        pending.animationSeen |= animating && nearTarget && !Rs2Player.isMoving();
+        boolean widgetResult = Rs2Shop.isOpen() || Rs2Widget.isProductionWidgetOpen();
+        boolean busy = Rs2Player.isMoving() || animating || dialogue || Rs2Combat.inCombat();
+        boolean actionFinished = pending.attempt.isAnimationSettled(System.nanoTime(), busy, pending.animationSeen);
+        boolean progressed = pending.attempt.hasProgressed();
+        // Dialogue confirms dispatch, but keep ownership until it closes (and a short acknowledgement
+        // window afterwards) so a not-yet-updated step cannot immediately reopen the conversation.
+        if (dialogue && !pending.dialogueSeen) {
+            pending.dialogueSeen = true;
+            traceInteraction("progress", pending, "dialogue");
+            if (pending.step instanceof NpcStep && ((NpcStep) pending.step).isAllowMultipleHighlights()) {
+                npcsHandled.add((int) pending.identity);
+            } else if (pending.step instanceof ObjectStep) {
+                objectsHandeled.add(pending.identity);
+            }
+        }
+        QuestInteractionAttempt.Result result = pending.attempt.observe(System.nanoTime(), busy, itemChanged || actionFinished || widgetResult, valid);
+        if (!progressed && pending.attempt.hasProgressed() && !dialogue) traceInteraction("progress", pending, "activity");
+        if (result == QuestInteractionAttempt.Result.COMPLETE) {
+            if (pending.step instanceof ObjectStep) objectsHandeled.add(pending.identity);
+            traceInteraction("complete", pending, itemChanged ? "item-changed" : widgetResult ? "widget-opened" : "animation-finished");
+        } else if (result == QuestInteractionAttempt.Result.RETRY) {
+            traceInteraction("timeout", pending, "revalidate");
+        } else if (result == QuestInteractionAttempt.Result.INVALIDATED) {
+            traceInteraction("invalidated", pending, "target-unavailable");
+        }
+        if (result != QuestInteractionAttempt.Result.WAIT) pendingInteraction = null;
+    }
+
+    private static final class PendingInteraction {
+        private final QuestStep step;
+        private final int id;
+        private final long identity;
+        private final WorldPoint location;
+        private final String action;
+        private final int itemId;
+        private final int quantity;
+        private final long sequence;
+        private final QuestInteractionAttempt attempt;
+        private boolean dialogueSeen;
+        private boolean animationSeen;
+
+        private PendingInteraction(QuestStep step, int id, long identity, WorldPoint location, String action,
+                                   int itemId, int quantity, long sequence, long now) {
+            this.step = step;
+            this.id = id;
+            this.identity = identity;
+            this.location = location;
+            this.action = action;
+            this.itemId = itemId;
+            this.quantity = quantity;
+            this.sequence = sequence;
+            this.attempt = new QuestInteractionAttempt(now, now + 1_200_000_000L);
+        }
+    }
+
+    public boolean applyNpcStep(NpcStep step) {
+        return QuestInteractionFlow.run(() -> canDispatchQuestStep(step),
+                () -> isCurrentInteractionReady(step), () -> {
+                    Rs2NpcModel npc = findQuestNpc(step);
+                    WorldPoint target = npc == null ? step.getDefinedPoint().getWorldPoint() : routeLocation(npc.getWorldLocation());
+                    return walkToInteraction(step, target, 2);
+                }, () -> dispatchNpcStep(step));
+    }
+
+    private boolean dispatchNpcStep(NpcStep step) {
+        Rs2NpcModel npc = findQuestNpc(step);
+        if (npc != null && canDispatchQuestStep(step) && isCurrentInteractionReady(step)) {
             Rs2Walker.clearWalkingRoute("quest-helper:npc-step-visible-interact");
 
             if (step.getText().stream().anyMatch(x -> x.toLowerCase().contains("kill"))) {
-                if (!Rs2Combat.inCombat()) {
-                    npc.click("Attack");
+                if (!Rs2Combat.inCombat() && npc.click("Attack")) {
+                    beginInteraction(step, npc.getId(), npc.getIndex(), npc.getWorldLocation(), "Attack", -1, 0);
+                    return true;
                 }
-                return true;
+                return false;
             }
 
             if (step instanceof NpcEmoteStep) {
@@ -1378,172 +1654,87 @@ public class QuestScript extends Script {
                 }
             }
 
-            var itemId = step.getIconItemID();
+            int itemId = step.getIconItemID();
+            int initialQuantity = itemId == -1 ? 0 : Rs2Inventory.itemQuantity(itemId);
+            String action = itemId == -1 ? chooseCorrectNPCOption(step, npc) : "Use";
             if (itemId != -1) {
                 if (!Rs2Inventory.use(itemId) || !waitForSelectedInventoryItem(itemId)) {
                     return false;
                 }
+                Rs2NpcModel freshNpc = findQuestNpc(step);
+                if (!canDispatchQuestStep(step) || !isCurrentInteractionReady(step)
+                        || freshNpc == null || freshNpc.getId() != npc.getId() || freshNpc.getIndex() != npc.getIndex()) {
+                    return false;
+                }
+                npc = freshNpc;
                 if (!npc.click("")) {
                     return false;
                 }
             } else {
-                npc.click(chooseCorrectNPCOption(step, npc));
+                if (!npc.click(action)) return false;
             }
-
-            if (step.isAllowMultipleHighlights()) {
-                npcsHandled.add(npc.getIndex());
-                sleepUntil(Rs2Dialogue::isInDialogue);
-            }
-        } else if (npc != null && npc.getLocalLocation() != null && !Rs2Camera.isTileOnScreen(npc.getLocalLocation())) {
-            Rs2Walker.walkTo(npc.getWorldLocation(), 2);
-        } else if (npc != null && (!npc.hasLineOfSight() || !Rs2Walker.canReach(npc.getWorldLocation()))) {
-            Rs2Walker.walkTo(npc.getWorldLocation(), 2);
-        } else {
-            if (step.getDefinedPoint().getWorldPoint().distanceTo(Rs2Player.getWorldLocation()) > 3) {
-                Rs2Walker.walkTo(step.getDefinedPoint().getWorldPoint(), 2);
-                return false;
-            }
+            beginInteraction(step, npc.getId(), npc.getIndex(), npc.getWorldLocation(), action, itemId, initialQuantity);
+            return true;
         }
-        return true;
+        return false;
     }
 
 
     public boolean applyObjectStep(ObjectStep step) {
-        TileObject tileObject = step.getObjects().stream()
-                .filter(Objects::nonNull)
-                .findFirst().orElse(null);
-        Rs2TileObjectModel object = tileObject == null ? null : new Rs2TileObjectModel(tileObject);
-        var itemId = step.getIconItemID();
+        return QuestInteractionFlow.run(() -> canDispatchQuestStep(step),
+                () -> isCurrentInteractionReady(step), () -> routeToObjectStep(step),
+                () -> dispatchObjectStep(step));
+    }
 
-        List<TileObject> stepObjects = step.getObjects().stream()
-                .filter(Objects::nonNull)
-                .collect(Collectors.toList());
-
-        if (stepObjects.size() > 1) {
-            tileObject = stepObjects.stream()
-                    .filter(x -> !objectsHandeled.contains(x.getHash()))
-                    .findFirst()
-                    .orElseGet(() -> stepObjects.stream()
-                            .min(Comparator.comparing(x -> Rs2Player.getWorldLocation().distanceTo(x.getWorldLocation())))
-                            .orElse(null));
-            object = tileObject == null ? null : new Rs2TileObjectModel(tileObject);
-        }
-
-        if (object != null && unreachableTarget) {
-            var tileObjects = new Rs2TileObjectQueryable()
-                    .where(x -> x.getTileObjectType() == TileObjectType.WALL)
-                    .toList();
-
-            for (var tile : Rs2Tile.getWalkableTilesAroundTile(object.getWorldLocation(), unreachableTargetCheckDist)) {
-                if (tileObjects.stream().noneMatch(x -> x.getWorldLocation().equals(tile))) {
-                    if (!Rs2Walker.walkTo(tile) && ShortestPathPlugin.getPathfinder() == null)
-                        return false;
-
-                    sleepUntil(() -> ShortestPathPlugin.getPathfinder() == null || ShortestPathPlugin.getPathfinder().isDone());
-                    if (ShortestPathPlugin.getPathfinder() == null || ShortestPathPlugin.getPathfinder().isDone()) {
-                        unreachableTarget = false;
-                        unreachableTargetCheckDist = 1;
-                    }
-                    return false;
-                }
-            }
-
-            unreachableTargetCheckDist++;
-            return false;
-        }
-
-        // A nearby object can still be behind a wall. When the object is present, use its reachability and
-        // line of sight to decide whether to route to an interaction tile; only use coordinate distance as
-        // the fallback when the object has not loaded yet.
-        WorldPoint definedWorldPoint = step.getDefinedPoint().getWorldPoint();
-        boolean moreThanOneTileFromStep = isAwayFromObjectStep(
-                Rs2Player.getWorldLocation(), definedWorldPoint);
-        boolean objectInLineOfSight = tileObject != null
-                && Rs2GameObject.hasLineOfSight(Rs2Player.getWorldLocation(), tileObject);
-        if (definedWorldPoint != null && shouldWalkToObjectApproach(object != null, moreThanOneTileFromStep,
-                objectInLineOfSight)) {
-            WorldPoint targetTile = null;
-            WorldPoint stepLocation = object == null ? step.getDefinedPoint().getWorldPoint() : object.getWorldLocation();
-
+    private WalkerState routeToObjectStep(ObjectStep step) {
+        TileObject tileObject = findQuestObject(step);
+        if (tileObject == null) return walkToInteraction(step, step.getDefinedPoint().getWorldPoint(), 1);
+        WorldPoint location = tileObject == null ? step.getDefinedPoint().getWorldPoint()
+                : new Rs2TileObjectModel(tileObject).getWorldLocation();
+        if (location == null) return WalkerState.EXIT;
+        WorldPoint target = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            WorldPoint player = scenePlayerLocation();
+            if (player == null) return null;
             if (tileObject instanceof GameObject) {
-                TileObject approachObject = tileObject;
-                WorldArea objectArea = Rs2GameObject.getWorldArea((GameObject) approachObject);
-                targetTile = selectObjectApproachTile(
-                        objectArea,
-                        Rs2Player.getWorldLocation(),
-                        Rs2Tile::isWalkable,
-                        point -> Rs2GameObject.hasLineOfSight(point, approachObject));
+                WorldPoint approach = selectObjectApproachTile(Rs2GameObject.getWorldArea((GameObject) tileObject),
+                        player, this::isSceneTileWalkable, point -> Rs2GameObject.hasLineOfSight(point, tileObject));
+                if (approach != null) return approach;
             }
-
-            int radius = 0;
-            while (targetTile == null) {
-                if (mainScheduledFuture.isCancelled())
-                    break;
-                radius++;
-                Rs2TileObjectModel finalObject = object;
-                targetTile = Rs2Tile.getWalkableTilesAroundTile(stepLocation, radius)
-                        .stream().filter(x -> hasLineOfSightFrom(x, finalObject))
-                        .sorted(Comparator.comparing(x -> x.distanceTo(Rs2Player.getWorldLocation()))).findFirst().orElse(null);
-
-                if (radius > 10 && targetTile == null)
-                    targetTile = stepLocation;
+            for (int radius = 1; radius <= 10; radius++) {
+                WorldPoint approach = new WorldArea(location.dx(-radius).dy(-radius), radius * 2 + 1, radius * 2 + 1).toWorldPointList().stream()
+                        .filter(this::isSceneTileWalkable)
+                        .filter(point -> tileObject == null || Rs2GameObject.hasLineOfSight(point, tileObject))
+                        .min(Comparator.comparingInt(point -> point.distanceTo(player))).orElse(null);
+                if (approach != null) return approach;
             }
+            return location;
+        }).orElse(location);
+        // The full walker still owns walls, doors, transports and stuck recovery.
+        return walkToInteraction(step, tileObject == null ? target : routeLocation(target), tileObject == null ? 1 : 0);
+    }
 
-            if (object == null) {
-                Rs2Walker.walkTo(targetTile, 1);
-            } else {
-                Rs2Walker.walkTo(targetTile, 0);
-            }
-
-            if (ShortestPathPlugin.getPathfinder() != null) {
-                var path = ShortestPathPlugin.getPathfinder().getPath();
-                if (pathEndsNearObjectStep(path, definedWorldPoint))
-                    return false;
-            } else
-                return false;
+    private boolean dispatchObjectStep(ObjectStep step) {
+        TileObject tileObject = findQuestObject(step);
+        if (tileObject == null || !canDispatchQuestStep(step) || !isCurrentInteractionReady(step)) return false;
+        Rs2TileObjectModel object = new Rs2TileObjectModel(tileObject);
+        int itemId = step.getIconItemID();
+        int initialQuantity = itemId == -1 ? 0 : Rs2Inventory.itemQuantity(itemId);
+        String action = itemId == -1 ? chooseCorrectObjectOption(step, object) : "Use";
+        Rs2Walker.clearWalkingRoute("quest-helper:object-step-interact");
+        boolean interacted;
+        if (itemId == -1) {
+            interacted = Rs2GameObject.interact(tileObject, action);
+        } else {
+            if (!Rs2Inventory.use(itemId) || !waitForSelectedInventoryItem(itemId)) return false;
+            TileObject freshObject = findQuestObject(step);
+            if (!canDispatchQuestStep(step) || !isCurrentInteractionReady(step) || freshObject == null
+                    || freshObject.getHash() != object.getHash() || freshObject.getId() != object.getId()) return false;
+            tileObject = freshObject;
+            interacted = Rs2GameObject.interact(tileObject, "Use");
         }
-
-        if (objectInLineOfSight || object != null && (Rs2Camera.isTileOnScreen(object.getLocalLocation()) || object.getCanvasLocation() != null)) {
-            Rs2Walker.clearWalkingRoute("quest-helper:object-step-interact");
-            if (!waitForObjectInteractionIdle()) {
-                return false;
-            }
-
-            boolean interacted;
-            boolean itemOnObjectInteraction = itemId != -1;
-            int initialItemQuantity = itemOnObjectInteraction ? Rs2Inventory.itemQuantity(itemId) : 0;
-            long interactedObjectHash = object.getHash();
-            if (itemId == -1) {
-                interacted = Rs2GameObject.interact(tileObject, chooseCorrectObjectOption(step, object));
-            } else {
-                if (!Rs2Inventory.use(itemId) || !waitForSelectedInventoryItem(itemId)) {
-                    return false;
-                }
-                interacted = Rs2GameObject.interact(tileObject, "Use");
-            }
-
-            if (!interacted) {
-                return false;
-            }
-
-            boolean interactionStarted = sleepUntil(() -> isObjectInteractionConfirmed(
-                    Rs2Player.isMoving(),
-                    Rs2Player.isAnimating(),
-                    Rs2Dialogue.isInDialogue(),
-                    itemOnObjectInteraction && Rs2Inventory.itemQuantity(itemId) != initialItemQuantity,
-                    Rs2GameObject.getAll(candidate -> candidate.getHash() == interactedObjectHash).isEmpty()), 1_200);
-            if (!interactionStarted) {
-                return false;
-            }
-            sleep(100);
-            sleepUntil(() -> !Rs2Player.isMoving() && !Rs2Player.isAnimating());
-            objectsHandeled.add(object.getHash());
-        } else if (object != null) {
-            Rs2Walker.walkTo(object.getWorldLocation(), 1);
-            return false;
-        }
-
-        return canCompleteObjectStep(object != null);
+        if (!interacted) return false;
+        beginInteraction(step, object.getId(), object.getHash(), object.getWorldLocation(), action, itemId, initialQuantity);
+        return true;
     }
 
     static boolean isAwayFromObjectStep(WorldPoint playerLocation, WorldPoint stepLocation) {
@@ -1571,19 +1762,6 @@ public class QuestScript extends Script {
         return objectAvailable
                 ? !objectInLineOfSight
                 : moreThanOneTileFromStep;
-    }
-
-    static boolean isObjectInteractionConfirmed(boolean moving, boolean animating, boolean dialogueOpen,
-                                                boolean itemQuantityChanged, boolean objectChanged) {
-        return moving || animating || dialogueOpen || itemQuantityChanged || objectChanged;
-    }
-
-    private boolean waitForObjectInteractionIdle() {
-        return sleepUntil(() -> isObjectInteractionIdle(Rs2Player.isMoving(), Rs2Player.isAnimating()), 1_200);
-    }
-
-    static boolean isObjectInteractionIdle(boolean moving, boolean animating) {
-        return !moving && !animating;
     }
 
     static WorldPoint selectObjectApproachTile(WorldArea objectArea, WorldPoint playerLocation,
@@ -1654,18 +1832,8 @@ public class QuestScript extends Script {
     }
 
     private String chooseCorrectObjectOption(QuestStep step, Rs2TileObjectModel object) {
-        ObjectComposition objComp = Microbot.getClientThread().runOnClientThreadOptional(() ->
-                Microbot.getClient().getObjectDefinition(object.getId())).orElse(null);
-
-        if (objComp == null)
-            return "";
-
-        String[] actions;
-        if (objComp.getImpostorIds() != null) {
-            actions = objComp.getImpostor().getActions();
-        } else {
-            actions = objComp.getActions();
-        }
+        String[] actions = object.getActions();
+        if (actions == null) return "";
 
         for (var action : actions) {
             if (action != null && step.getText().stream().anyMatch(x -> x.toLowerCase().contains(action.toLowerCase())))
@@ -1682,17 +1850,14 @@ public class QuestScript extends Script {
     }
 
     private String chooseCorrectNPCOption(QuestStep step, Rs2NpcModel npc) {
-        var npcComp = Microbot.getClientThread().runOnClientThreadOptional(() -> Microbot.getClient().getNpcDefinition(npc.getId()))
-                .orElse(null);
-
-        if (npcComp == null)
-            return "Talk-to";
-
-        boolean shopStep = step.getWidgetsToHighlight().stream()
-                .filter(WidgetHighlight.class::isInstance)
-                .map(WidgetHighlight.class::cast)
-                .anyMatch(highlight -> highlight.getItemIdRequirement() != null);
-        return chooseNpcAction(step.getText(), npcComp.getActions(), shopStep);
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            NPCComposition composition = Microbot.getClient().getNpcDefinition(npc.getId());
+            if (composition != null && composition.getConfigs() != null) composition = composition.transform();
+            boolean shopStep = step.getWidgetsToHighlight().stream()
+                    .filter(WidgetHighlight.class::isInstance).map(WidgetHighlight.class::cast)
+                    .anyMatch(highlight -> highlight.getItemIdRequirement() != null);
+            return chooseNpcAction(step.getText(), composition == null ? null : composition.getActions(), shopStep);
+        }).orElse("");
     }
 
     static String chooseNpcAction(List<String> stepText, String[] actions, boolean shopStep) {

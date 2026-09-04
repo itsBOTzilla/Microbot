@@ -549,7 +549,6 @@ net.runelite.client.plugins.microbot.util.npc.Rs2Npc#lambda$getBankerNPC$28(Rs2N
 net.runelite.client.plugins.microbot.util.npc.Rs2Npc#lambda$getNearestNpcWithAction$38(String, Rs2NpcModel): boolean  ->  net.runelite.api.NPCComposition#getActions(): String[]
 net.runelite.client.plugins.microbot.util.npc.Rs2Npc#lambda$getNpc$26(Rs2NpcModel): int  ->  net.runelite.api.Client#getLocalPlayer(): Player
 net.runelite.client.plugins.microbot.util.npc.Rs2Npc#lambda$getNpc$26(Rs2NpcModel): int  ->  net.runelite.api.Player#getLocalLocation(): LocalPoint
-net.runelite.client.plugins.microbot.util.npc.Rs2Npc#lambda$getNpcWithAction$43(String, Rs2NpcModel): boolean  ->  net.runelite.api.NPCComposition#getActions(): String[]
 net.runelite.client.plugins.microbot.util.npc.Rs2Npc#lambda$getPestControlPortals$22(Rs2NpcModel): int  ->  net.runelite.api.Client#getLocalPlayer(): Player
 net.runelite.client.plugins.microbot.util.npc.Rs2Npc#lambda$getPestControlPortals$22(Rs2NpcModel): int  ->  net.runelite.api.Player#getLocalLocation(): LocalPoint
 net.runelite.client.plugins.microbot.util.npc.Rs2Npc#lambda$getRandomEventNPC$27(Rs2NpcModel): boolean  ->  net.runelite.api.Client#getLocalPlayer(): Player

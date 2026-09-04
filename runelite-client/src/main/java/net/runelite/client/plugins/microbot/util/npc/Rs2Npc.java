@@ -1269,15 +1269,21 @@ public class Rs2Npc {
      * @return The first {@link NPC} that has the specified action, or {@code null} if none are found.
      */
     public static Rs2NpcModel getNpcWithAction(String action) {
-        return getNpcs()
-                .filter(value -> (value.getComposition() != null
-                        && value.getComposition().getActions() != null
-                        && Arrays.asList(value.getComposition().getActions()).contains(action))
-                        || (value.getComposition().transform() != null
-                        && value.getComposition().transform().getActions() != null
-                        && Arrays.asList(value.getComposition().transform().getActions()).contains(action)))
-                .findFirst()
-                .orElse(null);
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+                var npcs = getNpcs().iterator();
+                while (npcs.hasNext()) {
+                    Rs2NpcModel value = npcs.next();
+                    NPCComposition composition = value.getComposition();
+                    if (composition == null) continue;
+                    if (composition.getActions() != null && Arrays.asList(composition.getActions()).contains(action)) {
+                        return value;
+                    }
+                    NPCComposition transformed = composition.getConfigs() == null ? null : composition.transform();
+                    if (transformed != null && transformed.getActions() != null
+                            && Arrays.asList(transformed.getActions()).contains(action)) return value;
+                }
+                return null;
+            }).orElse(null);
     }
 
     /**
