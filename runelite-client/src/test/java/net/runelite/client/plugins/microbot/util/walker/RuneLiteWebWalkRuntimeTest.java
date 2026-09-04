@@ -93,6 +93,38 @@ public class RuneLiteWebWalkRuntimeTest
     }
 
     @Test
+    public void foldedCatalogDoorMeasuresApproachFromItsActualOrigin()
+    {
+        WorldPoint player = new WorldPoint(3220, 3490, 0);
+        WorldPoint foldedFrom = new WorldPoint(3221, 3490, 0);
+        WorldPoint doorOrigin = new WorldPoint(3222, 3490, 0);
+        WorldPoint doorDestination = new WorldPoint(3222, 3491, 0);
+        List<WorldPoint> foldedPath = List.of(player, foldedFrom, doorDestination);
+        PathfinderConfig previousConfig = ShortestPathPlugin.pathfinderConfig;
+        PathfinderConfig config = mock(PathfinderConfig.class);
+        java.util.concurrent.ConcurrentHashMap<WorldPoint, Set<Transport>> transports =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        transports.put(doorOrigin, Set.of(new Transport(doorOrigin, doorDestination,
+                "Door", TransportType.TRANSPORT, false, "Open", "Door", 32464)));
+        when(config.getTransports()).thenReturn(transports);
+        try
+        {
+            ShortestPathPlugin.pathfinderConfig = config;
+            Set<WorldPoint> reachable = Set.of(player, foldedFrom, doorOrigin);
+            assertEquals("the real catalog origin is still two tiles away",
+                    -1, RuneLiteWebWalkRuntime.routeActionIndex(
+                            foldedPath, 0, player, reachable));
+            assertEquals("the restored origin becomes actionable after one tile of approach",
+                    1, RuneLiteWebWalkRuntime.routeActionIndex(
+                            foldedPath, 1, foldedFrom, reachable));
+        }
+        finally
+        {
+            ShortestPathPlugin.pathfinderConfig = previousConfig;
+        }
+    }
+
+    @Test
     public void foldedDoorFromUnreachableOppositeSideIsNotAnExecutionBoundary()
     {
         WorldPoint player = new WorldPoint(3221, 3490, 0);

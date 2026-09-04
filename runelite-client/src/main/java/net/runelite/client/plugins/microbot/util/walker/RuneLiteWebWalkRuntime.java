@@ -521,8 +521,12 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
             {
                 continue;
             }
-            int distance = from.distanceTo2D(player);
             boolean catalogEdge = isExecutableCatalogTransportBoundary(path, index, reachable);
+            List<WorldPoint> dispatchPath = catalogEdge
+                    ? Rs2Walker.catalogTransportDispatchPath(path, index) : path;
+            WorldPoint actionOrigin = dispatchPath == null || dispatchPath.isEmpty()
+                    ? from : dispatchPath.get(0);
+            int distance = actionOrigin.distanceTo2D(player);
             boolean catalogDoorEdge = catalogEdge
                     && from.getPlane() == to.getPlane()
                     && from.distanceTo2D(to) <= 1

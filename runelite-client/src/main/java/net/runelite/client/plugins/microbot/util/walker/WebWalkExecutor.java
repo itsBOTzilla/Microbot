@@ -177,6 +177,15 @@ public final class WebWalkExecutor
             {
                 boolean sameLogicalTarget = reachedCheckpoint && !passedCheckpoint
                         && checkpoint.equals(observation.getClickTarget());
+                if (sameLogicalTarget
+                        && session.getRejectedDispatchCount() >= MAX_REJECTED_DISPATCHES)
+                {
+                    return Decision.replan("minimap-dispatch-rejected");
+                }
+                if (sameLogicalTarget && session.getRedispatchCount() >= MAX_REDISPATCHES)
+                {
+                    return Decision.replan("checkpoint-no-progress");
+                }
                 if (sameLogicalTarget && sameActiveCanvasTarget)
                 {
                     if (session.ticksWithoutActiveTargetProgress(observation.getTick())
@@ -254,6 +263,15 @@ public final class WebWalkExecutor
                 if (sameActiveTarget && activeMovementHealthy)
                 {
                     return Decision.waitFor("active-target-progress");
+                }
+                if (sameActiveTarget
+                        && session.getRejectedDispatchCount() >= MAX_REJECTED_DISPATCHES)
+                {
+                    return Decision.replan("minimap-dispatch-rejected");
+                }
+                if (sameActiveTarget && session.getRedispatchCount() >= MAX_REDISPATCHES)
+                {
+                    return Decision.replan("checkpoint-no-progress");
                 }
                 if (!session.hasDispatchIntervalElapsed(observation.getTick(),
                         MINIMUM_DISPATCH_INTERVAL_TICKS))

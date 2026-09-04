@@ -175,6 +175,14 @@ public class WebWalkExecutorTest
 
         assertEquals(WebWalkExecutor.DecisionType.CLICK_MINIMAP, intervalElapsed.getType());
         assertEquals(true, intervalElapsed.isRedispatch());
+
+        session.recordMovementDispatch(103, point(10), point(10), 3, true,
+                WebWalkRuntime.DispatchMethod.MINIMAP);
+
+        assertEquals("the accepted retry exhausts the one-redispatch budget",
+                WebWalkExecutor.DecisionType.REPLAN,
+                executor.decide(session,
+                        ready(106, point(9), 1, 2, point(10), 3, false)).getType());
     }
 
     @Test
