@@ -51,6 +51,7 @@ import net.runelite.client.plugins.microbot.util.leaguetransport.SeasonalTranspo
 import net.runelite.client.plugins.microbot.util.logging.Rs2LogRateLimit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import org.slf4j.event.Level;
 import net.runelite.client.plugins.microbot.util.poh.PohTeleports;
 import net.runelite.client.plugins.microbot.util.poh.PohTransport;
@@ -12883,7 +12884,7 @@ public class Rs2Walker {
             if (directProbeTiles <= directPathCeiling) {
                 WebWalkLog.spInfo("bank_walk | skip_compare_short_distance dist={} directTiles={} goal={}",
                         chebyshevToTarget, directProbeTiles, target);
-                return walkWithStateInternal(target, distance);
+                return walkDirectAfterBankBootstrap(target, distance);
             }
             WebWalkLog.spInfo("bank_walk | short_distance_detour dist={} directTiles={} ceiling={} goal={} — running bank compare",
                     chebyshevToTarget,
@@ -12907,7 +12908,7 @@ public class Rs2Walker {
         // If no missing transport items, go directly
         if (missingItemsWithQuantities.isEmpty() && !forceBanking) {
             WebWalkLog.spInfo("bank_walk | direct_no_missing_items goal={}", target);
-            WalkerState state = walkWithStateInternal(target, distance);
+            WalkerState state = walkDirectAfterBankBootstrap(target, distance);
             if (state == WalkerState.ARRIVED) {
                 WebWalkLog.bankWalkDebug("arrived goal={}", target);
             } else if (isTerminalBankedDirectWalkFailure(state)) {
@@ -12929,17 +12930,17 @@ public class Rs2Walker {
             // If forced banking or banking route is more efficient (with min savings), go via bank
             if (forceBanking || bankRouteIsBetter) {
                 if (comparison.getNearestBank() != null) {
-                    log.info("\n\tUsing banking route: \n\t\tStart: {} -> Bank: {} -> Target: {}",
+                    WebWalkLog.spInfo("bank_route | start={} bank={} goal={}",
                             Rs2Player.getWorldLocation(), comparison.getBankLocation(), target);
                     // Handle the complete banking workflow using legacy walkTo approach
                     return walkWithBankingState(comparison.getBankLocation(), missingItemsWithQuantities, target, distance);
                 } else {
                     log.warn("\n\tBanking route requested but no accessible bank found, trying direct route");
-                    return walkWithStateInternal(target, distance);
+                    return walkDirectAfterBankBootstrap(target, distance);
                 }
             } else {
-                log.info("\n\tDirect route is more efficient despite missing items or does not meet min savings, traveling directly");
-                return walkWithStateInternal(target, distance);
+                WebWalkLog.spDebug("bank_walk | direct_route_selected goal={}", target);
+                return walkDirectAfterBankBootstrap(target, distance);
             }
         }
 
@@ -12959,6 +12960,45 @@ public class Rs2Walker {
      */
     static int shortWalkDirectPathCeiling(int chebyshevDistance) {
         return Math.max(60, chebyshevDistance * 3);
+    }
+
+    private static WalkerState walkDirectAfterBankBootstrap(WorldPoint target, int distance) {
+        // Check live state on every invocation. A previous close attempt may have failed and the
+        // next walk call will skip bootstrap once the bank mirror has an epoch.
+        AtomicBoolean closeBeforeDirectFailed = new AtomicBoolean();
+        WalkerState state = continueDirectAfterBankBootstrap(
+                Rs2Bank::isOpen,
+                () -> {
+                    boolean closeDispatched = Rs2Bank.closeBank();
+                    if (!closeDispatched) {
+                        closeBeforeDirectFailed.set(true);
+                    }
+                    return closeDispatched;
+                },
+                () -> {
+                    boolean bankClosed = sleepUntil(() -> !Rs2Bank.isOpen(), 3_000);
+                    if (!bankClosed) {
+                        closeBeforeDirectFailed.set(true);
+                    }
+                    return bankClosed;
+                },
+                () -> walkWithStateInternal(target, distance));
+        if (closeBeforeDirectFailed.get()) {
+            WebWalkLog.spWarn("bank_cache_bootstrap | close_before_direct_failed goal={}", target);
+        }
+        return state;
+    }
+
+    /**
+     * Closes a bank left open by route comparison before allowing a direct walk to issue movement.
+     * The collaborators are parameters so the close-state decision can be verified without a live client.
+     */
+    static WalkerState continueDirectAfterBankBootstrap(BooleanSupplier bankOpen, BooleanSupplier closeBank,
+                                                         BooleanSupplier observedClosed, Supplier<WalkerState> movement) {
+        if (bankOpen.getAsBoolean() && (!closeBank.getAsBoolean() || !observedClosed.getAsBoolean())) {
+            return WalkerState.EXIT;
+        }
+        return movement.get();
     }
 
     /**
@@ -12986,7 +13026,7 @@ public class Rs2Walker {
         }
 
         WorldPoint bankLocation = nearestBank.getWorldPoint();
-        WebWalkLog.spInfo("bank_cache_bootstrap | epoch={} start={} bank={}",
+        WebWalkLog.spDebug("bank_cache_bootstrap | epoch={} start={} bank={}",
                 Rs2Bank.getBankLiveEpoch(), start, bankLocation);
 
         WalkerState walkToBank = walkWithStateInternal(bankLocation, distance);
@@ -13004,11 +13044,8 @@ public class Rs2Walker {
             return WalkerState.EXIT;
         }
         boolean mirrorReady = Rs2Bank.verifyBankMirrorAfterOpen(wasOpen, epochBefore);
-        WebWalkLog.spInfo("bank_cache_bootstrap_done | ready={} epochBefore={} epochAfter={} bank={}",
+        WebWalkLog.spDebug("bank_cache_bootstrap_done | ready={} epochBefore={} epochAfter={} bank={}",
                 mirrorReady, epochBefore, Rs2Bank.getBankLiveEpoch(), bankLocation);
-
-        Rs2Bank.closeBank();
-        sleepUntil(() -> !Rs2Bank.isOpen(), 3_000);
         return WalkerState.ARRIVED;
     }
 
@@ -13051,7 +13088,7 @@ public class Rs2Walker {
                 log.warn("Failed to arrive at bank at: " + bankLocation + ", state: " + bankWalkResult);
                 return bankWalkResult;
             }
-            log.info("Arrived at bank location: " + bankLocation);
+            WebWalkLog.bankWalkDebug("arrived_at_bank bank={}", bankLocation);
             // Step 2: Open bank
             closeWorldMap();
             if (!Rs2Bank.openBank()) {

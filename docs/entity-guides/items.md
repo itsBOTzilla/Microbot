@@ -180,3 +180,26 @@ Keep action discovery and dispatch separate: `Rs2Reflection.getGroundItemActions
 **Where this applies:** `Rs2GroundItem.interact`, `Rs2TileItemModel.click`, and future ground-item interaction helpers.
 
 **Defensive check:** Drop loot on a tile visually overlapped by an NPC and beside an openable door. Verify the intended item is taken from multiple camera angles and no `Unable to find clicked menu op` engine message appears.
+
+---
+
+## 10. Transfer ownership of a bootstrap-open bank to the immediate withdrawal workflow
+
+When route planning opens a bank only to populate the live bank mirror, keep that interface open
+until the route decision is known. If the selected route needs banked items, let the withdrawal
+workflow reuse the already-open bank. If the route remains direct, close the bootstrap bank before
+issuing any movement.
+
+**Why this matters:** Closing immediately after cache bootstrap and reopening seconds later for the
+selected banking route produces two visible bank interactions for one route. Leaving it open for a
+direct route is also invalid because the bank interface prevents normal movement dispatch.
+
+**Pattern to follow:** Track whether bootstrap completed with the bank open. Transfer that state to
+the banking workflow, whose normal close step remains authoritative; otherwise close and observe
+`!Rs2Bank.isOpen()` before starting the direct walk.
+
+**Where this applies:** `Rs2Walker.bootstrapBankMirrorForBankedPathing`, bank-versus-direct route
+selection, and any future planner that opens a bank before deciding whether to withdraw.
+
+**Defensive check:** Bytecode/unit coverage should assert that bootstrap opens but does not close the
+bank, and that the direct-route continuation closes it before calling the movement implementation.

@@ -30,17 +30,17 @@ public class WelcomeScreenEvent implements BlockingEvent {
             if (updateBottomRibbon != null) {
                 updateBottomRibbon.setOnClickListener((Object[]) null);
                 updateBottomRibbon.setOnOpListener((Object[]) null);
-                log.info("WelcomeScreenEvent execute: Cleared update ribbon listener to avoid accidental page opening.");
+                log.debug("WelcomeScreenEvent execute: Cleared update ribbon listener to avoid accidental page opening.");
             } else {
-                log.info("WelcomeScreenEvent execute: Update ribbon widget is null");
+                log.debug("WelcomeScreenEvent execute: Update ribbon widget is null");
             }
 
             Widget newsBanner = client.getWidget(InterfaceID.WelcomeScreen.BANNER);
             if (newsBanner != null) {
                 newsBanner.setHidden(true);
-                log.info("WelcomeScreenEvent execute: Cleared banner to avoid accidental page openings.");
+                log.debug("WelcomeScreenEvent execute: Cleared banner to avoid accidental page openings.");
             } else {
-                log.info("WelcomeScreenEvent execute: Banner widget is null");
+                log.debug("WelcomeScreenEvent execute: Banner widget is null");
             }
 
             Widget playWidget = client.getWidget(InterfaceID.WelcomeScreen.PLAY);
@@ -49,11 +49,11 @@ public class WelcomeScreenEvent implements BlockingEvent {
             boolean wasUpdateRibbonHandled = updateBottomRibbon == null || updateBottomRibbon.getOnOpListener() == null;
 
             if (playWidget != null && isPlayWidgetVisible && wasUpdateRibbonHandled && wasNewsBannerHandled) {
-                log.info("WelcomeScreenEvent execute: Clicking play button.");
+                log.debug("WelcomeScreenEvent execute: Clicking play button.");
                 Rs2Widget.clickWidget(playWidget);
                 return true;
             }
-            log.info("WelcomeScreenEvent execute: required UI not ready (playWidgetNull={} playWidgetVisible={} bannerHandled={} ribbonHandled={})",
+            log.debug("WelcomeScreenEvent execute: required UI not ready (playWidgetNull={} playWidgetVisible={} bannerHandled={} ribbonHandled={})",
                     playWidget == null, isPlayWidgetVisible, wasNewsBannerHandled, wasUpdateRibbonHandled);
             return false;
         });
