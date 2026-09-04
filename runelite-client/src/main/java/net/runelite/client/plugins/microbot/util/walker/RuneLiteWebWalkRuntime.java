@@ -195,6 +195,10 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
             Rs2Walker.markFirstMovementClick(phase, target, player,
                     "method=" + result.getMethod() + " requested=" + requestedTarget
                             + " actual=" + result.getActualTarget());
+            WorldPoint lookAhead = Rs2Walker.getCameraLookAhead(
+                    lastRawPath, lastObservedPathIndex, player);
+            Rs2Walker.updateWalkingCamera(
+                    lookAhead, player, result.getActualTarget(), targetGeneration);
         }
         return result;
     }
