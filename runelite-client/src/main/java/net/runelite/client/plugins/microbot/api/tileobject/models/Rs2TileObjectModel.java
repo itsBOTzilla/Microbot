@@ -51,7 +51,6 @@ public class Rs2TileObjectModel implements TileObject, IEntity {
     @Getter
     private final TileObjectType tileObjectType;
     private final TileObject tileObject;
-    private String[] actions;
 
 
     @Override
@@ -110,6 +109,9 @@ public class Rs2TileObjectModel implements TileObject, IEntity {
     public String getName() {
         return Microbot.getClientThread().invoke(() -> {
             ObjectComposition composition = Microbot.getClient().getObjectDefinition(tileObject.getId());
+            if (composition == null) {
+                return null;
+            }
             if (composition.getImpostorIds() != null) {
                 composition = composition.getImpostor();
             }
@@ -167,10 +169,26 @@ public class Rs2TileObjectModel implements TileObject, IEntity {
     public ObjectComposition getObjectComposition() {
         return Microbot.getClientThread().invoke(() -> {
             ObjectComposition composition = Microbot.getClient().getObjectDefinition(tileObject.getId());
+            if (composition == null) {
+                return null;
+            }
             if (composition.getImpostorIds() != null) {
                 composition = composition.getImpostor();
             }
             return composition;
+        });
+    }
+
+    /**
+     * Returns a defensive snapshot of the selected object's actions.
+     */
+    public String[] getActions() {
+        return Microbot.getClientThread().invoke(() -> {
+            ObjectComposition base = Microbot.getClient().getObjectDefinition(tileObject.getId());
+            ObjectComposition selected = base == null ? null
+                    : base.getImpostorIds() == null ? base : base.getImpostor();
+            String[] actions = selected == null ? null : selected.getActions();
+            return actions == null ? null : actions.clone();
         });
     }
 
@@ -209,112 +227,220 @@ public class Rs2TileObjectModel implements TileObject, IEntity {
      * @return true if the interaction was successful, false otherwise
      */
     public boolean click(String action) {
+        return clickWithIdentifier(action, getId(), false, false);
+    }
+
+    /**
+     * Clicks a declared transformed variant of this object.
+     */
+    public boolean clickVariant(String action, int variantIdentifier) {
+        int interactionIdentifier = resolveInteractionIdentifier(variantIdentifier);
+        return interactionIdentifier >= 0 && clickWithIdentifier(action, interactionIdentifier, false, true);
+    }
+
+    /**
+     * Dispatches an exact transformed object action without requiring a clickbox.
+     */
+    public boolean clickVariantDirect(String action, int variantIdentifier) {
+        int interactionIdentifier = resolveInteractionIdentifier(variantIdentifier);
+        return interactionIdentifier >= 0 && clickWithIdentifier(action, interactionIdentifier, true, true);
+    }
+
+    private boolean clickWithIdentifier(String action, int interactionIdentifier, boolean direct, boolean explicitVariant) {
         try {
-
-            int param0;
-            int param1;
-            MenuAction menuAction = MenuAction.WALK;
-
-
-            Microbot.status = action + " " + getName();
-
-            if (getTileObjectType() == TileObjectType.GAME) {
-                GameObject obj = (GameObject) tileObject;
-                if (obj.sizeX() > 1) {
-                    param0 = obj.getLocalLocation().getSceneX() - obj.sizeX() / 2;
+            LocalPoint localLocation = getLocalLocation();
+            if (localLocation == null) {
+                return false;
+            }
+            WorldView worldView = getWorldView();
+            InteractionSnapshot snapshot = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+                int param0;
+                int param1;
+                if (getTileObjectType() == TileObjectType.GAME) {
+                    GameObject gameObject = (GameObject) tileObject;
+                    param0 = localLocation.getSceneX()
+                            - (gameObject.sizeX() > 1 ? gameObject.sizeX() / 2 : 0);
+                    param1 = localLocation.getSceneY()
+                            - (gameObject.sizeY() > 1 ? gameObject.sizeY() / 2 : 0);
                 } else {
-                    param0 = obj.getLocalLocation().getSceneX();
+                    param0 = localLocation.getSceneX();
+                    param1 = localLocation.getSceneY();
                 }
-
-                if (obj.sizeY() > 1) {
-                    param1 = obj.getLocalLocation().getSceneY() - obj.sizeY() / 2;
-                } else {
-                    param1 = obj.getLocalLocation().getSceneY();
-                }
-            } else {
-                // Default objects like walls, groundobjects, decorationobjects etc...
-                param0 = getLocalLocation().getSceneX();
-                param1 = getLocalLocation().getSceneY();
+                int worldViewId = worldView == null ? -1 : worldView.getId();
+                return new InteractionSnapshot(param0, param1, worldViewId,
+                        Microbot.getClient().isWidgetSelected());
+            }).orElse(null);
+            if (snapshot == null || snapshot.worldViewId < 0) {
+                return false;
             }
 
-
-            int index = 0;
-            String objName = "";
-            if (action != null) {
-                //performance improvement to only get compoisiton if action has been specified
-                var objComp = getObjectComposition();
-                String[] actions;
-                if (objComp.getImpostorIds() != null && objComp.getImpostor() != null) {
-                    actions = objComp.getImpostor().getActions();
-                } else {
-                    actions = objComp.getActions();
-                }
-
-                for (int i = 0; i < actions.length; i++) {
-                    if (actions[i] == null) continue;
-                    if (action.equalsIgnoreCase(Rs2UiHelper.stripColTags(actions[i]))) {
-                        index = i;
-                        break;
-                    }
-                }
-
-                if (index == actions.length)
-                    index = 0;
-
-                objName = objComp.getName();
-
-                // both hands must be free before using MINECART
-                if (objComp.getName().toLowerCase().contains("train cart")) {
-                    Rs2Equipment.unEquip(EquipmentInventorySlot.WEAPON);
-                    Rs2Equipment.unEquip(EquipmentInventorySlot.SHIELD);
-                    sleepUntil(() -> Rs2Equipment.get(EquipmentInventorySlot.WEAPON) == null && Rs2Equipment.get(EquipmentInventorySlot.SHIELD) == null);
-                }
-            }
-
-            if (index == -1) {
+            int index = explicitVariant ? resolveVariantActionIndex(action, interactionIdentifier) : resolveActionIndex(action);
+            if (index < 0) {
                 log.warn("Failed to interact with object {} - action '{}' not found", getId(), action);
+                return false;
             }
 
+            String objectName = getName();
+            Microbot.status = (action == null ? "" : action) + " " + objectName;
+            if (objectName != null && objectName.toLowerCase().contains("train cart")) {
+                Rs2Equipment.unEquip(EquipmentInventorySlot.WEAPON);
+                Rs2Equipment.unEquip(EquipmentInventorySlot.SHIELD);
+                sleepUntil(() -> Rs2Equipment.get(EquipmentInventorySlot.WEAPON) == null
+                        && Rs2Equipment.get(EquipmentInventorySlot.SHIELD) == null);
+            }
 
-            if (Microbot.getClient().isWidgetSelected()) {
+            MenuAction menuAction = resolveMenuAction(index);
+            if (snapshot.widgetSelected) {
                 menuAction = MenuAction.WIDGET_TARGET_ON_GAME_OBJECT;
-            } else if (index == 0) {
-                menuAction = MenuAction.GAME_OBJECT_FIRST_OPTION;
-            } else if (index == 1) {
-                menuAction = MenuAction.GAME_OBJECT_SECOND_OPTION;
-            } else if (index == 2) {
-                menuAction = MenuAction.GAME_OBJECT_THIRD_OPTION;
-            } else if (index == 3) {
-                menuAction = MenuAction.GAME_OBJECT_FOURTH_OPTION;
-            } else if (index == 4) {
-                menuAction = MenuAction.GAME_OBJECT_FIFTH_OPTION;
             }
 
-            if (!Rs2Camera.isTileOnScreen(getLocalLocation())) {
+            String normalizedAction = action == null ? "" : action;
+            String normalizedTarget = objectName == null ? "" : objectName;
+
+            if (direct) {
+                return dispatchDirectAction(Microbot.getClient(), snapshot.param0, snapshot.param1,
+                        menuAction, interactionIdentifier, snapshot.worldViewId,
+                        normalizedAction, normalizedTarget);
+            }
+
+            if (!Rs2Camera.isTileOnScreen(localLocation)) {
                 Rs2Camera.turnTo(tileObject);
             }
-
-
             Microbot.doInvoke(new NewMenuEntry()
-                            .param0(param0)
-                            .param1(param1)
+                            .param0(snapshot.param0)
+                            .param1(snapshot.param1)
                             .opcode(menuAction.getId())
-                            .identifier(getId())
+                            .identifier(interactionIdentifier)
                             .itemId(-1)
-                            .option(action)
-                            .target(objName)
-                            .setWorldViewId(getWorldView().getId())
-                            .gameObject(tileObject)
-                    ,
+                            .option(normalizedAction)
+                            .target(normalizedTarget)
+                            .setWorldViewId(snapshot.worldViewId)
+                            .gameObject(tileObject),
                     Rs2UiHelper.getObjectClickbox(tileObject));
-// MenuEntryImpl(getOption=Use, getTarget=Barrier, getIdentifier=43700, getType=GAME_OBJECT_THIRD_OPTION, getParam0=53, getParam1=51, getItemId=-1, isForceLeftClick=true, getWorldViewId=-1, isDeprioritized=false)
-            //Rs2Reflection.invokeMenu(param0, param1, menuAction.getId(), object.getId(),-1, "", "", -1, -1);
-
+            return true;
         } catch (Exception ex) {
             log.error("Failed to interact with object: ", ex);
+            return false;
         }
+    }
 
-        return true;
+    int resolveInteractionIdentifier(int requestedIdentifier) {
+        if (requestedIdentifier == getId()) {
+            return requestedIdentifier;
+        }
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            ObjectComposition base = Microbot.getClient().getObjectDefinition(getId());
+            if (base == null || base.getImpostorIds() == null) {
+                return -1;
+            }
+            for (int variantId : base.getImpostorIds()) {
+                if (variantId == requestedIdentifier) {
+                    return requestedIdentifier;
+                }
+            }
+            return -1;
+        }).orElse(-1);
+    }
+
+    static boolean dispatchDirectAction(Client client, int param0, int param1,
+                                        MenuAction menuAction, int identifier, int worldViewId,
+                                        String option, String target) {
+        if (client == null || menuAction == null || worldViewId != WorldView.TOPLEVEL) {
+            return false;
+        }
+        try {
+            return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+                client.menuAction(param0, param1, menuAction, identifier, -1,
+                        option == null ? "" : option, target == null ? "" : target);
+                return true;
+            }).orElse(false);
+        } catch (RuntimeException ex) {
+            log.debug("Direct object menu action failed for id={}", identifier, ex);
+            return false;
+        }
+    }
+
+    int resolveActionIndex(String requestedAction) {
+        if (requestedAction == null || requestedAction.isBlank()) {
+            return 0;
+        }
+        return Microbot.getClientThread().invoke(() -> {
+            ObjectComposition base = Microbot.getClient().getObjectDefinition(getId());
+            ObjectComposition selected = base == null ? null
+                    : base.getImpostorIds() == null ? base : base.getImpostor();
+            String[] actions = selected == null ? null : selected.getActions();
+            for (int i = 0; i < 5; i++) {
+                String liveAction = isOpShown(i) ? getOpOverride(i) : null;
+                // An override replaces the definition's operation in this slot.
+                String effectiveAction = liveAction != null ? liveAction
+                        : actions != null && i < actions.length ? actions[i] : null;
+                if (effectiveAction != null
+                        && requestedAction.equalsIgnoreCase(Rs2UiHelper.stripColTags(effectiveAction))) {
+                    return i;
+                }
+            }
+            return -1;
+        });
+    }
+
+    int resolveVariantActionIndex(String requestedAction, int requestedIdentifier) {
+        return Microbot.getClientThread().invoke(() -> {
+            if (resolveInteractionIdentifier(requestedIdentifier) < 0) {
+                return -1;
+            }
+            ObjectComposition variant = Microbot.getClient().getObjectDefinition(requestedIdentifier);
+            if (variant == null) {
+                return -1;
+            }
+            return requestedAction == null || requestedAction.isBlank() ? 0
+                    : findActionIndex(variant.getActions(), requestedAction);
+        });
+    }
+
+    private static int findActionIndex(String[] actions, String requestedAction) {
+        if (actions == null) {
+            return -1;
+        }
+        for (int i = 0; i < Math.min(actions.length, 5); i++) {
+            String candidate = actions[i];
+            if (candidate != null
+                    && requestedAction.equalsIgnoreCase(Rs2UiHelper.stripColTags(candidate))) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static MenuAction resolveMenuAction(int index) {
+        switch (index) {
+            case 0:
+                return MenuAction.GAME_OBJECT_FIRST_OPTION;
+            case 1:
+                return MenuAction.GAME_OBJECT_SECOND_OPTION;
+            case 2:
+                return MenuAction.GAME_OBJECT_THIRD_OPTION;
+            case 3:
+                return MenuAction.GAME_OBJECT_FOURTH_OPTION;
+            case 4:
+                return MenuAction.GAME_OBJECT_FIFTH_OPTION;
+            default:
+                return MenuAction.WALK;
+        }
+    }
+
+    private static final class InteractionSnapshot {
+        private final int param0;
+        private final int param1;
+        private final int worldViewId;
+        private final boolean widgetSelected;
+
+        private InteractionSnapshot(int param0, int param1,
+                                    int worldViewId, boolean widgetSelected) {
+            this.param0 = param0;
+            this.param1 = param1;
+            this.worldViewId = worldViewId;
+            this.widgetSelected = widgetSelected;
+        }
     }
 
 }
