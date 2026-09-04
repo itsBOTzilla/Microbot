@@ -32,6 +32,10 @@ Each entity guide is a numbered list of gotchas. Each entry follows this structu
 **Defensive check:** <Optional — assertion / unit-test pattern that catches violations at PR time, not in production.>
 ```
 
+## Object action variants
+
+An object's inactive impostor definitions are not evidence that an action is currently available. Resolve normal clicks against live operations or the selected definition only; an explicit variant identifier must use that same validated definition's action slots. Otherwise an `Open` action on an inactive variant can select a slot that means `Close` on the current object. Read and copy definition actions on the client thread before returning them to a caller.
+
 ## Adding a new guide
 
 1. Create `<entity>.md` in this directory using the format above.
