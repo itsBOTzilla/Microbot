@@ -1,17 +1,15 @@
 package net.runelite.client.plugins.microbot.shortestpath;
 
 import java.lang.reflect.Method;
-import java.util.AbstractSet;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.PathfinderConfig;
@@ -168,47 +166,38 @@ public class PathTileOverlayTest
     }
 
     @Test
-    @SuppressWarnings("unchecked")
-    public void producerSnapshotIsStableDuringOverlappingTransportMutation() throws Exception
+    public void producerPublishesImmutableSnapshotsDuringConcurrentTeleportRefresh() throws Exception
     {
         WorldPoint start = new WorldPoint(3029, 3217, 0);
         WorldPoint landing = new WorldPoint(2956, 3143, 0);
-        Transport ship = new Transport(start, landing, "ship", TransportType.SHIP, false, 10);
-        CoordinatedSet<Transport> liveEdges = new CoordinatedSet<>(Set.of(ship));
-        Map<WorldPoint, Set<Transport>> liveTransports = new HashMap<>();
-        liveTransports.put(start, liveEdges);
-        AtomicBoolean running = new AtomicBoolean(true);
-        Thread mutator = new Thread(() ->
+        Transport teleport = new Transport(landing, "teleport", TransportType.TELEPORTATION_SPELL,
+                false, 30, Set.of());
+        PathfinderConfig config = new PathfinderConfig(null, Map.of(), List.of(), null, null);
+        config.setUsableTeleports(Set.of(teleport));
+        int packedStart = WorldPointUtil.packWorldPoint(start);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        Future<?> refreshes = executor.submit(() ->
         {
-            try
+            for (int i = 0; i < 250; i++)
             {
-                assertTrue("producer snapshot construction did not begin", liveEdges.iteratorEntered.await(5, TimeUnit.SECONDS));
-                while (running.get())
-                {
-                    synchronized (liveEdges)
-                    {
-                        liveEdges.clear();
-                        liveEdges.add(ship);
-                    }
-                }
-            }
-            catch (InterruptedException e)
-            {
-                Thread.currentThread().interrupt();
+                config.refreshTeleports(packedStart, 0);
             }
         });
-        mutator.start();
         try
         {
-            Map<WorldPoint, Set<Transport>> frozen = null;
-            for (int i = 0; i < 25; i++)
+            while (!refreshes.isDone())
             {
-                frozen = producerSnapshot(liveTransports);
+                for (Set<Transport> edges : config.getTransportVisualizationSnapshot().values())
+                {
+                    assertEquals(Set.of(teleport), edges);
+                }
             }
-            assertEquals(Set.of(ship), frozen.get(start));
+            refreshes.get();
+            Set<Transport> frozen = config.getTransportVisualizationSnapshot().get(start);
+            assertEquals(Set.of(teleport), frozen);
             try
             {
-                frozen.get(start).clear();
+                frozen.clear();
                 fail("producer snapshot must not retain a mutable transport edge set");
             }
             catch (UnsupportedOperationException expected)
@@ -218,9 +207,7 @@ public class PathTileOverlayTest
         }
         finally
         {
-            running.set(false);
-            mutator.join(5000);
-            assertTrue("overlapping producer mutation did not stop", !mutator.isAlive());
+            executor.shutdownNow();
         }
     }
 
@@ -273,15 +260,6 @@ public class PathTileOverlayTest
         return (int) size.invoke(snapshot);
     }
 
-    @SuppressWarnings("unchecked")
-    private static Map<WorldPoint, Set<Transport>> producerSnapshot(Map<WorldPoint, Set<Transport>> transports)
-            throws Exception
-    {
-        Method snapshot = PathfinderConfig.class.getDeclaredMethod("immutableTransportVisualizationSnapshot", Map.class);
-        snapshot.setAccessible(true);
-        return (Map<WorldPoint, Set<Transport>>) snapshot.invoke(null, transports);
-    }
-
     private static void assertTile(Object tile, WorldPoint expectedPoint, int expectedAnchorIndex,
                                    int expectedDisplayIndex)
             throws Exception
@@ -306,39 +284,4 @@ public class PathTileOverlayTest
         assertEquals(expectedDisplayIndex, displayIndex.invoke(tile));
     }
 
-    private static final class CoordinatedSet<E> extends AbstractSet<E>
-    {
-        private final Set<E> delegate;
-        private final CountDownLatch iteratorEntered = new CountDownLatch(1);
-
-        private CoordinatedSet(Set<E> initial)
-        {
-            this.delegate = new HashSet<>(initial);
-        }
-
-        @Override
-        public Iterator<E> iterator()
-        {
-            iteratorEntered.countDown();
-            return delegate.iterator();
-        }
-
-        @Override
-        public int size()
-        {
-            return delegate.size();
-        }
-
-        @Override
-        public boolean add(E element)
-        {
-            return delegate.add(element);
-        }
-
-        @Override
-        public void clear()
-        {
-            delegate.clear();
-        }
-    }
 }

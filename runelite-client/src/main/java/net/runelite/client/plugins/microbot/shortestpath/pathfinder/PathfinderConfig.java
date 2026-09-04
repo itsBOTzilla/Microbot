@@ -97,6 +97,8 @@ public class PathfinderConfig {
 
     @Getter
     private final ConcurrentHashMap<WorldPoint, Set<Transport>> transports;
+    /** Serializes transport-map mutations with publication of the immutable overlay view. */
+    private final Object transportUpdateLock = new Object();
     /** Immutable transport edges published after each completed producer update for overlay rendering. */
     private volatile Map<WorldPoint, Set<Transport>> transportVisualizationSnapshot = Collections.emptyMap();
     // Copy of transports with packed positions for the hotpath; lists are not copied and are the same reference in both maps
@@ -296,10 +298,12 @@ public class PathfinderConfig {
     }
 
     private void publishTransportVisualizationSnapshot() {
+        assert Thread.holdsLock(transportUpdateLock);
         transportVisualizationSnapshot = immutableTransportVisualizationSnapshot(transports);
     }
 
-    static Map<WorldPoint, Set<Transport>> immutableTransportVisualizationSnapshot(
+    /** Caller holds {@link #transportUpdateLock}; values are copied only after the producer update is complete. */
+    private static Map<WorldPoint, Set<Transport>> immutableTransportVisualizationSnapshot(
             Map<WorldPoint, Set<Transport>> source) {
         if (source == null || source.isEmpty()) {
             return Collections.emptyMap();
@@ -308,14 +312,10 @@ public class PathfinderConfig {
         Map<WorldPoint, Set<Transport>> snapshot = new HashMap<>(source.size());
         for (Map.Entry<WorldPoint, Set<Transport>> entry : source.entrySet()) {
             Set<Transport> edges = entry.getValue();
-            if (edges == null) {
+            if (edges == null || edges.isEmpty()) {
                 continue;
             }
-            synchronized (edges) {
-                if (!edges.isEmpty()) {
-                    snapshot.put(entry.getKey(), Set.copyOf(edges));
-                }
-            }
+            snapshot.put(entry.getKey(), Set.copyOf(edges));
         }
         return snapshot.isEmpty() ? Collections.emptyMap() : Map.copyOf(snapshot);
     }
@@ -430,6 +430,12 @@ public class PathfinderConfig {
      * Specialized method for adding usableTeleports to `transports`
      */
     public void refreshTeleports(int packedLocation, int wildernessLevel) {
+        synchronized (transportUpdateLock) {
+            refreshTeleportsLocked(packedLocation, wildernessLevel);
+        }
+    }
+
+    private void refreshTeleportsLocked(int packedLocation, int wildernessLevel) {
         Set<Transport> usableWildyTeleports = new HashSet<>(usableTeleports.size());
         if (ignoreTeleportAndItems) return;
 
@@ -486,6 +492,12 @@ public class PathfinderConfig {
      * @param target Optional target destination for optimized filtering (null for standard filtering)
      */
     private void refreshTransports(WorldPoint target) {
+        synchronized (transportUpdateLock) {
+            refreshTransportsLocked(target);
+        }
+    }
+
+    private void refreshTransportsLocked(WorldPoint target) {
         useFairyRings = ShortestPathPlugin.override("useFairyRings", config.useFairyRings())
                 && !QuestState.NOT_STARTED.equals(Rs2Player.getQuestState(Quest.FAIRYTALE_II__CURE_A_QUEEN))
                 && (Rs2Inventory.contains(ItemID.DRAMEN_STAFF, ItemID.LUNAR_MOONCLAN_LIMINAL_STAFF)
