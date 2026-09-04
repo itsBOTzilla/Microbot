@@ -1,5 +1,10 @@
 # Entity Guides
 
+Queryable migrations must preserve raw object coordinate semantics and public method descriptors.
+For cannon ownership, the query model exposes a southwest tile while the raw RuneLite object
+exposes its center; apply the legacy center-minus-one comparison to the raw object.
+Keep mounted-teleport public getters returning DecorativeObject and their IDS fields as Integer[].
+
 Per-entity gotchas, footguns, and patterns for LLMs (and humans) writing or modifying Microbot code.
 
 Each guide lists known pitfalls when working with one specific game entity type. **Read the relevant guide before implementing or modifying any code that interacts with that entity** — these documents capture lessons learned from real bugs that escaped review because the assumption was invisible at the call site.

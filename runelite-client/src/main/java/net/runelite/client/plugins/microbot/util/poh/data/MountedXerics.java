@@ -3,13 +3,12 @@ package net.runelite.client.plugins.microbot.util.poh.data;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import net.runelite.api.DecorativeObject;
-import net.runelite.api.GameObject;
-import net.runelite.api.TileObject;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.ObjectID;
 import net.runelite.api.widgets.Widget;
-import net.runelite.client.plugins.microbot.util.gameobject.Rs2GameObject;
+import net.runelite.client.plugins.microbot.Microbot;
+import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
 import net.runelite.client.plugins.microbot.util.widget.Rs2Widget;
 import net.runelite.client.plugins.worldmap.TeleportLocationData;
 
@@ -34,17 +33,18 @@ public enum MountedXerics implements PohTeleport {
 
     @Override
     public boolean execute() {
-        DecorativeObject talisman = getObject();
+        Rs2TileObjectModel talisman = getObjectModel();
         if (talisman == null) {
             return false;
         }
         if (talisman.getId() == objectId) {
             //The correct id for the object means it has the right left click option, so we can just use that.
-            return Rs2GameObject.interact(talisman, destinationName);
+            return talisman.click(destinationName);
         }
         Widget widget = getWidget();
         if (widget == null) {
-            if (Rs2GameObject.interact(talisman, "Teleport menu")) {
+            boolean clicked = talisman.click("Teleport menu");
+            if (clicked) {
                 if (!sleepUntil(() -> getWidget() != null, 10000)) {
                     return false;
                 }
@@ -56,7 +56,15 @@ public enum MountedXerics implements PohTeleport {
     public static final Integer[] IDS = {ObjectID.POH_AMULET_XERIC, ObjectID.POH_AMULET_XERIC_LOOKOUT, ObjectID.POH_AMULET_XERIC_GLADE, ObjectID.POH_AMULET_XERIC_INFERNO, ObjectID.POH_AMULET_XERIC_HEART, ObjectID.POH_AMULET_XERIC_HONOUR};
 
     public static DecorativeObject getObject() {
-        return Rs2GameObject.getDecorativeObject(IDS);
+        Rs2TileObjectModel object = getObjectModel();
+        return object == null ? null : (DecorativeObject) object.getTileObject();
+    }
+
+    private static Rs2TileObjectModel getObjectModel() {
+        return Microbot.getRs2TileObjectCache().query()
+                .withIds(java.util.Arrays.stream(IDS).mapToInt(Integer::intValue).toArray())
+                .where(object -> object.getTileObject() instanceof DecorativeObject)
+                .nearest();
     }
 
     public static boolean isMountedXerics(DecorativeObject go) {
