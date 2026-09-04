@@ -77,6 +77,7 @@ import java.util.TimerTask;
 @PluginDescriptor(
         name = PluginDescriptor.See1Duck + "Antiban",
         description = "Antiban for microbot",
+        version = "1.0.1",
         tags = {"main", "microbot", "antiban parent"},
         alwaysOn = true,
         hidden = true
