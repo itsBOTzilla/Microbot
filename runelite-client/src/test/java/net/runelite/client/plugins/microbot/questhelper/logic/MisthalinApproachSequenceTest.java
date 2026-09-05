@@ -77,6 +77,48 @@ public class MisthalinApproachSequenceTest
     }
 
     @Test
+    public void damagedWallApproachKeepsControlUntilThePlayerCanClimb() throws Exception
+    {
+        Method approach;
+        try
+        {
+            approach = MisthalinMystery.class.getDeclaredMethod("handleDamagedWallApproach",
+                    WorldPoint.class, boolean.class, Runnable.class, Runnable.class);
+            approach.setAccessible(true);
+        }
+        catch (NoSuchMethodException ex)
+        {
+            fail("The outbound wall route must include its final canvas approach before generic interaction");
+            return;
+        }
+
+        int[] canvas = {0};
+        int[] webWalker = {0};
+        Runnable canvasMove = () -> canvas[0]++;
+        Runnable webWalk = () -> webWalker[0]++;
+
+        assertFalse((boolean) approach.invoke(null, new WorldPoint(1642, 4839, 0),
+                false, canvasMove, webWalk));
+        assertEquals(0, canvas[0]);
+        assertEquals(1, webWalker[0]);
+
+        assertFalse((boolean) approach.invoke(null, new WorldPoint(1645, 4830, 0),
+                false, canvasMove, webWalk));
+        assertEquals(1, canvas[0]);
+        assertEquals(1, webWalker[0]);
+
+        assertFalse((boolean) approach.invoke(null, new WorldPoint(1646, 4829, 0),
+                true, canvasMove, webWalk));
+        assertEquals("Movement must suppress duplicate approach clicks", 1, canvas[0]);
+        assertEquals(1, webWalker[0]);
+
+        assertTrue((boolean) approach.invoke(null, new WorldPoint(1647, 4829, 0),
+                false, canvasMove, webWalk));
+        assertEquals(1, canvas[0]);
+        assertEquals(1, webWalker[0]);
+    }
+
+    @Test
     public void misthalinCustomRouteHandlerIsRegistered()
     {
         IQuest quest = QuestRegistry.getQuest(Quest.MISTHALIN_MYSTERY.getId());

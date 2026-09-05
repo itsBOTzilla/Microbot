@@ -23,8 +23,10 @@ public class MisthalinMystery extends BaseQuest
 
     private static final WorldPoint DAMAGED_WALL_OBJECT = new WorldPoint(1648, 4829, 0);
     private static final String CLIMB_DAMAGED_WALL = "Climb over the damaged wall.";
+    private static final WorldPoint DAMAGED_WALL_WEB_APPROACH = new WorldPoint(1646, 4829, 0);
+    private static final WorldPoint DAMAGED_WALL_CANVAS_TARGET = new WorldPoint(1650, 4830, 0);
     private static final List<WorldPoint> DAMAGED_WALL_OUTBOUND_ROUTE = List.of(
-            new WorldPoint(1646, 4829, 0));
+            DAMAGED_WALL_WEB_APPROACH);
 
     private static final WorldPoint FIREPLACE_OBJECT = new WorldPoint(1647, 4836, 0);
     private static final List<WorldPoint> FIREPLACE_ROUTE = List.of(
@@ -60,6 +62,23 @@ public class MisthalinMystery extends BaseQuest
         {
             approachSequence.reset();
             return true;
+        }
+
+        if (route == DAMAGED_WALL_OUTBOUND_ROUTE)
+        {
+            return handleDamagedWallApproach(Rs2Player.getWorldLocation(), Rs2Player.isMoving(),
+                    () -> {
+                        Rs2Walker.clearWalkingRoute("quest-helper:misthalin-damaged-wall-canvas-approach");
+                        Rs2Walker.walkFastCanvas(DAMAGED_WALL_CANVAS_TARGET);
+                    },
+                    () -> Rs2Walker.walkWithStateUntil(DAMAGED_WALL_WEB_APPROACH, 1,
+                            () -> shouldStopRoute(
+                                    Thread.currentThread().isInterrupted(),
+                                    InputArbiter.isHuman(),
+                                    Microbot.pauseAllScripts.get(),
+                                    Microbot.isLoggedIn(),
+                                    plugin.getConfig() != null && plugin.getConfig().startStopQuestHelper(),
+                                    isActiveStep(plugin, step))));
         }
 
         WorldPoint waypoint = approachSequence.next(route, route, Rs2Player.getWorldLocation(), 1);
@@ -106,6 +125,32 @@ public class MisthalinMystery extends BaseQuest
             return FIREPLACE_ROUTE;
         }
         return Collections.emptyList();
+    }
+
+    static boolean handleDamagedWallApproach(WorldPoint player, boolean moving,
+                                               Runnable canvasMove, Runnable webWalk)
+    {
+        if (player == null || player.getPlane() != DAMAGED_WALL_OBJECT.getPlane())
+        {
+            return false;
+        }
+        if (player.distanceTo2D(DAMAGED_WALL_OBJECT) <= 1)
+        {
+            return true;
+        }
+        if (moving)
+        {
+            return false;
+        }
+        if (player.distanceTo2D(DAMAGED_WALL_WEB_APPROACH) > 1)
+        {
+            webWalk.run();
+        }
+        else
+        {
+            canvasMove.run();
+        }
+        return false;
     }
 
     static boolean useCanvas(WorldPoint waypoint)
