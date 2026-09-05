@@ -1409,6 +1409,7 @@ public class QuestScript extends Script {
         dialogueStartedStep = null;
         dialogueAdvance.reset();
         dialogueContinuation.reset();
+        QuestRegistry.resetAll();
     }
 
     private boolean canDispatchQuestStep(QuestStep step) {

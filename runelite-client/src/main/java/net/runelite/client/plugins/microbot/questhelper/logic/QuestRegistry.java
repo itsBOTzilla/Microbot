@@ -15,6 +15,7 @@ public class QuestRegistry {
         QUEST_MAP.put(Quest.ROMEO__JULIET.getId(), new RomeoAndJuliet());
         QUEST_MAP.put(Quest.RUNE_MYSTERIES.getId(), new RuneMysteries());
         QUEST_MAP.put(Quest.PIRATES_TREASURE.getId(), new PiratesTreasure());
+        QUEST_MAP.put(Quest.MISTHALIN_MYSTERY.getId(), new MisthalinMystery());
 
     }
 
@@ -26,5 +27,9 @@ public class QuestRegistry {
     public static IQuest getQuest(int questId) {
         IQuest quest = QUEST_MAP.getOrDefault(questId, null);
         return quest;
+    }
+
+    public static void resetAll() {
+        QUEST_MAP.values().forEach(IQuest::reset);
     }
 }

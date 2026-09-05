@@ -1,0 +1,151 @@
+package net.runelite.client.plugins.microbot.questhelper.logic;
+
+import java.util.List;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import net.runelite.api.Quest;
+import net.runelite.api.coords.WorldPoint;
+import org.junit.Test;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+public class MisthalinApproachSequenceTest
+{
+    private static final WorldPoint PAINTING_ENTRY = new WorldPoint(1633, 4830, 0);
+    private static final WorldPoint PAINTING_STAND = new WorldPoint(1629, 4832, 0);
+
+    @Test
+    public void validatedPaintingRouteAdvancesWithoutReturningToAnEarlierWaypoint()
+    {
+        QuestApproachSequence sequence = new QuestApproachSequence();
+        Object routeKey = new Object();
+        List<WorldPoint> route = List.of(PAINTING_ENTRY, PAINTING_STAND);
+
+        assertEquals(PAINTING_ENTRY, sequence.next(
+                routeKey, route, new WorldPoint(1635, 4839, 0), 1));
+        assertEquals(PAINTING_STAND, sequence.next(routeKey, route, PAINTING_ENTRY, 1));
+        assertNull(sequence.next(routeKey, route, PAINTING_STAND, 1));
+        assertNull("A completed route must not send the player back to its first waypoint",
+                sequence.next(routeKey, route, new WorldPoint(1631, 4833, 0), 1));
+    }
+
+    @Test
+    public void aNewRouteStartsFreshButCanResumeAtItsLastValidatedWaypoint()
+    {
+        QuestApproachSequence sequence = new QuestApproachSequence();
+        List<WorldPoint> painting = List.of(PAINTING_ENTRY, PAINTING_STAND);
+
+        assertEquals(PAINTING_STAND, sequence.next("painting", painting, PAINTING_ENTRY, 1));
+        assertEquals(PAINTING_ENTRY, sequence.next(
+                "another-step", painting, new WorldPoint(1635, 4839, 0), 1));
+        assertNull(sequence.next("resumed-at-painting", painting, PAINTING_STAND, 1));
+    }
+
+    @Test
+    public void misthalinUsesTheValidatedPaintingAndFireplaceRoutes()
+    {
+        assertEquals(List.of(PAINTING_ENTRY, PAINTING_STAND),
+                MisthalinMystery.approachRoute(new WorldPoint(1632, 4833, 0)));
+        assertEquals(List.of(
+                        new WorldPoint(1633, 4837, 0),
+                        new WorldPoint(1641, 4828, 0),
+                        new WorldPoint(1646, 4836, 0)),
+                MisthalinMystery.approachRoute(new WorldPoint(1647, 4836, 0)));
+        assertEquals(List.of(),
+                MisthalinMystery.approachRoute(new WorldPoint(1635, 4838, 0)));
+    }
+
+    @Test
+    public void misthalinCustomRouteHandlerIsRegistered()
+    {
+        IQuest quest = QuestRegistry.getQuest(Quest.MISTHALIN_MYSTERY.getId());
+
+        assertNotNull("Misthalin route sequencing must run before generic object routing", quest);
+        assertEquals(MisthalinMystery.class, quest.getClass());
+    }
+
+    @Test
+    public void onlyTheValidatedPaintingEntryDispatchesCanvasMovement() throws Exception
+    {
+        Method dispatch;
+        try
+        {
+            dispatch = MisthalinMystery.class.getDeclaredMethod(
+                    "dispatchWaypoint", WorldPoint.class, Runnable.class, Runnable.class);
+            dispatch.setAccessible(true);
+        }
+        catch (NoSuchMethodException ex)
+        {
+            fail("Validated routes must preserve each waypoint's movement mode");
+            return;
+        }
+
+        int[] canvas = {0};
+        int[] webWalker = {0};
+        Runnable canvasMove = () -> canvas[0]++;
+        Runnable webWalk = () -> webWalker[0]++;
+
+        dispatch.invoke(null, PAINTING_ENTRY, canvasMove, webWalk);
+        assertEquals(1, canvas[0]);
+        assertEquals(0, webWalker[0]);
+
+        for (WorldPoint waypoint : List.of(
+                PAINTING_STAND,
+                new WorldPoint(1633, 4837, 0),
+                new WorldPoint(1641, 4828, 0),
+                new WorldPoint(1646, 4836, 0)))
+        {
+            dispatch.invoke(null, waypoint, canvasMove, webWalk);
+        }
+        assertEquals(1, canvas[0]);
+        assertEquals(4, webWalker[0]);
+    }
+
+    @Test
+    public void questLifecycleResetClearsACompletedApproachRoute() throws Exception
+    {
+        MisthalinMystery quest = (MisthalinMystery) QuestRegistry.getQuest(
+                Quest.MISTHALIN_MYSTERY.getId());
+        Field field = MisthalinMystery.class.getDeclaredField("approachSequence");
+        field.setAccessible(true);
+        QuestApproachSequence sequence = (QuestApproachSequence) field.get(quest);
+        List<WorldPoint> route = List.of(PAINTING_ENTRY, PAINTING_STAND);
+        sequence.next("painting", route, PAINTING_STAND, 1);
+
+        QuestRegistry.resetAll();
+
+        assertEquals(PAINTING_ENTRY,
+                sequence.next("painting", route, new WorldPoint(1635, 4839, 0), 1));
+    }
+
+    @Test
+    public void routeStopsForEveryQuestSafetyGate() throws Exception
+    {
+        Method stop;
+        try
+        {
+            stop = MisthalinMystery.class.getDeclaredMethod("shouldStopRoute",
+                    boolean.class, boolean.class, boolean.class,
+                    boolean.class, boolean.class, boolean.class);
+            stop.setAccessible(true);
+        }
+        catch (NoSuchMethodException ex)
+        {
+            fail("Custom WebWalker legs must preserve all QuestScript cancellation gates");
+            return;
+        }
+
+        assertFalse((boolean) stop.invoke(null, false, false, false, true, true, true));
+        assertTrue((boolean) stop.invoke(null, true, false, false, true, true, true));
+        assertTrue((boolean) stop.invoke(null, false, true, false, true, true, true));
+        assertTrue((boolean) stop.invoke(null, false, false, true, true, true, true));
+        assertTrue((boolean) stop.invoke(null, false, false, false, false, true, true));
+        assertTrue((boolean) stop.invoke(null, false, false, false, true, false, true));
+        assertTrue((boolean) stop.invoke(null, false, false, false, true, true, false));
+    }
+}
