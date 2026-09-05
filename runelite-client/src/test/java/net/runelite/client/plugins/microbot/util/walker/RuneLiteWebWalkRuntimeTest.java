@@ -283,6 +283,27 @@ public class RuneLiteWebWalkRuntimeTest
     }
 
     @Test
+    public void nearbyUnconfirmedRouteFrontierDoesNotBecomeAnActionEdge()
+    {
+        WorldPoint player = new WorldPoint(3005, 3336, 0);
+        WorldPoint blockedEdge = new WorldPoint(3006, 3337, 0);
+        List<WorldPoint> path = List.of(player, blockedEdge);
+        PathfinderConfig previousConfig = ShortestPathPlugin.pathfinderConfig;
+        PathfinderConfig config = mock(PathfinderConfig.class);
+        when(config.getTransports()).thenReturn(new java.util.concurrent.ConcurrentHashMap<>());
+        try
+        {
+            ShortestPathPlugin.pathfinderConfig = config;
+            assertEquals("a collision frontier without a confirmed catalog action must remain ground movement",
+                    -1, RuneLiteWebWalkRuntime.routeActionIndex(path, 0, player, Set.of(player)));
+        }
+        finally
+        {
+            ShortestPathPlugin.pathfinderConfig = previousConfig;
+        }
+    }
+
+    @Test
     public void unresolvedGenericFrontierPreventsLookaheadToLaterTransport()
     {
         WorldPoint player = new WorldPoint(3094, 3472, 0);
