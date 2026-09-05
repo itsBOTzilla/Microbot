@@ -101,7 +101,7 @@ public class QuestScript extends Script {
     private long interactionSequence;
     private long targetReadyAt;
     private QuestStep lastCustomStep;
-    private long nextCustomAttemptAt;
+    private volatile long nextCustomAttemptAt;
     private boolean customActionPending;
 
     private static WorldPoint scenePlayerLocation() {
@@ -1389,6 +1389,18 @@ public class QuestScript extends Script {
         var questLogic = QuestRegistry.getQuest(getQuestHelperPlugin().getSelectedQuest().getQuest().getId());
         if (questLogic instanceof PiratesTreasure) ((PiratesTreasure) questLogic).setMQuestPlugin(mQuestPlugin);
         return questLogic == null || questLogic.executeCustomLogic();
+    }
+
+    public void onGraphicsObjectCreated(GraphicsObject graphicsObject) {
+        if (graphicsObject == null || getQuestHelperPlugin() == null
+                || getQuestHelperPlugin().getSelectedQuest() == null) {
+            return;
+        }
+        var questLogic = QuestRegistry.getQuest(
+                getQuestHelperPlugin().getSelectedQuest().getQuest().getId());
+        if (questLogic != null && questLogic.onGraphicsObjectCreated(graphicsObject)) {
+            nextCustomAttemptAt = 0;
+        }
     }
 
     private boolean runIdleCustomLogic(QuestStep step) {

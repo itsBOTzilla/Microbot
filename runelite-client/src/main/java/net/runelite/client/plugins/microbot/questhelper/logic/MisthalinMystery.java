@@ -5,15 +5,15 @@ import java.util.List;
 import java.util.Locale;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
+import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.GraphicsObject;
 import net.runelite.api.NullObjectID;
 import net.runelite.api.Player;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.NpcID;
-import net.runelite.api.gameval.ObjectID;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.api.npc.models.Rs2NpcModel;
-import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
 import net.runelite.client.plugins.microbot.questhelper.QuestHelperPlugin;
 import net.runelite.client.plugins.microbot.questhelper.steps.DetailedQuestStep;
 import net.runelite.client.plugins.microbot.questhelper.steps.ObjectStep;
@@ -26,6 +26,7 @@ import net.runelite.client.plugins.microbot.util.tile.Rs2Tile;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
 /** Quest-specific route sequencing validated for the Misthalin Mystery instance. */
+@Slf4j
 public class MisthalinMystery extends BaseQuest
 {
     private static final long DAMAGED_WALL_CANVAS_RETRY_NANOS = 1_500_000_000L;
@@ -57,6 +58,8 @@ public class MisthalinMystery extends BaseQuest
     private final QuestApproachSequence approachSequence = new QuestApproachSequence();
     private final MisthalinMirrorPlanner.AttackState mirrorAttackState =
             new MisthalinMirrorPlanner.AttackState();
+    private final MisthalinMirrorPlanner.CueState wardrobeCueState =
+            new MisthalinMirrorPlanner.CueState();
     private volatile long nextDamagedWallLocalAt;
     private volatile long nextDamagedWallCanvasAt;
     private volatile long nextDamagedWallInteractAt;
@@ -165,6 +168,26 @@ public class MisthalinMystery extends BaseQuest
         resetMirrorShowdown();
     }
 
+    @Override
+    public boolean onGraphicsObjectCreated(GraphicsObject graphicsObject)
+    {
+        if (graphicsObject == null || graphicsObject.getWorldView() == null)
+        {
+            return false;
+        }
+        MisthalinMirrorPlanner.SceneTile cueTile = sceneTile(graphicsObject.getLocation());
+        if (!wardrobeCueState.record(
+                graphicsObject.getId(), cueTile, graphicsObject.getWorldView().getId()))
+        {
+            return false;
+        }
+        MisthalinMirrorPlanner.WardrobeCue cue = wardrobeCueState.snapshot();
+        log.info("[MisthalinMirror] wardrobe cue | graphic={} scene={},{} worldView={} cycle={}",
+                graphicsObject.getId(), cueTile.getX(), cueTile.getY(),
+                cue.getWorldViewId(), cue.getCycle());
+        return true;
+    }
+
     static boolean isMirrorShowdownText(List<String> text)
     {
         return text != null && text.stream()
@@ -189,7 +212,8 @@ public class MisthalinMystery extends BaseQuest
             return false;
         }
 
-        mirrorAttackState.observe(snapshot.mirrorTile, snapshot.wardrobeTile, now);
+        mirrorAttackState.observe(
+                snapshot.mirrorTile, snapshot.wardrobeTile, snapshot.attackCycle, now);
         if (snapshot.wardrobeTile == null || !mirrorAttackState.canDispatch(now))
         {
             return false;
@@ -268,15 +292,15 @@ public class MisthalinMystery extends BaseQuest
             {
                 return null;
             }
-            Rs2TileObjectModel wardrobe = Microbot.getRs2TileObjectCache().query()
-                    .fromWorldView()
-                    .withId(ObjectID.MISTMYST_BOSS_WARDROBE_OPEN)
-                    .first();
+            MisthalinMirrorPlanner.WardrobeCue cue = wardrobeCueState.snapshot();
+            boolean cueInPlayerWorldView = cue != null
+                    && cue.getWorldViewId() == player.getWorldView().getId();
             return new MirrorSnapshot(
                     mirror,
                     sceneTile(player.getLocalLocation()),
                     sceneTile(mirror.getLocalLocation()),
-                    wardrobe == null ? null : sceneTile(wardrobe.getLocalLocation()),
+                    cueInPlayerWorldView ? cue.getTile() : null,
+                    cueInPlayerWorldView ? cue.getCycle() : Long.MIN_VALUE,
                     player.getWorldView().getId());
         }).orElse(null);
     }
@@ -335,6 +359,7 @@ public class MisthalinMystery extends BaseQuest
     private void resetMirrorShowdown()
     {
         mirrorAttackState.reset();
+        wardrobeCueState.reset();
         nextMirrorMoveAt = 0;
         nextMirrorPushAt = 0;
         mirrorMoveTarget = null;
@@ -347,18 +372,21 @@ public class MisthalinMystery extends BaseQuest
         private final MisthalinMirrorPlanner.SceneTile playerTile;
         private final MisthalinMirrorPlanner.SceneTile mirrorTile;
         private final MisthalinMirrorPlanner.SceneTile wardrobeTile;
+        private final long attackCycle;
         private final int worldViewId;
 
         private MirrorSnapshot(Rs2NpcModel mirror,
                                MisthalinMirrorPlanner.SceneTile playerTile,
                                MisthalinMirrorPlanner.SceneTile mirrorTile,
                                MisthalinMirrorPlanner.SceneTile wardrobeTile,
+                               long attackCycle,
                                int worldViewId)
         {
             this.mirror = mirror;
             this.playerTile = playerTile;
             this.mirrorTile = mirrorTile;
             this.wardrobeTile = wardrobeTile;
+            this.attackCycle = attackCycle;
             this.worldViewId = worldViewId;
         }
     }

@@ -99,6 +99,44 @@ public class MisthalinMirrorPlannerTest
     }
 
     @Test
+    public void repeatedGraphicAtSameWardrobeStartsANewAttackCycle()
+    {
+        MisthalinMirrorPlanner.AttackState state = new MisthalinMirrorPlanner.AttackState();
+        MisthalinMirrorPlanner.SceneTile mirror = tile(10, 10);
+        MisthalinMirrorPlanner.SceneTile wardrobe = tile(10, 14);
+        MisthalinMirrorPlanner.PushPlan plan = MisthalinMirrorPlanner.nextPush(
+                mirror, wardrobe, ignored -> true);
+
+        state.observe(mirror, wardrobe, 1L, 1_000L);
+        state.recordDispatch(mirror, plan, 1_000L, 500L);
+        state.observe(plan.getExpectedMirrorTile(), wardrobe, 1L, 1_300L);
+        assertFalse(state.canDispatch(1_400L));
+
+        state.observe(plan.getExpectedMirrorTile(), wardrobe, 2L, 2_000L);
+        assertTrue("A new graphic spawn must start a new attack even at the same wardrobe",
+                state.canDispatch(2_000L));
+    }
+
+    @Test
+    public void cueStateOnlyAcceptsGraphic483AndNumbersEverySpawn()
+    {
+        MisthalinMirrorPlanner.CueState state = new MisthalinMirrorPlanner.CueState();
+        MisthalinMirrorPlanner.SceneTile wardrobe = tile(12, 15);
+
+        assertFalse(state.record(482, wardrobe, 7));
+        assertNull(state.snapshot());
+
+        assertTrue(state.record(483, wardrobe, 7));
+        MisthalinMirrorPlanner.WardrobeCue first = state.snapshot();
+        assertEquals(wardrobe, first.getTile());
+        assertEquals(7, first.getWorldViewId());
+        assertEquals(1L, first.getCycle());
+
+        assertTrue(state.record(483, wardrobe, 7));
+        assertEquals(2L, state.snapshot().getCycle());
+    }
+
+    @Test
     public void mirrorInstructionIsClaimedWithoutRequiringADefinedPoint()
     {
         assertTrue(MisthalinMystery.isMirrorShowdownText(java.util.List.of(

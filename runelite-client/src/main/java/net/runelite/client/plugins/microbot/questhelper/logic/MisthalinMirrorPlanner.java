@@ -181,6 +181,8 @@ final class MisthalinMirrorPlanner
     static final class AttackState
     {
         private SceneTile activeWardrobe;
+        private long activeCycle = Long.MIN_VALUE;
+        private long inferredCycle;
         private SceneTile pendingFrom;
         private SceneTile pendingExpected;
         private boolean pendingFinalAim;
@@ -191,12 +193,27 @@ final class MisthalinMirrorPlanner
         {
             if (wardrobe == null)
             {
+                observe(mirror, null, Long.MIN_VALUE, now);
+                return;
+            }
+            if (activeWardrobe == null || !wardrobe.equals(activeWardrobe))
+            {
+                inferredCycle++;
+            }
+            observe(mirror, wardrobe, inferredCycle, now);
+        }
+
+        void observe(SceneTile mirror, SceneTile wardrobe, long cycle, long now)
+        {
+            if (wardrobe == null)
+            {
                 reset();
                 return;
             }
-            if (!wardrobe.equals(activeWardrobe))
+            if (cycle != activeCycle || !wardrobe.equals(activeWardrobe))
             {
                 activeWardrobe = wardrobe;
+                activeCycle = cycle;
                 clearPending();
                 aimedForCurrentAttack = false;
             }
@@ -239,6 +256,7 @@ final class MisthalinMirrorPlanner
         void reset()
         {
             activeWardrobe = null;
+            activeCycle = Long.MIN_VALUE;
             aimedForCurrentAttack = false;
             clearPending();
         }
@@ -249,6 +267,61 @@ final class MisthalinMirrorPlanner
             pendingExpected = null;
             pendingFinalAim = false;
             pendingDeadline = 0;
+        }
+    }
+
+    static final class CueState
+    {
+        private long nextCycle;
+        private WardrobeCue cue;
+
+        synchronized boolean record(int graphicId, SceneTile tile, int worldViewId)
+        {
+            if (graphicId != 483 || tile == null)
+            {
+                return false;
+            }
+            cue = new WardrobeCue(tile, worldViewId, ++nextCycle);
+            return true;
+        }
+
+        synchronized WardrobeCue snapshot()
+        {
+            return cue;
+        }
+
+        synchronized void reset()
+        {
+            cue = null;
+        }
+    }
+
+    static final class WardrobeCue
+    {
+        private final SceneTile tile;
+        private final int worldViewId;
+        private final long cycle;
+
+        private WardrobeCue(SceneTile tile, int worldViewId, long cycle)
+        {
+            this.tile = tile;
+            this.worldViewId = worldViewId;
+            this.cycle = cycle;
+        }
+
+        SceneTile getTile()
+        {
+            return tile;
+        }
+
+        int getWorldViewId()
+        {
+            return worldViewId;
+        }
+
+        long getCycle()
+        {
+            return cycle;
         }
     }
 }
