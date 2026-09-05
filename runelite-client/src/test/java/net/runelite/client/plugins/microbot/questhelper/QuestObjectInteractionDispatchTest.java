@@ -294,10 +294,11 @@ public class QuestObjectInteractionDispatchTest
                             {
                                     calls.globalReachabilityChecks++;
                             }
-                            if (owner.equals(Type.getInternalName(Rs2GameObject.class))
+                            if (owner.equals(Type.getInternalName(QuestObjectGeometry.class))
                                     && methodName.equals("hasLineOfSight")
                                     && methodDescriptor.equals(Type.getMethodDescriptor(
                                     Type.BOOLEAN_TYPE,
+                                    Type.getType(net.runelite.api.WorldView.class),
                                     Type.getType(WorldPoint.class),
                                     Type.getType(TileObject.class))))
                             {

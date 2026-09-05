@@ -1481,13 +1481,12 @@ public class QuestScript extends Script {
                 Rs2TileObjectModel object = new Rs2TileObjectModel(tile);
                 if (object.getWorldLocation().distanceTo(player) > 8 || object.getLocalLocation() == null
                         || !(Rs2Camera.isTileOnScreen(object.getLocalLocation()) || object.getCanvasLocation() != null)
-                        || !Rs2GameObject.hasLineOfSight(player, tile)) return false;
-                WorldArea area = tile instanceof GameObject ? Rs2GameObject.getWorldArea((GameObject) tile)
-                        : object.getWorldLocation().toWorldArea();
+                        || !QuestObjectGeometry.hasLineOfSight(Microbot.getClient().getTopLevelWorldView(), player, tile)) return false;
+                WorldArea area = QuestObjectGeometry.area(Microbot.getClient().getTopLevelWorldView(), tile);
                 Set<WorldPoint> reachable = QuestLocalApproach.reachable(Microbot.getClient().getTopLevelWorldView(), player, 8);
                 if (!QuestLocalApproach.adjacentReachable(area, reachable)) return false;
                 if (selectObjectApproachTile(area, player, reachable::contains,
-                        point -> Rs2GameObject.hasLineOfSight(point, tile)) == null) return false;
+                        point -> QuestObjectGeometry.hasLineOfSight(Microbot.getClient().getTopLevelWorldView(), point, tile)) == null) return false;
                 return ((ObjectStep) step).getIconItemID() != -1 || !chooseCorrectObjectOption(step, object).isEmpty();
             }
             return false;
@@ -1719,15 +1718,14 @@ public class QuestScript extends Script {
         WorldPoint target = Microbot.getClientThread().runOnClientThreadOptional(() -> {
             WorldPoint player = scenePlayerLocation();
             if (player == null) return null;
-            if (tileObject instanceof GameObject) {
-                WorldPoint approach = selectObjectApproachTile(Rs2GameObject.getWorldArea((GameObject) tileObject),
-                        player, this::isSceneTileWalkable, point -> Rs2GameObject.hasLineOfSight(point, tileObject));
-                if (approach != null) return approach;
-            }
+            WorldArea area = QuestObjectGeometry.area(Microbot.getClient().getTopLevelWorldView(), tileObject);
+            WorldPoint adjacent = selectObjectApproachTile(area, player, this::isSceneTileWalkable,
+                    point -> QuestObjectGeometry.hasLineOfSight(Microbot.getClient().getTopLevelWorldView(), point, tileObject));
+            if (adjacent != null) return adjacent;
             for (int radius = 1; radius <= 10; radius++) {
                 WorldPoint approach = new WorldArea(location.dx(-radius).dy(-radius), radius * 2 + 1, radius * 2 + 1).toWorldPointList().stream()
                         .filter(this::isSceneTileWalkable)
-                        .filter(point -> tileObject == null || Rs2GameObject.hasLineOfSight(point, tileObject))
+                        .filter(point -> QuestObjectGeometry.hasLineOfSight(Microbot.getClient().getTopLevelWorldView(), point, tileObject))
                         .min(Comparator.comparingInt(point -> point.distanceTo(player))).orElse(null);
                 if (approach != null) return approach;
             }
@@ -1971,18 +1969,6 @@ public class QuestScript extends Script {
 		}
 
 		return "use";
-	}
-
-    private boolean hasLineOfSightFrom(WorldPoint point, Rs2TileObjectModel object) {
-		if (point == null || object == null || object.getWorldLocation() == null) {
-			return false;
-		}
-
-		WorldArea fromArea = point.toWorldArea();
-		WorldArea targetArea = object.getWorldLocation().toWorldArea();
-
-		return Microbot.getClient().getTopLevelWorldView() != null
-				&& fromArea.hasLineOfSightTo(Microbot.getClient().getTopLevelWorldView(), targetArea);
 	}
 
     private boolean applyDetailedQuestStep(DetailedQuestStep conditionalStep) {
