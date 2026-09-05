@@ -3,6 +3,7 @@ package net.runelite.client.plugins.microbot.questhelper.logic;
 import java.util.List;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.function.BooleanSupplier;
 import net.runelite.api.Quest;
 import net.runelite.api.coords.WorldPoint;
 import org.junit.Test;
@@ -83,7 +84,8 @@ public class MisthalinApproachSequenceTest
         try
         {
             approach = MisthalinMystery.class.getDeclaredMethod("handleDamagedWallApproach",
-                    WorldPoint.class, boolean.class, Runnable.class, Runnable.class);
+                    WorldPoint.class, boolean.class, Runnable.class, Runnable.class,
+                    BooleanSupplier.class);
             approach.setAccessible(true);
         }
         catch (NoSuchMethodException ex)
@@ -93,36 +95,52 @@ public class MisthalinApproachSequenceTest
         }
 
         int[] canvas = {0};
-        int[] webWalker = {0};
+        int[] localApproach = {0};
+        int[] climbs = {0};
         MisthalinMystery quest = new MisthalinMystery();
         Runnable canvasMove = () -> canvas[0]++;
-        Runnable webWalk = () -> webWalker[0]++;
+        Runnable localMove = () -> localApproach[0]++;
+        BooleanSupplier climb = () -> {
+            climbs[0]++;
+            return true;
+        };
 
         assertFalse((boolean) approach.invoke(quest, new WorldPoint(1642, 4839, 0),
-                false, canvasMove, webWalk));
+                false, canvasMove, localMove, climb));
         assertEquals(0, canvas[0]);
-        assertEquals(1, webWalker[0]);
+        assertEquals(1, localApproach[0]);
+
+        assertFalse((boolean) approach.invoke(quest, new WorldPoint(1642, 4839, 0),
+                false, canvasMove, localMove, climb));
+        assertEquals("The local recovery waypoint must not be clicked every poll",
+                1, localApproach[0]);
 
         assertFalse((boolean) approach.invoke(quest, new WorldPoint(1645, 4830, 0),
-                false, canvasMove, webWalk));
+                false, canvasMove, localMove, climb));
         assertEquals(1, canvas[0]);
-        assertEquals(1, webWalker[0]);
+        assertEquals(1, localApproach[0]);
 
         assertFalse((boolean) approach.invoke(quest, new WorldPoint(1645, 4830, 0),
-                false, canvasMove, webWalk));
+                false, canvasMove, localMove, climb));
         assertEquals("An unacknowledged canvas move must not be clicked every custom-logic poll",
                 1, canvas[0]);
-        assertEquals(1, webWalker[0]);
+        assertEquals(1, localApproach[0]);
 
         assertFalse((boolean) approach.invoke(quest, new WorldPoint(1646, 4829, 0),
-                true, canvasMove, webWalk));
+                true, canvasMove, localMove, climb));
         assertEquals("Movement must suppress duplicate approach clicks", 1, canvas[0]);
-        assertEquals(1, webWalker[0]);
+        assertEquals(1, localApproach[0]);
 
-        assertTrue((boolean) approach.invoke(quest, new WorldPoint(1647, 4829, 0),
-                false, canvasMove, webWalk));
+        assertFalse("Custom logic must retain ownership while dispatching Climb",
+                (boolean) approach.invoke(quest, new WorldPoint(1647, 4829, 0),
+                        false, canvasMove, localMove, climb));
         assertEquals(1, canvas[0]);
-        assertEquals(1, webWalker[0]);
+        assertEquals(1, localApproach[0]);
+        assertEquals(1, climbs[0]);
+
+        assertFalse((boolean) approach.invoke(quest, new WorldPoint(1647, 4829, 0),
+                false, canvasMove, localMove, climb));
+        assertEquals("The same wall interaction must not be dispatched every poll", 1, climbs[0]);
     }
 
     @Test
@@ -135,7 +153,7 @@ public class MisthalinApproachSequenceTest
     }
 
     @Test
-    public void onlyTheValidatedPaintingEntryDispatchesCanvasMovement() throws Exception
+    public void validatedLocalApproachesDispatchCanvasMovement() throws Exception
     {
         Method dispatch;
         try
@@ -162,14 +180,15 @@ public class MisthalinApproachSequenceTest
         for (WorldPoint waypoint : List.of(
                 PAINTING_STAND,
                 new WorldPoint(1646, 4829, 0),
+                new WorldPoint(1650, 4830, 0),
                 new WorldPoint(1633, 4837, 0),
                 new WorldPoint(1641, 4828, 0),
                 new WorldPoint(1646, 4836, 0)))
         {
             dispatch.invoke(null, waypoint, canvasMove, webWalk);
         }
-        assertEquals(1, canvas[0]);
-        assertEquals(5, webWalker[0]);
+        assertEquals(3, canvas[0]);
+        assertEquals(4, webWalker[0]);
     }
 
     @Test
