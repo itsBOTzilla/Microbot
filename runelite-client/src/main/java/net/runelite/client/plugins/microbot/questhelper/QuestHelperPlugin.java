@@ -79,7 +79,7 @@ import java.util.stream.Collectors;
 
 @PluginDescriptor(
 	name = "Quest Helper",
-	version = "1.0.8",
+	version = "1.0.12",
 	description = "Helps you with questing",
 	tags = { "quest", "helper", "overlay" }
 )
@@ -263,6 +263,12 @@ public class QuestHelperPlugin extends Plugin
 	{
 		questBankManager.loadInitialStateFromConfig(client);
 		questManager.updateQuestState();
+	}
+
+	@Subscribe
+	public void onGraphicsObjectCreated(GraphicsObjectCreated event)
+	{
+		questScript.onGraphicsObjectCreated(event.getGraphicsObject());
 	}
 
 	@Subscribe

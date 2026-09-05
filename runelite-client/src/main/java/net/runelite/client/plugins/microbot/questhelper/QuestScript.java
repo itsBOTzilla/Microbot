@@ -101,7 +101,7 @@ public class QuestScript extends Script {
     private long interactionSequence;
     private long targetReadyAt;
     private QuestStep lastCustomStep;
-    private long nextCustomAttemptAt;
+    private volatile long nextCustomAttemptAt;
     private boolean customActionPending;
 
     private static WorldPoint scenePlayerLocation() {
@@ -185,7 +185,9 @@ public class QuestScript extends Script {
                     }
                 }
 
-                if (!Rs2Dialogue.isInDialogue() && (pendingInteraction != null || Rs2Player.isAnimating())) return;
+                if (shouldPauseBeforeCustomLogic(
+                        Rs2Dialogue.isInDialogue(), pendingInteraction != null, Rs2Player.isAnimating(),
+                        customLogicRunsWhileAnimating())) return;
 
                 if (questStep != null && !questStep.getWidgetsToHighlight().isEmpty()) {
                     var visibleWidgetHighlights = questStep.getWidgetsToHighlight().stream()
@@ -309,9 +311,14 @@ public class QuestScript extends Script {
                         }
                     }
 
-                    if (pendingInteraction != null || Rs2Player.isAnimating()) return;
+                    if (pendingInteraction != null) return;
+
+                    boolean playerAnimating = Rs2Player.isAnimating();
+                    if (playerAnimating && !customLogicRunsWhileAnimating()) return;
 
                     if (!runIdleCustomLogic(questStep)) return;
+
+                    if (playerAnimating) return;
 
                     boolean isInCutscene = Microbot.getVarbitValue(4606) > 0;
                     if (isInCutscene) {
@@ -1391,13 +1398,43 @@ public class QuestScript extends Script {
         return questLogic == null || questLogic.executeCustomLogic();
     }
 
+    public void onGraphicsObjectCreated(GraphicsObject graphicsObject) {
+        if (graphicsObject == null || getQuestHelperPlugin() == null
+                || getQuestHelperPlugin().getSelectedQuest() == null) {
+            return;
+        }
+        var questLogic = QuestRegistry.getQuest(
+                getQuestHelperPlugin().getSelectedQuest().getQuest().getId());
+        if (questLogic != null && questLogic.onGraphicsObjectCreated(graphicsObject)) {
+            nextCustomAttemptAt = 0;
+        }
+    }
+
     private boolean runIdleCustomLogic(QuestStep step) {
         long now = System.nanoTime();
         if (lastCustomStep == step && now - nextCustomAttemptAt < 0) return !customActionPending;
         lastCustomStep = step;
-        nextCustomAttemptAt = now + 600_000_000L;
+        nextCustomAttemptAt = now + customLogicIntervalNanos();
         customActionPending = !executeQuestCustomLogic();
         return !customActionPending;
+    }
+
+    private long customLogicIntervalNanos() {
+        var questLogic = QuestRegistry.getQuest(
+                getQuestHelperPlugin().getSelectedQuest().getQuest().getId());
+        return questLogic == null ? 600_000_000L
+                : Math.max(0, questLogic.customLogicIntervalNanos());
+    }
+
+    private boolean customLogicRunsWhileAnimating() {
+        var questLogic = QuestRegistry.getQuest(
+                getQuestHelperPlugin().getSelectedQuest().getQuest().getId());
+        return questLogic != null && questLogic.customLogicRunsWhileAnimating();
+    }
+
+    static boolean shouldPauseBeforeCustomLogic(boolean inDialogue, boolean pending,
+                                                boolean animating, boolean allowWhileAnimating) {
+        return !inDialogue && (pending || (animating && !allowWhileAnimating));
     }
 
     private void clearInteractionState() {
@@ -1649,8 +1686,9 @@ public class QuestScript extends Script {
             Rs2Walker.clearWalkingRoute("quest-helper:npc-step-visible-interact");
 
             if (step.getText().stream().anyMatch(x -> x.toLowerCase().contains("kill"))) {
-                if (!Rs2Combat.inCombat() && npc.click("Attack")) {
-                    beginInteraction(step, npc.getId(), npc.getIndex(), npc.getWorldLocation(), "Attack", -1, 0);
+                String action = chooseCombatNpcAction(getNpcActions(npc));
+                if (!Rs2Combat.inCombat() && npc.click(action)) {
+                    beginInteraction(step, npc.getId(), npc.getIndex(), npc.getWorldLocation(), action, -1, 0);
                     return true;
                 }
                 return false;
@@ -1883,6 +1921,25 @@ public class QuestScript extends Script {
                     .anyMatch(highlight -> highlight.getItemIdRequirement() != null);
             return chooseNpcAction(step.getText(), composition == null ? null : composition.getActions(), shopStep);
         }).orElse("");
+    }
+
+    private String[] getNpcActions(Rs2NpcModel npc) {
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            NPCComposition composition = Microbot.getClient().getNpcDefinition(npc.getId());
+            if (composition != null && composition.getConfigs() != null) composition = composition.transform();
+            return composition == null ? null : composition.getActions();
+        }).orElse(null);
+    }
+
+    static String chooseCombatNpcAction(String[] actions) {
+        if (actions != null) {
+            for (String preferred : new String[]{"Attack", "Fight"}) {
+                for (String action : actions) {
+                    if (preferred.equalsIgnoreCase(action)) return action;
+                }
+            }
+        }
+        return "Attack";
     }
 
     static String chooseNpcAction(List<String> stepText, String[] actions, boolean shopStep) {
