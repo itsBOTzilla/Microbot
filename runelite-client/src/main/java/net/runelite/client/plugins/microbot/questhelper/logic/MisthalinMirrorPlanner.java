@@ -10,23 +10,48 @@ final class MisthalinMirrorPlanner
     {
     }
 
-    static PushPlan nextPush(SceneTile mirror, SceneTile wardrobe,
+    static PushPlan nextPush(SceneTile mirror, SceneTile wardrobe, SceneTile arenaCenter,
                              Predicate<SceneTile> canOccupy)
     {
-        if (mirror == null || wardrobe == null || canOccupy == null || mirror.equals(wardrobe))
+        if (mirror == null || wardrobe == null || arenaCenter == null || canOccupy == null
+                || mirror.equals(wardrobe))
         {
             return null;
         }
 
-        int deltaX = wardrobe.getX() - mirror.getX();
-        int deltaY = wardrobe.getY() - mirror.getY();
+        Direction inward = directionToward(wardrobe, arenaCenter);
+        if (inward == null)
+        {
+            return null;
+        }
+
+        SceneTile target = wardrobe.translate(
+                inward.getDeltaX() * 4, inward.getDeltaY() * 4);
+        SceneTile staging = target.translate(inward.getDeltaX(), inward.getDeltaY());
+        if (mirror.equals(staging))
+        {
+            return validPlan(mirror, inward.opposite(), true, canOccupy);
+        }
+
+        return planToward(mirror, staging, canOccupy);
+    }
+
+    private static PushPlan planToward(SceneTile mirror, SceneTile target,
+                                       Predicate<SceneTile> canOccupy)
+    {
+        int deltaX = target.getX() - mirror.getX();
+        int deltaY = target.getY() - mirror.getY();
+        if (deltaX == 0 && deltaY == 0)
+        {
+            return null;
+        }
         if (deltaX == 0)
         {
-            return validPlan(mirror, Direction.vertical(deltaY), true, canOccupy);
+            return validPlan(mirror, Direction.vertical(deltaY), false, canOccupy);
         }
         if (deltaY == 0)
         {
-            return validPlan(mirror, Direction.horizontal(deltaX), true, canOccupy);
+            return validPlan(mirror, Direction.horizontal(deltaX), false, canOccupy);
         }
 
         Direction first;
@@ -44,6 +69,19 @@ final class MisthalinMirrorPlanner
 
         PushPlan plan = validPlan(mirror, first, false, canOccupy);
         return plan != null ? plan : validPlan(mirror, second, false, canOccupy);
+    }
+
+    private static Direction directionToward(SceneTile from, SceneTile to)
+    {
+        int deltaX = to.getX() - from.getX();
+        int deltaY = to.getY() - from.getY();
+        if (deltaX == 0 && deltaY == 0)
+        {
+            return null;
+        }
+        return Math.abs(deltaX) > Math.abs(deltaY)
+                ? Direction.horizontal(deltaX)
+                : Direction.vertical(deltaY);
     }
 
     private static PushPlan validPlan(SceneTile mirror, Direction direction, boolean finalAim,
@@ -90,6 +128,23 @@ final class MisthalinMirrorPlanner
         static Direction vertical(int delta)
         {
             return delta > 0 ? NORTH : SOUTH;
+        }
+
+        Direction opposite()
+        {
+            switch (this)
+            {
+                case NORTH:
+                    return SOUTH;
+                case EAST:
+                    return WEST;
+                case SOUTH:
+                    return NORTH;
+                case WEST:
+                    return EAST;
+                default:
+                    throw new IllegalStateException("Unknown direction " + this);
+            }
         }
     }
 

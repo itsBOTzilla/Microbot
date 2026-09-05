@@ -9,10 +9,21 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 public class QuestCustomLogicLifecycleTest
 {
+    @Test
+    public void onlyOptedInCustomLogicRunsDuringAnimation()
+    {
+        assertTrue(QuestScript.shouldPauseBeforeCustomLogic(false, false, true, false));
+        assertFalse(QuestScript.shouldPauseBeforeCustomLogic(false, false, true, true));
+        assertTrue(QuestScript.shouldPauseBeforeCustomLogic(false, true, true, true));
+        assertFalse(QuestScript.shouldPauseBeforeCustomLogic(true, false, true, false));
+    }
+
     @Test
     public void clearingInteractionStateAlsoClearsCustomQuestState() throws Exception
     {

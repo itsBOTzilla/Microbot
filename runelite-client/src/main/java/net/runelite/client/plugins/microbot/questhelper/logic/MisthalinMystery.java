@@ -33,6 +33,7 @@ public class MisthalinMystery extends BaseQuest
     private static final long DAMAGED_WALL_INTERACT_RETRY_NANOS = 1_500_000_000L;
     private static final long MIRROR_MOVE_RETRY_NANOS = 1_200_000_000L;
     private static final long MIRROR_PUSH_RETRY_NANOS = 1_800_000_000L;
+    private static final long MIRROR_LOGIC_INTERVAL_NANOS = 200_000_000L;
     private static final String MIRROR_SHOWDOWN_MARKER = "move the mirror to reflect the knives";
     private static final String LACEY_INTERRUPT_QUESTION = "Interrupt with answer?";
     private static final String LACEY_INTERRUPT_ANSWER = "Count Check";
@@ -54,6 +55,8 @@ public class MisthalinMystery extends BaseQuest
             new WorldPoint(1633, 4837, 0),
             new WorldPoint(1641, 4828, 0),
             new WorldPoint(1646, 4836, 0));
+    private static final MisthalinMirrorPlanner.SceneTile MIRROR_ARENA_CENTER =
+            new MisthalinMirrorPlanner.SceneTile(47, 54);
 
     private final QuestApproachSequence approachSequence = new QuestApproachSequence();
     private final MisthalinMirrorPlanner.AttackState mirrorAttackState =
@@ -161,6 +164,26 @@ public class MisthalinMystery extends BaseQuest
     }
 
     @Override
+    public long customLogicIntervalNanos()
+    {
+        return MIRROR_LOGIC_INTERVAL_NANOS;
+    }
+
+    @Override
+    public boolean customLogicRunsWhileAnimating()
+    {
+        QuestHelperPlugin plugin = getQuestHelperPlugin();
+        if (plugin == null || plugin.getSelectedQuest() == null
+                || plugin.getSelectedQuest().getCurrentStep() == null)
+        {
+            return false;
+        }
+        QuestStep step = plugin.getSelectedQuest().getCurrentStep().getActiveStep();
+        return step instanceof DetailedQuestStep
+                && isMirrorShowdownText(((DetailedQuestStep) step).getText());
+    }
+
+    @Override
     public void reset()
     {
         approachSequence.reset();
@@ -223,7 +246,7 @@ public class MisthalinMystery extends BaseQuest
         }
 
         MisthalinMirrorPlanner.PushPlan plan = MisthalinMirrorPlanner.nextPush(
-                snapshot.mirrorTile, snapshot.wardrobeTile,
+                snapshot.mirrorTile, snapshot.wardrobeTile, MIRROR_ARENA_CENTER,
                 tile -> isWalkableSceneTile(tile, snapshot.worldViewId));
         if (plan == null)
         {
@@ -233,7 +256,7 @@ public class MisthalinMystery extends BaseQuest
         if (!plan.getStandTile().equals(snapshot.playerTile))
         {
             nextMirrorPushAt = 0;
-            if (Rs2Player.isMoving() || Rs2Player.isAnimating())
+            if (Rs2Player.isMoving())
             {
                 return false;
             }
@@ -262,7 +285,7 @@ public class MisthalinMystery extends BaseQuest
 
         mirrorMoveTarget = null;
         nextMirrorMoveAt = 0;
-        if (Rs2Player.isMoving() || Rs2Player.isAnimating()
+        if (Rs2Player.isMoving()
                 || now - nextMirrorPushAt < 0)
         {
             return false;
