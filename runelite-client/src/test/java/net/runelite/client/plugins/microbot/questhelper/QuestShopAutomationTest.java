@@ -31,6 +31,18 @@ public class QuestShopAutomationTest {
     }
 
     @Test
+    public void combatNpcUsesFightWhenAttackIsNotAvailable() {
+        assertEquals("Fight", QuestScript.chooseCombatNpcAction(
+                new String[]{"Talk-to", "Fight", null}));
+    }
+
+    @Test
+    public void combatNpcStillPrefersAttackWhenAvailable() {
+        assertEquals("Attack", QuestScript.chooseCombatNpcAction(
+                new String[]{"Talk-to", "Fight", "Attack"}));
+    }
+
+    @Test
     public void shopStepSelectsFirstItemNotAlreadyInInventory() {
         IntPredicate hasItem = itemId -> itemId == 100;
 
