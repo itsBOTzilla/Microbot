@@ -78,6 +78,38 @@ public class MisthalinApproachSequenceTest
     }
 
     @Test
+    public void laceyInterruptSelectsCountCheckAndSuppressesGenericFallback() throws Exception
+    {
+        Method handler;
+        try
+        {
+            handler = MisthalinMystery.class.getDeclaredMethod("handleLaceyInterrupt",
+                    String.class, boolean.class, BooleanSupplier.class);
+            handler.setAccessible(true);
+        }
+        catch (NoSuchMethodException ex)
+        {
+            fail("The Misthalin Lacey cutscene must own its unhighlighted answer prompt");
+            return;
+        }
+
+        int[] selections = {0};
+        BooleanSupplier selectCountCheck = () -> {
+            selections[0]++;
+            return true;
+        };
+
+        assertFalse("A handled prompt must not fall through to generic dialogue selection",
+                (boolean) handler.invoke(null, "Interrupt with answer?", true, selectCountCheck));
+        assertEquals(1, selections[0]);
+
+        assertTrue((boolean) handler.invoke(null, "Another question?", true, selectCountCheck));
+        assertFalse("A recognized prompt must remain owned while its options are loading",
+                (boolean) handler.invoke(null, "Interrupt with answer?", false, selectCountCheck));
+        assertEquals("Only a present Count Check option may be selected", 1, selections[0]);
+    }
+
+    @Test
     public void damagedWallApproachKeepsControlUntilThePlayerCanClimb() throws Exception
     {
         Method approach;

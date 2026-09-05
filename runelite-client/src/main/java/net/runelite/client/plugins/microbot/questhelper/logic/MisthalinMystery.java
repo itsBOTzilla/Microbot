@@ -10,6 +10,7 @@ import net.runelite.client.plugins.microbot.questhelper.QuestHelperPlugin;
 import net.runelite.client.plugins.microbot.questhelper.steps.DetailedQuestStep;
 import net.runelite.client.plugins.microbot.questhelper.steps.ObjectStep;
 import net.runelite.client.plugins.microbot.questhelper.steps.QuestStep;
+import net.runelite.client.plugins.microbot.util.dialogues.Rs2Dialogue;
 import net.runelite.client.plugins.microbot.util.gameobject.Rs2GameObject;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.input.InputArbiter;
@@ -20,6 +21,8 @@ public class MisthalinMystery extends BaseQuest
 {
     private static final long DAMAGED_WALL_CANVAS_RETRY_NANOS = 1_500_000_000L;
     private static final long DAMAGED_WALL_INTERACT_RETRY_NANOS = 1_500_000_000L;
+    private static final String LACEY_INTERRUPT_QUESTION = "Interrupt with answer?";
+    private static final String LACEY_INTERRUPT_ANSWER = "Count Check";
     private static final WorldPoint PAINTING_OBJECT = new WorldPoint(1632, 4833, 0);
     private static final WorldPoint PAINTING_CANVAS_ENTRY = new WorldPoint(1633, 4830, 0);
     private static final List<WorldPoint> PAINTING_ROUTE = List.of(
@@ -57,6 +60,16 @@ public class MisthalinMystery extends BaseQuest
         }
 
         QuestStep step = plugin.getSelectedQuest().getCurrentStep().getActiveStep();
+        if (!handleLaceyInterrupt(
+                Rs2Dialogue.getQuestion(),
+                Rs2Dialogue.hasDialogueOption(LACEY_INTERRUPT_ANSWER, true),
+                () -> {
+                    Rs2Walker.clearWalkingRoute("quest-helper:misthalin-lacey-answer");
+                    return Rs2Dialogue.keyPressForDialogueOption(LACEY_INTERRUPT_ANSWER, true);
+                }))
+        {
+            return false;
+        }
         if (!(step instanceof ObjectStep))
         {
             approachSequence.reset();
@@ -142,6 +155,20 @@ public class MisthalinMystery extends BaseQuest
             return FIREPLACE_ROUTE;
         }
         return Collections.emptyList();
+    }
+
+    static boolean handleLaceyInterrupt(String question, boolean countCheckAvailable,
+                                        BooleanSupplier selectCountCheck)
+    {
+        if (!LACEY_INTERRUPT_QUESTION.equals(question))
+        {
+            return true;
+        }
+        if (countCheckAvailable)
+        {
+            selectCountCheck.getAsBoolean();
+        }
+        return false;
     }
 
     boolean handleDamagedWallApproach(WorldPoint player, boolean moving,
