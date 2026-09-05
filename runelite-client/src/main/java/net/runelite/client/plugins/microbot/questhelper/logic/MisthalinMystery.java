@@ -17,6 +17,7 @@ import net.runelite.api.gameval.ObjectID;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.api.npc.models.Rs2NpcModel;
 import net.runelite.client.plugins.microbot.questhelper.QuestHelperPlugin;
+import net.runelite.client.plugins.microbot.questhelper.questhelpers.QuestHelper;
 import net.runelite.client.plugins.microbot.questhelper.steps.DetailedQuestStep;
 import net.runelite.client.plugins.microbot.questhelper.steps.ObjectStep;
 import net.runelite.client.plugins.microbot.questhelper.steps.QuestStep;
@@ -83,8 +84,9 @@ public class MisthalinMystery extends BaseQuest
     public boolean executeCustomLogic()
     {
         QuestHelperPlugin plugin = getQuestHelperPlugin();
-        if (plugin == null || plugin.getSelectedQuest() == null
-                || plugin.getSelectedQuest().getCurrentStep() == null)
+        QuestHelper selectedQuest = plugin == null ? null : plugin.getSelectedQuest();
+        QuestStep currentStep = selectedQuest == null ? null : selectedQuest.getCurrentStep();
+        if (currentStep == null)
         {
             approachSequence.reset();
             resetDamagedWallApproach();
@@ -93,7 +95,7 @@ public class MisthalinMystery extends BaseQuest
             return true;
         }
 
-        QuestStep step = plugin.getSelectedQuest().getCurrentStep().getActiveStep();
+        QuestStep step = currentStep.getActiveStep();
         if (!handleLaceyInterrupt(
                 Rs2Dialogue.getQuestion(),
                 Rs2Dialogue.hasDialogueOption(LACEY_INTERRUPT_ANSWER, true),
@@ -212,12 +214,13 @@ public class MisthalinMystery extends BaseQuest
     public boolean customLogicRunsWhileAnimating()
     {
         QuestHelperPlugin plugin = getQuestHelperPlugin();
-        if (plugin == null || plugin.getSelectedQuest() == null
-                || plugin.getSelectedQuest().getCurrentStep() == null)
+        QuestHelper selectedQuest = plugin == null ? null : plugin.getSelectedQuest();
+        QuestStep currentStep = selectedQuest == null ? null : selectedQuest.getCurrentStep();
+        if (currentStep == null)
         {
             return false;
         }
-        QuestStep step = plugin.getSelectedQuest().getCurrentStep().getActiveStep();
+        QuestStep step = currentStep.getActiveStep();
         return step instanceof DetailedQuestStep
                 && isMirrorShowdownText(((DetailedQuestStep) step).getText());
     }
@@ -610,9 +613,9 @@ public class MisthalinMystery extends BaseQuest
 
     private static boolean isActiveStep(QuestHelperPlugin plugin, QuestStep expected)
     {
-        return plugin.getSelectedQuest() != null
-                && plugin.getSelectedQuest().getCurrentStep() != null
-                && plugin.getSelectedQuest().getCurrentStep().getActiveStep() == expected;
+        QuestHelper selectedQuest = plugin == null ? null : plugin.getSelectedQuest();
+        QuestStep currentStep = selectedQuest == null ? null : selectedQuest.getCurrentStep();
+        return currentStep != null && currentStep.getActiveStep() == expected;
     }
 
     static boolean shouldStopRoute(boolean interrupted, boolean human, boolean paused,
