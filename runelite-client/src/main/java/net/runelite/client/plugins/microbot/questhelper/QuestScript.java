@@ -1977,11 +1977,15 @@ public class QuestScript extends Script {
     private boolean applyDetailedQuestStep(DetailedQuestStep conditionalStep) {
         if (conditionalStep instanceof NpcStep) return false;
 
+        WorldPoint stepWorldPoint = conditionalStep.getDefinedPoint() == null
+                ? null
+                : conditionalStep.getDefinedPoint().getWorldPoint();
+
         if (conditionalStep.getIconItemID() != -1
-                && conditionalStep.getDefinedPoint().getWorldPoint() != null
-                && !conditionalStep.getDefinedPoint().getWorldPoint().toWorldArea().hasLineOfSightTo(Microbot.getClient().getTopLevelWorldView(), Rs2Player.getWorldLocation())) {
-            if (Rs2Tile.areSurroundingTilesWalkable(conditionalStep.getDefinedPoint().getWorldPoint(), 1, 1)) {
-                WorldPoint nearestUnreachableWalkableTile = Rs2Tile.getNearestWalkableTileWithLineOfSight(conditionalStep.getDefinedPoint().getWorldPoint());
+                && stepWorldPoint != null
+                && !stepWorldPoint.toWorldArea().hasLineOfSightTo(Microbot.getClient().getTopLevelWorldView(), Rs2Player.getWorldLocation())) {
+            if (Rs2Tile.areSurroundingTilesWalkable(stepWorldPoint, 1, 1)) {
+                WorldPoint nearestUnreachableWalkableTile = Rs2Tile.getNearestWalkableTileWithLineOfSight(stepWorldPoint);
                 if (nearestUnreachableWalkableTile != null) {
                     return Rs2Walker.walkTo(nearestUnreachableWalkableTile, 0);
                 }
@@ -2008,11 +2012,11 @@ public class QuestScript extends Script {
 			}
 		}
 
-        if (!usingItems && conditionalStep.getDefinedPoint().getWorldPoint() != null && !Rs2Walker.walkTo(conditionalStep.getDefinedPoint().getWorldPoint()))
+        if (!usingItems && stepWorldPoint != null && !Rs2Walker.walkTo(stepWorldPoint))
             return true;
 
-		if (conditionalStep.getIconItemID() != -1 && conditionalStep.getDefinedPoint().getWorldPoint() != null
-				&& conditionalStep.getDefinedPoint().getWorldPoint().toWorldArea().hasLineOfSightTo(Microbot.getClient().getTopLevelWorldView(), Rs2Player.getWorldLocation())) {
+		if (conditionalStep.getIconItemID() != -1 && stepWorldPoint != null
+				&& stepWorldPoint.toWorldArea().hasLineOfSightTo(Microbot.getClient().getTopLevelWorldView(), Rs2Player.getWorldLocation())) {
 			if (conditionalStep.getQuestHelper().getQuest() == QuestHelperQuest.ZOGRE_FLESH_EATERS) {
 				if (conditionalStep.getIconItemID() == 4836) { // strange potion
 					lootGroundItem(ItemID.CUP_OF_TEA_4838, 20);
