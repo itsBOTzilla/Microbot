@@ -83,7 +83,7 @@ public class MisthalinMirrorPlannerTest
     }
 
     @Test
-    public void unobservedPushCanBeRetriedAfterItsDeadline()
+    public void unobservedPushIsNotRepeatedDuringTheSameAttack()
     {
         MisthalinMirrorPlanner.AttackState state = new MisthalinMirrorPlanner.AttackState();
         MisthalinMirrorPlanner.SceneTile mirror = tile(10, 10);
@@ -91,11 +91,32 @@ public class MisthalinMirrorPlannerTest
         MisthalinMirrorPlanner.PushPlan plan = MisthalinMirrorPlanner.nextPush(
                 mirror, wardrobe, ignored -> true);
 
-        state.observe(mirror, wardrobe, 1_000L);
+        state.observe(mirror, wardrobe, 1L, 1_000L);
         state.recordDispatch(mirror, plan, 1_000L, 500L);
 
         assertFalse(state.canDispatch(1_499L));
-        assertTrue(state.canDispatch(1_500L));
+        state.observe(mirror, wardrobe, 1L, 1_500L);
+        assertFalse(state.canDispatch(1_500L));
+
+        state.observe(mirror, wardrobe, 2L, 2_000L);
+        assertTrue(state.canDispatch(2_000L));
+    }
+
+    @Test
+    public void acknowledgedNonFinalPushImmediatelyAllowsTheNextMove()
+    {
+        MisthalinMirrorPlanner.AttackState state = new MisthalinMirrorPlanner.AttackState();
+        MisthalinMirrorPlanner.SceneTile mirror = tile(10, 10);
+        MisthalinMirrorPlanner.SceneTile wardrobe = tile(14, 12);
+        MisthalinMirrorPlanner.PushPlan plan = MisthalinMirrorPlanner.nextPush(
+                mirror, wardrobe, ignored -> true);
+
+        state.observe(mirror, wardrobe, 1L, 1_000L);
+        state.recordDispatch(mirror, plan, 1_000L, 1_800L);
+
+        assertTrue(state.observe(
+                plan.getExpectedMirrorTile(), wardrobe, 1L, 1_600L));
+        assertTrue(state.canDispatch(1_600L));
     }
 
     @Test

@@ -188,27 +188,27 @@ final class MisthalinMirrorPlanner
         private boolean pendingFinalAim;
         private long pendingDeadline;
         private boolean aimedForCurrentAttack;
+        private boolean failedForCurrentAttack;
 
-        void observe(SceneTile mirror, SceneTile wardrobe, long now)
+        boolean observe(SceneTile mirror, SceneTile wardrobe, long now)
         {
             if (wardrobe == null)
             {
-                observe(mirror, null, Long.MIN_VALUE, now);
-                return;
+                return observe(mirror, null, Long.MIN_VALUE, now);
             }
             if (activeWardrobe == null || !wardrobe.equals(activeWardrobe))
             {
                 inferredCycle++;
             }
-            observe(mirror, wardrobe, inferredCycle, now);
+            return observe(mirror, wardrobe, inferredCycle, now);
         }
 
-        void observe(SceneTile mirror, SceneTile wardrobe, long cycle, long now)
+        boolean observe(SceneTile mirror, SceneTile wardrobe, long cycle, long now)
         {
             if (wardrobe == null)
             {
                 reset();
-                return;
+                return false;
             }
             if (cycle != activeCycle || !wardrobe.equals(activeWardrobe))
             {
@@ -216,31 +216,42 @@ final class MisthalinMirrorPlanner
                 activeCycle = cycle;
                 clearPending();
                 aimedForCurrentAttack = false;
+                failedForCurrentAttack = false;
             }
             if (pendingExpected == null || mirror == null)
             {
-                return;
+                return false;
             }
             if (mirror.equals(pendingExpected))
             {
                 aimedForCurrentAttack = pendingFinalAim;
                 clearPending();
+                return true;
             }
-            else if (!mirror.equals(pendingFrom) || now - pendingDeadline >= 0)
+            if (!mirror.equals(pendingFrom))
             {
                 clearPending();
+                return true;
             }
+            if (now - pendingDeadline >= 0)
+            {
+                failedForCurrentAttack = true;
+                clearPending();
+            }
+            return false;
         }
 
         boolean canDispatch(long now)
         {
-            if (aimedForCurrentAttack)
+            if (aimedForCurrentAttack || failedForCurrentAttack)
             {
                 return false;
             }
             if (pendingExpected != null && now - pendingDeadline >= 0)
             {
+                failedForCurrentAttack = true;
                 clearPending();
+                return false;
             }
             return pendingExpected == null;
         }
@@ -258,6 +269,7 @@ final class MisthalinMirrorPlanner
             activeWardrobe = null;
             activeCycle = Long.MIN_VALUE;
             aimedForCurrentAttack = false;
+            failedForCurrentAttack = false;
             clearPending();
         }
 

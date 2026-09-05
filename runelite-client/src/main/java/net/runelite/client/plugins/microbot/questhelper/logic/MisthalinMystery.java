@@ -212,8 +212,11 @@ public class MisthalinMystery extends BaseQuest
             return false;
         }
 
-        mirrorAttackState.observe(
-                snapshot.mirrorTile, snapshot.wardrobeTile, snapshot.attackCycle, now);
+        if (mirrorAttackState.observe(
+                snapshot.mirrorTile, snapshot.wardrobeTile, snapshot.attackCycle, now))
+        {
+            nextMirrorPushAt = 0;
+        }
         if (snapshot.wardrobeTile == null || !mirrorAttackState.canDispatch(now))
         {
             return false;
