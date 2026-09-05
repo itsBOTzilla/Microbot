@@ -43,6 +43,7 @@ import net.runelite.client.plugins.microbot.api.tileitem.Rs2TileItemQueryable;
 import net.runelite.client.plugins.microbot.api.tileitem.models.Rs2TileItemModel;
 
 import java.awt.*;
+import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -382,7 +383,7 @@ public class QuestScript extends Script {
         QuestDialogueContinuation.Prompt prompt = readyDialoguePrompt();
         dialogueContinuation.advance(prompt, TimeUnit.NANOSECONDS.toMillis(System.nanoTime()), bounds -> {
             Rs2Walker.clearWalkingRoute("quest-helper:dialogue-continue");
-            Microbot.getMouse().click(bounds);
+            Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
         });
     }
 	private boolean handleRequirements(DetailedQuestStep questStep) {
