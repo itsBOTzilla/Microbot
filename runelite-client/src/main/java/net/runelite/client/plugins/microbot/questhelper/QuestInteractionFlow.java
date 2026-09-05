@@ -7,6 +7,13 @@ import net.runelite.client.plugins.microbot.util.walker.WalkerState;
 /** Same-invocation routing handoff with fresh caller-owned interaction validation. */
 final class QuestInteractionFlow
 {
+    /** A cutscene may request Continue, but always suppresses the rest of the quest tick. */
+    static boolean handleCutscene(boolean cutscene, Runnable continueReadyDialogue)
+    {
+        if (cutscene) continueReadyDialogue.run();
+        return cutscene;
+    }
+
     /** Custom dialogue choices keep priority; both custom and generic input share one page gate. */
     static boolean allowGenericDialogue(BooleanSupplier pageGate, BooleanSupplier customLogic)
     {
