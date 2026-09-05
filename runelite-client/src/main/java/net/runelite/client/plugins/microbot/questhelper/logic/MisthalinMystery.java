@@ -2,18 +2,27 @@ package net.runelite.client.plugins.microbot.questhelper.logic;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 import net.runelite.api.NullObjectID;
+import net.runelite.api.Player;
+import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.NpcID;
+import net.runelite.api.gameval.ObjectID;
 import net.runelite.client.plugins.microbot.Microbot;
+import net.runelite.client.plugins.microbot.api.npc.models.Rs2NpcModel;
+import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
 import net.runelite.client.plugins.microbot.questhelper.QuestHelperPlugin;
 import net.runelite.client.plugins.microbot.questhelper.steps.DetailedQuestStep;
 import net.runelite.client.plugins.microbot.questhelper.steps.ObjectStep;
 import net.runelite.client.plugins.microbot.questhelper.steps.QuestStep;
 import net.runelite.client.plugins.microbot.util.dialogues.Rs2Dialogue;
 import net.runelite.client.plugins.microbot.util.gameobject.Rs2GameObject;
-import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.input.InputArbiter;
+import net.runelite.client.plugins.microbot.util.player.Rs2Player;
+import net.runelite.client.plugins.microbot.util.tile.Rs2Tile;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
 /** Quest-specific route sequencing validated for the Misthalin Mystery instance. */
@@ -21,6 +30,9 @@ public class MisthalinMystery extends BaseQuest
 {
     private static final long DAMAGED_WALL_CANVAS_RETRY_NANOS = 1_500_000_000L;
     private static final long DAMAGED_WALL_INTERACT_RETRY_NANOS = 1_500_000_000L;
+    private static final long MIRROR_MOVE_RETRY_NANOS = 1_200_000_000L;
+    private static final long MIRROR_PUSH_RETRY_NANOS = 1_800_000_000L;
+    private static final String MIRROR_SHOWDOWN_MARKER = "move the mirror to reflect the knives";
     private static final String LACEY_INTERRUPT_QUESTION = "Interrupt with answer?";
     private static final String LACEY_INTERRUPT_ANSWER = "Count Check";
     private static final WorldPoint PAINTING_OBJECT = new WorldPoint(1632, 4833, 0);
@@ -43,9 +55,15 @@ public class MisthalinMystery extends BaseQuest
             new WorldPoint(1646, 4836, 0));
 
     private final QuestApproachSequence approachSequence = new QuestApproachSequence();
+    private final MisthalinMirrorPlanner.AttackState mirrorAttackState =
+            new MisthalinMirrorPlanner.AttackState();
     private volatile long nextDamagedWallLocalAt;
     private volatile long nextDamagedWallCanvasAt;
     private volatile long nextDamagedWallInteractAt;
+    private volatile long nextMirrorMoveAt;
+    private volatile long nextMirrorPushAt;
+    private MisthalinMirrorPlanner.SceneTile mirrorMoveTarget;
+    private boolean mirrorShowdownActive;
 
     @Override
     public boolean executeCustomLogic()
@@ -56,6 +74,7 @@ public class MisthalinMystery extends BaseQuest
         {
             approachSequence.reset();
             resetDamagedWallApproach();
+            resetMirrorShowdown();
             return true;
         }
 
@@ -70,6 +89,12 @@ public class MisthalinMystery extends BaseQuest
         {
             return false;
         }
+        if (step instanceof DetailedQuestStep
+                && isMirrorShowdownText(((DetailedQuestStep) step).getText()))
+        {
+            return handleMirrorShowdown();
+        }
+        resetMirrorShowdown();
         if (!(step instanceof ObjectStep))
         {
             approachSequence.reset();
@@ -137,6 +162,205 @@ public class MisthalinMystery extends BaseQuest
     {
         approachSequence.reset();
         resetDamagedWallApproach();
+        resetMirrorShowdown();
+    }
+
+    static boolean isMirrorShowdownText(List<String> text)
+    {
+        return text != null && text.stream()
+                .filter(line -> line != null)
+                .map(line -> line.toLowerCase(Locale.ENGLISH))
+                .anyMatch(line -> line.contains(MIRROR_SHOWDOWN_MARKER));
+    }
+
+    private boolean handleMirrorShowdown()
+    {
+        if (!mirrorShowdownActive)
+        {
+            Rs2Walker.clearWalkingRoute("quest-helper:misthalin-mirror-showdown");
+            mirrorShowdownActive = true;
+        }
+
+        MirrorSnapshot snapshot = captureMirrorSnapshot();
+        long now = System.nanoTime();
+        if (snapshot == null || snapshot.mirrorTile == null)
+        {
+            mirrorAttackState.reset();
+            return false;
+        }
+
+        mirrorAttackState.observe(snapshot.mirrorTile, snapshot.wardrobeTile, now);
+        if (snapshot.wardrobeTile == null || !mirrorAttackState.canDispatch(now))
+        {
+            return false;
+        }
+
+        MisthalinMirrorPlanner.PushPlan plan = MisthalinMirrorPlanner.nextPush(
+                snapshot.mirrorTile, snapshot.wardrobeTile,
+                tile -> isWalkableSceneTile(tile, snapshot.worldViewId));
+        if (plan == null)
+        {
+            return false;
+        }
+
+        if (!plan.getStandTile().equals(snapshot.playerTile))
+        {
+            nextMirrorPushAt = 0;
+            if (Rs2Player.isMoving() || Rs2Player.isAnimating())
+            {
+                return false;
+            }
+            if (plan.getStandTile().equals(mirrorMoveTarget)
+                    && now - nextMirrorMoveAt < 0)
+            {
+                return false;
+            }
+
+            WorldPoint standPoint = toInstanceWorldPoint(
+                    plan.getStandTile(), snapshot.worldViewId);
+            if (standPoint == null)
+            {
+                return false;
+            }
+            mirrorMoveTarget = plan.getStandTile();
+            nextMirrorMoveAt = now + MIRROR_MOVE_RETRY_NANOS;
+            Rs2Walker.clearWalkingRoute("quest-helper:misthalin-mirror-position");
+            if (!dispatchMirrorMove(standPoint, Rs2Walker::walkFastCanvas))
+            {
+                mirrorMoveTarget = null;
+                nextMirrorMoveAt = 0;
+            }
+            return false;
+        }
+
+        mirrorMoveTarget = null;
+        nextMirrorMoveAt = 0;
+        if (Rs2Player.isMoving() || Rs2Player.isAnimating()
+                || now - nextMirrorPushAt < 0)
+        {
+            return false;
+        }
+
+        nextMirrorPushAt = now + MIRROR_PUSH_RETRY_NANOS;
+        Rs2Walker.clearWalkingRoute("quest-helper:misthalin-mirror-push");
+        if (snapshot.mirror.click("Push"))
+        {
+            mirrorAttackState.recordDispatch(
+                    snapshot.mirrorTile, plan, now, MIRROR_PUSH_RETRY_NANOS);
+        }
+        return false;
+    }
+
+    private MirrorSnapshot captureMirrorSnapshot()
+    {
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            Player player = Microbot.getClient().getLocalPlayer();
+            if (player == null || player.getLocalLocation() == null
+                    || player.getWorldView() == null)
+            {
+                return null;
+            }
+            Rs2NpcModel mirror = Microbot.getRs2NpcCache().query()
+                    .fromWorldView()
+                    .withId(NpcID.MISTMYST_MIRROR_MOVABLE)
+                    .first();
+            if (mirror == null || mirror.getLocalLocation() == null)
+            {
+                return null;
+            }
+            Rs2TileObjectModel wardrobe = Microbot.getRs2TileObjectCache().query()
+                    .fromWorldView()
+                    .withId(ObjectID.MISTMYST_BOSS_WARDROBE_OPEN)
+                    .first();
+            return new MirrorSnapshot(
+                    mirror,
+                    sceneTile(player.getLocalLocation()),
+                    sceneTile(mirror.getLocalLocation()),
+                    wardrobe == null ? null : sceneTile(wardrobe.getLocalLocation()),
+                    player.getWorldView().getId());
+        }).orElse(null);
+    }
+
+    private boolean isWalkableSceneTile(MisthalinMirrorPlanner.SceneTile tile, int worldViewId)
+    {
+        LocalPoint localPoint = toLocalPoint(tile, worldViewId);
+        return localPoint != null && localPoint.isInScene() && Rs2Tile.isWalkable(localPoint);
+    }
+
+    private LocalPoint toLocalPoint(MisthalinMirrorPlanner.SceneTile tile, int worldViewId)
+    {
+        if (tile == null)
+        {
+            return null;
+        }
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            if (Microbot.getClient().getWorldView(worldViewId) == null)
+            {
+                return null;
+            }
+            return LocalPoint.fromScene(
+                    tile.getX(), tile.getY(), Microbot.getClient().getWorldView(worldViewId));
+        }).orElse(null);
+    }
+
+    private WorldPoint toInstanceWorldPoint(MisthalinMirrorPlanner.SceneTile tile, int worldViewId)
+    {
+        LocalPoint localPoint = toLocalPoint(tile, worldViewId);
+        if (localPoint == null || !localPoint.isInScene())
+        {
+            return null;
+        }
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            if (Microbot.getClient().getWorldView(worldViewId) == null)
+            {
+                return null;
+            }
+            return WorldPoint.fromLocalInstance(
+                    Microbot.getClient(), localPoint,
+                    Microbot.getClient().getWorldView(worldViewId).getPlane());
+        }).orElse(null);
+    }
+
+    static boolean dispatchMirrorMove(WorldPoint target, Function<WorldPoint, Boolean> canvasMove)
+    {
+        return target != null && canvasMove != null && Boolean.TRUE.equals(canvasMove.apply(target));
+    }
+
+    private static MisthalinMirrorPlanner.SceneTile sceneTile(LocalPoint point)
+    {
+        return point == null ? null
+                : new MisthalinMirrorPlanner.SceneTile(point.getSceneX(), point.getSceneY());
+    }
+
+    private void resetMirrorShowdown()
+    {
+        mirrorAttackState.reset();
+        nextMirrorMoveAt = 0;
+        nextMirrorPushAt = 0;
+        mirrorMoveTarget = null;
+        mirrorShowdownActive = false;
+    }
+
+    private static final class MirrorSnapshot
+    {
+        private final Rs2NpcModel mirror;
+        private final MisthalinMirrorPlanner.SceneTile playerTile;
+        private final MisthalinMirrorPlanner.SceneTile mirrorTile;
+        private final MisthalinMirrorPlanner.SceneTile wardrobeTile;
+        private final int worldViewId;
+
+        private MirrorSnapshot(Rs2NpcModel mirror,
+                               MisthalinMirrorPlanner.SceneTile playerTile,
+                               MisthalinMirrorPlanner.SceneTile mirrorTile,
+                               MisthalinMirrorPlanner.SceneTile wardrobeTile,
+                               int worldViewId)
+        {
+            this.mirror = mirror;
+            this.playerTile = playerTile;
+            this.mirrorTile = mirrorTile;
+            this.wardrobeTile = wardrobeTile;
+            this.worldViewId = worldViewId;
+        }
     }
 
     static List<WorldPoint> approachRoute(WorldPoint objectLocation, List<String> stepText)
