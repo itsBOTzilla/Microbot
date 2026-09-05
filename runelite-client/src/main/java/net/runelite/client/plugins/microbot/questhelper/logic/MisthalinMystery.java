@@ -21,6 +21,11 @@ public class MisthalinMystery extends BaseQuest
             PAINTING_CANVAS_ENTRY,
             new WorldPoint(1629, 4832, 0));
 
+    private static final WorldPoint DAMAGED_WALL_OBJECT = new WorldPoint(1648, 4829, 0);
+    private static final String CLIMB_DAMAGED_WALL = "Climb over the damaged wall.";
+    private static final List<WorldPoint> DAMAGED_WALL_OUTBOUND_ROUTE = List.of(
+            new WorldPoint(1646, 4829, 0));
+
     private static final WorldPoint FIREPLACE_OBJECT = new WorldPoint(1647, 4836, 0);
     private static final List<WorldPoint> FIREPLACE_ROUTE = List.of(
             new WorldPoint(1633, 4837, 0),
@@ -50,14 +55,14 @@ public class MisthalinMystery extends BaseQuest
         DetailedQuestStep detailedStep = (DetailedQuestStep) step;
         WorldPoint objectLocation = detailedStep.getDefinedPoint() == null
                 ? null : detailedStep.getDefinedPoint().getWorldPoint();
-        List<WorldPoint> route = approachRoute(objectLocation);
+        List<WorldPoint> route = approachRoute(objectLocation, detailedStep.getText());
         if (route.isEmpty())
         {
             approachSequence.reset();
             return true;
         }
 
-        WorldPoint waypoint = approachSequence.next(objectLocation, route, Rs2Player.getWorldLocation(), 1);
+        WorldPoint waypoint = approachSequence.next(route, route, Rs2Player.getWorldLocation(), 1);
         if (waypoint == null)
         {
             return true;
@@ -85,11 +90,16 @@ public class MisthalinMystery extends BaseQuest
         approachSequence.reset();
     }
 
-    static List<WorldPoint> approachRoute(WorldPoint objectLocation)
+    static List<WorldPoint> approachRoute(WorldPoint objectLocation, List<String> stepText)
     {
         if (PAINTING_OBJECT.equals(objectLocation))
         {
             return PAINTING_ROUTE;
+        }
+        if (DAMAGED_WALL_OBJECT.equals(objectLocation)
+                && stepText != null && stepText.contains(CLIMB_DAMAGED_WALL))
+        {
+            return DAMAGED_WALL_OUTBOUND_ROUTE;
         }
         if (FIREPLACE_OBJECT.equals(objectLocation))
         {

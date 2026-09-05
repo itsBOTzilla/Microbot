@@ -50,14 +50,30 @@ public class MisthalinApproachSequenceTest
     public void misthalinUsesTheValidatedPaintingAndFireplaceRoutes()
     {
         assertEquals(List.of(PAINTING_ENTRY, PAINTING_STAND),
-                MisthalinMystery.approachRoute(new WorldPoint(1632, 4833, 0)));
+                MisthalinMystery.approachRoute(new WorldPoint(1632, 4833, 0),
+                        List.of("Slash the painting.")));
         assertEquals(List.of(
                         new WorldPoint(1633, 4837, 0),
                         new WorldPoint(1641, 4828, 0),
                         new WorldPoint(1646, 4836, 0)),
-                MisthalinMystery.approachRoute(new WorldPoint(1647, 4836, 0)));
+                MisthalinMystery.approachRoute(new WorldPoint(1647, 4836, 0),
+                        List.of("Search the fireplace.")));
         assertEquals(List.of(),
-                MisthalinMystery.approachRoute(new WorldPoint(1635, 4838, 0)));
+                MisthalinMystery.approachRoute(new WorldPoint(1635, 4838, 0),
+                        List.of("Open the door.")));
+    }
+
+    @Test
+    public void damagedWallOutboundRouteUsesRubyDoorApproachOnly()
+    {
+        WorldPoint damagedWall = new WorldPoint(1648, 4829, 0);
+
+        assertEquals(List.of(new WorldPoint(1646, 4829, 0)),
+                MisthalinMystery.approachRoute(damagedWall,
+                        List.of("Climb over the damaged wall.")));
+        assertEquals("The return trip must retain generic handling until it is separately validated",
+                List.of(), MisthalinMystery.approachRoute(damagedWall,
+                        List.of("Climb back over the damaged wall into the manor.")));
     }
 
     @Test
@@ -96,6 +112,7 @@ public class MisthalinApproachSequenceTest
 
         for (WorldPoint waypoint : List.of(
                 PAINTING_STAND,
+                new WorldPoint(1646, 4829, 0),
                 new WorldPoint(1633, 4837, 0),
                 new WorldPoint(1641, 4828, 0),
                 new WorldPoint(1646, 4836, 0)))
@@ -103,7 +120,7 @@ public class MisthalinApproachSequenceTest
             dispatch.invoke(null, waypoint, canvasMove, webWalk);
         }
         assertEquals(1, canvas[0]);
-        assertEquals(4, webWalker[0]);
+        assertEquals(5, webWalker[0]);
     }
 
     @Test
