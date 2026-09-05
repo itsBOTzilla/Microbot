@@ -176,6 +176,106 @@ public class MisthalinApproachSequenceTest
     }
 
     @Test
+    public void sapphireExitRemovesAndDropsTheKillerKnifeBeforeOpeningTheDoor() throws Exception
+    {
+        Method exit;
+        try
+        {
+            exit = MisthalinMystery.class.getDeclaredMethod("handleSapphireExit",
+                    boolean.class, boolean.class, boolean.class,
+                    BooleanSupplier.class, BooleanSupplier.class, BooleanSupplier.class);
+            exit.setAccessible(true);
+        }
+        catch (NoSuchMethodException ex)
+        {
+            fail("The Misthalin sapphire-room exit must own weapon cleanup and door interaction");
+            return;
+        }
+
+        int[] unequips = {0};
+        int[] drops = {0};
+        int[] opens = {0};
+        BooleanSupplier unequip = () -> {
+            unequips[0]++;
+            return true;
+        };
+        BooleanSupplier drop = () -> {
+            drops[0]++;
+            return true;
+        };
+        BooleanSupplier open = () -> {
+            opens[0]++;
+            return true;
+        };
+
+        assertFalse((boolean) exit.invoke(new MisthalinMystery(),
+                false, true, false, unequip, drop, open));
+        assertEquals(1, unequips[0]);
+        assertEquals(0, drops[0]);
+        assertEquals(0, opens[0]);
+
+        assertFalse((boolean) exit.invoke(new MisthalinMystery(),
+                false, false, true, unequip, drop, open));
+        assertEquals(1, unequips[0]);
+        assertEquals(1, drops[0]);
+        assertEquals(0, opens[0]);
+
+        assertFalse((boolean) exit.invoke(new MisthalinMystery(),
+                false, false, false, unequip, drop, open));
+        assertEquals(1, unequips[0]);
+        assertEquals(1, drops[0]);
+        assertEquals(1, opens[0]);
+
+        assertFalse((boolean) exit.invoke(new MisthalinMystery(),
+                true, false, false, unequip, drop, open));
+        assertEquals("Movement must suppress an extra door click", 1, opens[0]);
+
+        int[] throttledOpens = {0};
+        BooleanSupplier throttledOpen = () -> {
+            throttledOpens[0]++;
+            return false;
+        };
+        MisthalinMystery throttled = new MisthalinMystery();
+        assertFalse((boolean) exit.invoke(throttled,
+                false, false, false, unequip, drop, throttledOpen));
+        assertFalse((boolean) exit.invoke(throttled,
+                false, false, false, unequip, drop, throttledOpen));
+        assertEquals("A failed door action must not be repeated every 200ms poll", 1, throttledOpens[0]);
+
+        Field nextAttempt = MisthalinMystery.class.getDeclaredField("nextSapphireExitAt");
+        nextAttempt.setAccessible(true);
+        nextAttempt.setLong(throttled, 0L);
+        assertFalse((boolean) exit.invoke(throttled,
+                false, false, false, unequip, drop, throttledOpen));
+        assertEquals("The door action must retry after its throttle expires", 2, throttledOpens[0]);
+    }
+
+    @Test
+    public void sapphireExitHandlerOnlyClaimsTheAttemptToLeaveStep() throws Exception
+    {
+        Method matches;
+        try
+        {
+            matches = MisthalinMystery.class.getDeclaredMethod(
+                    "isSapphireExitStep", WorldPoint.class, List.class);
+            matches.setAccessible(true);
+        }
+        catch (NoSuchMethodException ex)
+        {
+            fail("The sapphire exit handler must not take over the earlier entry-door steps");
+            return;
+        }
+
+        WorldPoint sapphireDoor = new WorldPoint(1628, 4829, 0);
+        assertTrue((boolean) matches.invoke(null, sapphireDoor,
+                List.of("Attempt to go through the sapphire door.")));
+        assertFalse((boolean) matches.invoke(null, sapphireDoor,
+                List.of("Go through the sapphire door.")));
+        assertFalse((boolean) matches.invoke(null, new WorldPoint(1635, 4838, 0),
+                List.of("Attempt to go through the sapphire door.")));
+    }
+
+    @Test
     public void misthalinCustomRouteHandlerIsRegistered()
     {
         IQuest quest = QuestRegistry.getQuest(Quest.MISTHALIN_MYSTERY.getId());

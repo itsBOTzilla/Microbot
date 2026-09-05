@@ -11,7 +11,9 @@ import net.runelite.api.NullObjectID;
 import net.runelite.api.Player;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.NpcID;
+import net.runelite.api.gameval.ObjectID;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.api.npc.models.Rs2NpcModel;
 import net.runelite.client.plugins.microbot.questhelper.QuestHelperPlugin;
@@ -19,8 +21,10 @@ import net.runelite.client.plugins.microbot.questhelper.steps.DetailedQuestStep;
 import net.runelite.client.plugins.microbot.questhelper.steps.ObjectStep;
 import net.runelite.client.plugins.microbot.questhelper.steps.QuestStep;
 import net.runelite.client.plugins.microbot.util.dialogues.Rs2Dialogue;
+import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
 import net.runelite.client.plugins.microbot.util.gameobject.Rs2GameObject;
 import net.runelite.client.plugins.microbot.util.input.InputArbiter;
+import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.tile.Rs2Tile;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
@@ -31,6 +35,7 @@ public class MisthalinMystery extends BaseQuest
 {
     private static final long DAMAGED_WALL_CANVAS_RETRY_NANOS = 1_500_000_000L;
     private static final long DAMAGED_WALL_INTERACT_RETRY_NANOS = 1_500_000_000L;
+    private static final long SAPPHIRE_EXIT_RETRY_NANOS = 600_000_000L;
     private static final long MIRROR_MOVE_RETRY_NANOS = 1_200_000_000L;
     private static final long MIRROR_PUSH_RETRY_NANOS = 1_800_000_000L;
     private static final long MIRROR_LOGIC_INTERVAL_NANOS = 200_000_000L;
@@ -55,6 +60,8 @@ public class MisthalinMystery extends BaseQuest
             new WorldPoint(1633, 4837, 0),
             new WorldPoint(1641, 4828, 0),
             new WorldPoint(1646, 4836, 0));
+    private static final WorldPoint SAPPHIRE_DOOR = new WorldPoint(1628, 4829, 0);
+    private static final String ATTEMPT_SAPPHIRE_EXIT = "attempt to go through the sapphire door";
     private static final MisthalinMirrorPlanner.SceneTile MIRROR_ARENA_CENTER =
             new MisthalinMirrorPlanner.SceneTile(47, 54);
 
@@ -66,6 +73,7 @@ public class MisthalinMystery extends BaseQuest
     private volatile long nextDamagedWallLocalAt;
     private volatile long nextDamagedWallCanvasAt;
     private volatile long nextDamagedWallInteractAt;
+    private volatile long nextSapphireExitAt;
     private volatile long nextMirrorMoveAt;
     private volatile long nextMirrorPushAt;
     private MisthalinMirrorPlanner.SceneTile mirrorMoveTarget;
@@ -80,6 +88,7 @@ public class MisthalinMystery extends BaseQuest
         {
             approachSequence.reset();
             resetDamagedWallApproach();
+            resetSapphireExit();
             resetMirrorShowdown();
             return true;
         }
@@ -110,6 +119,36 @@ public class MisthalinMystery extends BaseQuest
         DetailedQuestStep detailedStep = (DetailedQuestStep) step;
         WorldPoint objectLocation = detailedStep.getDefinedPoint() == null
                 ? null : detailedStep.getDefinedPoint().getWorldPoint();
+        if (isSapphireExitStep(objectLocation, detailedStep.getText()))
+        {
+            approachSequence.reset();
+            resetDamagedWallApproach();
+            return handleSapphireExit(
+                    Rs2Player.isMoving(),
+                    Rs2Equipment.isWearing(ItemID.MISTMYST_CUTSCENE_KNIFE),
+                    Rs2Inventory.hasItem(ItemID.MISTMYST_CUTSCENE_KNIFE),
+                    () -> {
+                        Rs2Walker.clearWalkingRoute("quest-helper:misthalin-sapphire-exit-unequip");
+                        return Rs2Equipment.unEquip(ItemID.MISTMYST_CUTSCENE_KNIFE);
+                    },
+                    () -> {
+                        Rs2Walker.clearWalkingRoute("quest-helper:misthalin-sapphire-exit-drop-knife");
+                        return Rs2Inventory.drop(ItemID.MISTMYST_CUTSCENE_KNIFE);
+                    },
+                    () -> {
+                        var door = Microbot.getRs2TileObjectCache().query()
+                                .fromWorldView()
+                                .withId(ObjectID.MISTMYST_DOOR_SAPPHIRE)
+                                .firstOnClientThread();
+                        if (door == null)
+                        {
+                            return false;
+                        }
+                        Rs2Walker.clearWalkingRoute("quest-helper:misthalin-sapphire-exit-open-door");
+                        return door.click("Open");
+                    });
+        }
+        resetSapphireExit();
         List<WorldPoint> route = approachRoute(objectLocation, detailedStep.getText());
         if (route.isEmpty())
         {
@@ -188,6 +227,7 @@ public class MisthalinMystery extends BaseQuest
     {
         approachSequence.reset();
         resetDamagedWallApproach();
+        resetSapphireExit();
         resetMirrorShowdown();
     }
 
@@ -217,6 +257,43 @@ public class MisthalinMystery extends BaseQuest
                 .filter(line -> line != null)
                 .map(line -> line.toLowerCase(Locale.ENGLISH))
                 .anyMatch(line -> line.contains(MIRROR_SHOWDOWN_MARKER));
+    }
+
+    static boolean isSapphireExitStep(WorldPoint objectLocation, List<String> text)
+    {
+        return SAPPHIRE_DOOR.equals(objectLocation) && text != null && text.stream()
+                .filter(line -> line != null)
+                .map(line -> line.toLowerCase(Locale.ENGLISH))
+                .anyMatch(line -> line.contains(ATTEMPT_SAPPHIRE_EXIT));
+    }
+
+    boolean handleSapphireExit(boolean moving, boolean knifeEquipped, boolean knifeInInventory,
+                               BooleanSupplier unequip, BooleanSupplier drop,
+                               BooleanSupplier openDoor)
+    {
+        if (moving)
+        {
+            return false;
+        }
+        long now = System.nanoTime();
+        if (nextSapphireExitAt != 0 && now - nextSapphireExitAt < 0)
+        {
+            return false;
+        }
+        nextSapphireExitAt = now + SAPPHIRE_EXIT_RETRY_NANOS;
+        if (knifeEquipped)
+        {
+            unequip.getAsBoolean();
+        }
+        else if (knifeInInventory)
+        {
+            drop.getAsBoolean();
+        }
+        else
+        {
+            openDoor.getAsBoolean();
+        }
+        return false;
     }
 
     private boolean handleMirrorShowdown()
@@ -505,6 +582,11 @@ public class MisthalinMystery extends BaseQuest
         nextDamagedWallLocalAt = 0;
         nextDamagedWallCanvasAt = 0;
         nextDamagedWallInteractAt = 0;
+    }
+
+    private void resetSapphireExit()
+    {
+        nextSapphireExitAt = 0;
     }
 
     static boolean useCanvas(WorldPoint waypoint)
