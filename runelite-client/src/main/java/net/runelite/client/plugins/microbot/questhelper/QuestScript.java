@@ -43,7 +43,6 @@ import net.runelite.client.plugins.microbot.api.tileitem.Rs2TileItemQueryable;
 import net.runelite.client.plugins.microbot.api.tileitem.models.Rs2TileItemModel;
 
 import java.awt.*;
-import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -92,6 +91,7 @@ public class QuestScript extends Script {
     private final Set<Integer> everHeldItemRequirementIds = new HashSet<>();
 
     QuestStep dialogueStartedStep = null;
+    private final QuestDialogueContinuation dialogueContinuation = new QuestDialogueContinuation();
 
     private static final AtomicLong interactionResetGeneration = new AtomicLong();
     private long observedResetGeneration;
@@ -296,13 +296,15 @@ public class QuestScript extends Script {
 
                     if (Rs2Dialogue.isInDialogue() && dialogueStartedStep == questStep) {
                         if (Rs2Dialogue.hasContinue() && (dialogueAdvanceReserved || allowDialogueAdvance())) {
-                            Rs2Walker.clearWalkingRoute("quest-helper:dialogue-space-step");
-                            Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
+                            continueReadyDialogue();
                         }
                         return;
                     } else {
                         dialogueStartedStep = null;
-                        if (!Rs2Dialogue.isInDialogue()) dialogueAdvance.reset();
+                        if (!Rs2Dialogue.isInDialogue()) {
+                            dialogueAdvance.reset();
+                            dialogueContinuation.reset();
+                        }
                     }
 
                     if (pendingInteraction != null || Rs2Player.isAnimating()) return;
@@ -365,6 +367,23 @@ public class QuestScript extends Script {
         return true;
     }
 
+    private QuestDialogueContinuation.Prompt readyDialoguePrompt() {
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            Widget options = Microbot.getClient().getWidget(ComponentID.DIALOG_OPTION_OPTIONS);
+            if (options != null && !options.isHidden()) {
+                return null;
+            }
+            return QuestDialogueContinuation.capture(Rs2Widget.findWidget("Click here to continue", true));
+        }).orElse(null);
+    }
+
+    private void continueReadyDialogue() {
+        QuestDialogueContinuation.Prompt prompt = readyDialoguePrompt();
+        dialogueContinuation.advance(prompt, TimeUnit.NANOSECONDS.toMillis(System.nanoTime()), bounds -> {
+            Rs2Walker.clearWalkingRoute("quest-helper:dialogue-continue");
+            Microbot.getMouse().click(bounds);
+        });
+    }
 	private boolean handleRequirements(DetailedQuestStep questStep) {
 		var requirements = questStep.getRequirements();
 
@@ -1387,6 +1406,7 @@ public class QuestScript extends Script {
         targetReadyAt = 0;
         dialogueStartedStep = null;
         dialogueAdvance.reset();
+        dialogueContinuation.reset();
     }
 
     private boolean canDispatchQuestStep(QuestStep step) {
@@ -1493,6 +1513,10 @@ public class QuestScript extends Script {
     }
 
     private boolean allowDialogueAdvance() {
+        QuestDialogueContinuation.Prompt prompt = readyDialoguePrompt();
+        // Do not consume the shared option/custom-logic gate while the click gate is waiting.
+        if (prompt != null && !dialogueContinuation.canAdvance(prompt,
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime()))) return false;
         Object page = Microbot.getClientThread().runOnClientThreadOptional(() -> {
             List<Widget> roots = new ArrayList<>();
             int[] groups = {193, 217, 219, 229, 231, 11};
