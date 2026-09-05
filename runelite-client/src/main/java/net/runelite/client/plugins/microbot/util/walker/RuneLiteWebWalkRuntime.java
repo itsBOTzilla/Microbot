@@ -570,15 +570,16 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
             {
                 return index;
             }
-            if (reachable.contains(from) && !reachable.contains(to))
+            // A reachable-from / unreachable-to frontier is not, by itself, proof that an
+            // executable route action exists. Promoting that generic collision boundary caused
+            // the executor to repeatedly call runtimeHandleRouteEdge(), whose handlers could not
+            // identify an actual door/transport/object; replanning then selected the same edge
+            // again. Only catalog-backed boundaries are action edges here. Unconfirmed frontiers
+            // remain normal pathfinding/movement responsibility. They still terminate this
+            // lookahead so a later catalog transport cannot leapfrog an unresolved frontier.
+            if (!catalogEdge && reachable.contains(from) && !reachable.contains(to))
             {
-                // Preserve route ordering: a later catalog transport must not leapfrog an
-                // unresolved door/gate/frontier that is still outside generic interaction range.
-                boolean genericActionInRange = index <= currentIndex + GENERIC_ROUTE_EDGE_INDEX_LOOKAHEAD
-                        && distance <= (catalogDoorEdge
-                        ? CATALOG_DOOR_EDGE_ACTION_DISTANCE
-                        : GENERIC_ROUTE_EDGE_ACTION_DISTANCE);
-                return genericActionInRange ? index : -1;
+                return -1;
             }
         }
         return -1;
