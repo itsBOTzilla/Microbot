@@ -94,25 +94,32 @@ public class MisthalinApproachSequenceTest
 
         int[] canvas = {0};
         int[] webWalker = {0};
+        MisthalinMystery quest = new MisthalinMystery();
         Runnable canvasMove = () -> canvas[0]++;
         Runnable webWalk = () -> webWalker[0]++;
 
-        assertFalse((boolean) approach.invoke(null, new WorldPoint(1642, 4839, 0),
+        assertFalse((boolean) approach.invoke(quest, new WorldPoint(1642, 4839, 0),
                 false, canvasMove, webWalk));
         assertEquals(0, canvas[0]);
         assertEquals(1, webWalker[0]);
 
-        assertFalse((boolean) approach.invoke(null, new WorldPoint(1645, 4830, 0),
+        assertFalse((boolean) approach.invoke(quest, new WorldPoint(1645, 4830, 0),
                 false, canvasMove, webWalk));
         assertEquals(1, canvas[0]);
         assertEquals(1, webWalker[0]);
 
-        assertFalse((boolean) approach.invoke(null, new WorldPoint(1646, 4829, 0),
+        assertFalse((boolean) approach.invoke(quest, new WorldPoint(1645, 4830, 0),
+                false, canvasMove, webWalk));
+        assertEquals("An unacknowledged canvas move must not be clicked every custom-logic poll",
+                1, canvas[0]);
+        assertEquals(1, webWalker[0]);
+
+        assertFalse((boolean) approach.invoke(quest, new WorldPoint(1646, 4829, 0),
                 true, canvasMove, webWalk));
         assertEquals("Movement must suppress duplicate approach clicks", 1, canvas[0]);
         assertEquals(1, webWalker[0]);
 
-        assertTrue((boolean) approach.invoke(null, new WorldPoint(1647, 4829, 0),
+        assertTrue((boolean) approach.invoke(quest, new WorldPoint(1647, 4829, 0),
                 false, canvasMove, webWalk));
         assertEquals(1, canvas[0]);
         assertEquals(1, webWalker[0]);

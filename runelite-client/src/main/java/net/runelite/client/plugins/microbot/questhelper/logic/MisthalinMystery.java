@@ -15,6 +15,7 @@ import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 /** Quest-specific route sequencing validated for the Misthalin Mystery instance. */
 public class MisthalinMystery extends BaseQuest
 {
+    private static final long DAMAGED_WALL_CANVAS_RETRY_NANOS = 1_500_000_000L;
     private static final WorldPoint PAINTING_OBJECT = new WorldPoint(1632, 4833, 0);
     private static final WorldPoint PAINTING_CANVAS_ENTRY = new WorldPoint(1633, 4830, 0);
     private static final List<WorldPoint> PAINTING_ROUTE = List.of(
@@ -35,6 +36,7 @@ public class MisthalinMystery extends BaseQuest
             new WorldPoint(1646, 4836, 0));
 
     private final QuestApproachSequence approachSequence = new QuestApproachSequence();
+    private volatile long nextDamagedWallCanvasAt;
 
     @Override
     public boolean executeCustomLogic()
@@ -107,6 +109,7 @@ public class MisthalinMystery extends BaseQuest
     public void reset()
     {
         approachSequence.reset();
+        nextDamagedWallCanvasAt = 0;
     }
 
     static List<WorldPoint> approachRoute(WorldPoint objectLocation, List<String> stepText)
@@ -127,8 +130,8 @@ public class MisthalinMystery extends BaseQuest
         return Collections.emptyList();
     }
 
-    static boolean handleDamagedWallApproach(WorldPoint player, boolean moving,
-                                               Runnable canvasMove, Runnable webWalk)
+    boolean handleDamagedWallApproach(WorldPoint player, boolean moving,
+                                      Runnable canvasMove, Runnable webWalk)
     {
         if (player == null || player.getPlane() != DAMAGED_WALL_OBJECT.getPlane())
         {
@@ -136,6 +139,7 @@ public class MisthalinMystery extends BaseQuest
         }
         if (player.distanceTo2D(DAMAGED_WALL_OBJECT) <= 1)
         {
+            nextDamagedWallCanvasAt = 0;
             return true;
         }
         if (moving)
@@ -144,10 +148,17 @@ public class MisthalinMystery extends BaseQuest
         }
         if (player.distanceTo2D(DAMAGED_WALL_WEB_APPROACH) > 1)
         {
+            nextDamagedWallCanvasAt = 0;
             webWalk.run();
         }
         else
         {
+            long now = System.nanoTime();
+            if (nextDamagedWallCanvasAt != 0 && now - nextDamagedWallCanvasAt < 0)
+            {
+                return false;
+            }
+            nextDamagedWallCanvasAt = now + DAMAGED_WALL_CANVAS_RETRY_NANOS;
             canvasMove.run();
         }
         return false;
