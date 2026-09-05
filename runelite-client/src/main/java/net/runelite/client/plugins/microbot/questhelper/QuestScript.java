@@ -156,7 +156,8 @@ public class QuestScript extends Script {
                 }
 
                 observePendingInteraction(questStep);
-                if (Microbot.getVarbitValue(4606) > 0) return;
+                if (QuestInteractionFlow.handleCutscene(Microbot.getVarbitValue(4606) > 0,
+                        this::continueReadyDialogue)) return;
 
                 if (Rs2Dialogue.isInDialogue() && dialogueStartedStep == null)
                     dialogueStartedStep = questStep;
