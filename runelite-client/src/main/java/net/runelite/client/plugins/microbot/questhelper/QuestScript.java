@@ -8,6 +8,7 @@ import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.Script;
+import net.runelite.client.plugins.microbot.questhelper.logic.IQuest;
 import net.runelite.client.plugins.microbot.questhelper.logic.PiratesTreasure;
 import net.runelite.client.plugins.microbot.questhelper.logic.QuestRegistry;
 import net.runelite.client.plugins.microbot.questhelper.questinfo.QuestHelperQuest;
@@ -104,6 +105,10 @@ public class QuestScript extends Script {
     private volatile long nextCustomAttemptAt;
     private boolean customActionPending;
 
+    static QuestHelper selectedQuestSnapshot(QuestHelperPlugin plugin) {
+        return plugin == null ? null : plugin.getSelectedQuest();
+    }
+
     private static WorldPoint scenePlayerLocation() {
         Player player = Microbot.getClient().getLocalPlayer();
         return player == null ? null : player.getWorldLocation();
@@ -140,7 +145,9 @@ public class QuestScript extends Script {
                     clearInteractionState();
                     return;
                 }
-                if (getQuestHelperPlugin().getSelectedQuest() == null) {
+                QuestHelper selectedQuest = selectedQuestSnapshot(getQuestHelperPlugin());
+                QuestStep currentQuestStep = selectedQuest == null ? null : selectedQuest.getCurrentStep();
+                if (currentQuestStep == null) {
                     clearInteractionState();
                     return;
                 }
@@ -150,11 +157,13 @@ public class QuestScript extends Script {
                     observedResetGeneration = interactionResetGeneration.get();
                 }
 
-                QuestStep questStep = getQuestHelperPlugin().getSelectedQuest().getCurrentStep().getActiveStep();
+                QuestStep questStep = currentQuestStep.getActiveStep();
                 if (questStep == null) {
                     clearInteractionState();
                     return;
                 }
+                int selectedQuestId = selectedQuest.getQuest() == null ? -1 : selectedQuest.getQuest().getId();
+                IQuest questLogic = questLogicFor(selectedQuest);
 
                 observePendingInteraction(questStep);
                 if (QuestInteractionFlow.handleCutscene(Microbot.getVarbitValue(4606) > 0,
@@ -187,7 +196,7 @@ public class QuestScript extends Script {
 
                 if (shouldPauseBeforeCustomLogic(
                         Rs2Dialogue.isInDialogue(), pendingInteraction != null, Rs2Player.isAnimating(),
-                        customLogicRunsWhileAnimating())) return;
+                        customLogicRunsWhileAnimating(questLogic))) return;
 
                 if (questStep != null && !questStep.getWidgetsToHighlight().isEmpty()) {
                     var visibleWidgetHighlights = questStep.getWidgetsToHighlight().stream()
@@ -250,7 +259,7 @@ public class QuestScript extends Script {
                                     Rs2Widget.clickWidget(widgetHighlight.getNameToCheckFor());
                                 } else {
                                     Rs2Widget.clickWidget(widget.getId());
-                                    if (Rs2Shop.isOpen() && getQuestHelperPlugin().getSelectedQuest().getQuest().getId() == Quest.PIRATES_TREASURE.getId()) {
+                                    if (Rs2Shop.isOpen() && selectedQuestId == Quest.PIRATES_TREASURE.getId()) {
                                         Rs2Shop.buyItemOptimally("karamjan rum", 1);
                                     }
                                 }
@@ -262,11 +271,10 @@ public class QuestScript extends Script {
 
                 boolean dialogueAdvanceReserved = Rs2Dialogue.isInDialogue();
                 if (dialogueAdvanceReserved && !QuestInteractionFlow.allowGenericDialogue(
-                        this::allowDialogueAdvance, this::executeQuestCustomLogic)) return;
+                        this::allowDialogueAdvance, () -> executeQuestCustomLogic(questLogic))) return;
 
-                if (getQuestHelperPlugin().getSelectedQuest() != null && !Microbot.getClientThread().runOnClientThreadOptional(() ->
-                        getQuestHelperPlugin().getSelectedQuest().isCompleted()).orElse(null)) {
-                    if (Rs2Widget.isWidgetVisible(ComponentID.DIALOG_OPTION_OPTIONS) && getQuestHelperPlugin().getSelectedQuest().getQuest().getId() != Quest.COOKS_ASSISTANT.getId() && !Rs2Bank.isOpen()) {
+                if (!Microbot.getClientThread().runOnClientThreadOptional(selectedQuest::isCompleted).orElse(true)) {
+                    if (Rs2Widget.isWidgetVisible(ComponentID.DIALOG_OPTION_OPTIONS) && selectedQuestId != Quest.COOKS_ASSISTANT.getId() && !Rs2Bank.isOpen()) {
                         if (!dialogueAdvanceReserved && !allowDialogueAdvance()) return;
                         boolean hasOption = Rs2Dialogue.handleQuestOptionDialogueSelection();
                         //if there is no quest option in the dialogue, just click player location to remove
@@ -275,8 +283,7 @@ public class QuestScript extends Script {
                             if (Rs2Dialogue.acceptQuestStartDialogue()) {
                                 return;
                             }
-                            if (getQuestHelperPlugin().getSelectedQuest() != null &&
-                                    getQuestHelperPlugin().getSelectedQuest().getQuest().getId() == Quest.IMP_CATCHER.getId()
+                            if (selectedQuestId == Quest.IMP_CATCHER.getId()
                                     && Microbot.getClient().getTopLevelWorldView().getPlane() == 1) {
                                 Rs2Dialogue.keyPressForDialogueOption(1); // presses option 1
                                 sleep(1200,1800);
@@ -286,14 +293,12 @@ public class QuestScript extends Script {
                         return;
                     }
 
-                    if (getQuestHelperPlugin().getSelectedQuest() != null &&
-                            getQuestHelperPlugin().getSelectedQuest().getQuest().getId() == Quest.COOKS_ASSISTANT.getId() &&
+                    if (selectedQuestId == Quest.COOKS_ASSISTANT.getId() &&
                             Rs2Dialogue.isInDialogue()) {
                         dialogueStartedStep = questStep;  // Force this to be true for Cook's Assistant
                     }
 
-                    if (getQuestHelperPlugin().getSelectedQuest() != null &&
-                            getQuestHelperPlugin().getSelectedQuest().getQuest().getId() == Quest.PIRATES_TREASURE.getId() &&
+                    if (selectedQuestId == Quest.PIRATES_TREASURE.getId() &&
                             Rs2Dialogue.isInDialogue()) {
                         dialogueStartedStep = questStep;
                     }
@@ -314,9 +319,9 @@ public class QuestScript extends Script {
                     if (pendingInteraction != null) return;
 
                     boolean playerAnimating = Rs2Player.isAnimating();
-                    if (playerAnimating && !customLogicRunsWhileAnimating()) return;
+                    if (playerAnimating && !customLogicRunsWhileAnimating(questLogic)) return;
 
-                    if (!runIdleCustomLogic(questStep)) return;
+                    if (!runIdleCustomLogic(questStep, questLogic)) return;
 
                     if (playerAnimating) return;
 
@@ -341,7 +346,7 @@ public class QuestScript extends Script {
 					 * If we do not prioritize this, the script will think we are missing items
 					 */
 					if (questStep instanceof DetailedQuestStep && !(questStep instanceof NpcStep || questStep instanceof ObjectStep || questStep instanceof DigStep)) {
-                        boolean result = applyDetailedQuestStep((DetailedQuestStep) getQuestHelperPlugin().getSelectedQuest().getCurrentStep().getActiveStep());
+						boolean result = applyDetailedQuestStep((DetailedQuestStep) questStep);
                         if (result) {
                             sleepUntil(() -> Rs2Player.isInteracting() || Rs2Player.isMoving() || Rs2Player.isAnimating() || Rs2Dialogue.isInDialogue(), 500);
                             sleepUntil(() -> !Rs2Player.isInteracting() && !Rs2Player.isMoving() && !Rs2Player.isAnimating());
@@ -349,17 +354,16 @@ public class QuestScript extends Script {
                         }
                     }
 
-                    if (getQuestHelperPlugin().getSelectedQuest().getCurrentStep() instanceof ConditionalStep) {
-                        QuestStep conditionalStep = getQuestHelperPlugin().getSelectedQuest().getCurrentStep().getActiveStep();
-                        applyStep(conditionalStep);
-                    } else if (getQuestHelperPlugin().getSelectedQuest().getCurrentStep() instanceof NpcStep) {
-                        applyNpcStep((NpcStep) getQuestHelperPlugin().getSelectedQuest().getCurrentStep());
-                    } else if (getQuestHelperPlugin().getSelectedQuest().getCurrentStep() instanceof ObjectStep) {
-                        applyObjectStep((ObjectStep) getQuestHelperPlugin().getSelectedQuest().getCurrentStep());
-                    } else if (getQuestHelperPlugin().getSelectedQuest().getCurrentStep() instanceof DigStep) {
-                        applyDigStep((DigStep) getQuestHelperPlugin().getSelectedQuest().getCurrentStep());
-                    } else if (getQuestHelperPlugin().getSelectedQuest().getCurrentStep() instanceof PuzzleStep) {
-                        applyPuzzleStep((PuzzleStep) getQuestHelperPlugin().getSelectedQuest().getCurrentStep());
+                    if (currentQuestStep instanceof ConditionalStep) {
+                        applyStep(questStep);
+                    } else if (currentQuestStep instanceof NpcStep) {
+                        applyNpcStep((NpcStep) currentQuestStep);
+                    } else if (currentQuestStep instanceof ObjectStep) {
+                        applyObjectStep((ObjectStep) currentQuestStep);
+                    } else if (currentQuestStep instanceof DigStep) {
+                        applyDigStep((DigStep) currentQuestStep);
+                    } else if (currentQuestStep instanceof PuzzleStep) {
+                        applyPuzzleStep((PuzzleStep) currentQuestStep);
                     }
 
                     if (!(questStep instanceof NpcStep) && !(questStep instanceof ObjectStep)) {
@@ -927,7 +931,7 @@ public class QuestScript extends Script {
 			}
 		}
 
-		QuestHelper selectedQuest = getQuestHelperPlugin().getSelectedQuest();
+		QuestHelper selectedQuest = selectedQuestSnapshot(getQuestHelperPlugin());
 		if (selectedQuest != null) {
 			updateEverHeldItemTracking(selectedQuest);
 
@@ -1392,44 +1396,42 @@ public class QuestScript extends Script {
         return true;
     }
 
-    private boolean executeQuestCustomLogic() {
-        var questLogic = QuestRegistry.getQuest(getQuestHelperPlugin().getSelectedQuest().getQuest().getId());
+    private boolean executeQuestCustomLogic(IQuest questLogic) {
         if (questLogic instanceof PiratesTreasure) ((PiratesTreasure) questLogic).setMQuestPlugin(mQuestPlugin);
         return questLogic == null || questLogic.executeCustomLogic();
     }
 
     public void onGraphicsObjectCreated(GraphicsObject graphicsObject) {
-        if (graphicsObject == null || getQuestHelperPlugin() == null
-                || getQuestHelperPlugin().getSelectedQuest() == null) {
+        if (graphicsObject == null) {
             return;
         }
-        var questLogic = QuestRegistry.getQuest(
-                getQuestHelperPlugin().getSelectedQuest().getQuest().getId());
+        IQuest questLogic = questLogicFor(selectedQuestSnapshot(getQuestHelperPlugin()));
         if (questLogic != null && questLogic.onGraphicsObjectCreated(graphicsObject)) {
             nextCustomAttemptAt = 0;
         }
     }
 
-    private boolean runIdleCustomLogic(QuestStep step) {
+    private boolean runIdleCustomLogic(QuestStep step, IQuest questLogic) {
         long now = System.nanoTime();
         if (lastCustomStep == step && now - nextCustomAttemptAt < 0) return !customActionPending;
         lastCustomStep = step;
-        nextCustomAttemptAt = now + customLogicIntervalNanos();
-        customActionPending = !executeQuestCustomLogic();
+        nextCustomAttemptAt = now + customLogicIntervalNanos(questLogic);
+        customActionPending = !executeQuestCustomLogic(questLogic);
         return !customActionPending;
     }
 
-    private long customLogicIntervalNanos() {
-        var questLogic = QuestRegistry.getQuest(
-                getQuestHelperPlugin().getSelectedQuest().getQuest().getId());
+    private long customLogicIntervalNanos(IQuest questLogic) {
         return questLogic == null ? 600_000_000L
                 : Math.max(0, questLogic.customLogicIntervalNanos());
     }
 
-    private boolean customLogicRunsWhileAnimating() {
-        var questLogic = QuestRegistry.getQuest(
-                getQuestHelperPlugin().getSelectedQuest().getQuest().getId());
+    private boolean customLogicRunsWhileAnimating(IQuest questLogic) {
         return questLogic != null && questLogic.customLogicRunsWhileAnimating();
+    }
+
+    private static IQuest questLogicFor(QuestHelper selectedQuest) {
+        QuestHelperQuest quest = selectedQuest == null ? null : selectedQuest.getQuest();
+        return quest == null ? null : QuestRegistry.getQuest(quest.getId());
     }
 
     static boolean shouldPauseBeforeCustomLogic(boolean inDialogue, boolean pending,
@@ -1461,9 +1463,9 @@ public class QuestScript extends Script {
                 || mainScheduledFuture == null || mainScheduledFuture.isCancelled()) return false;
         return Microbot.getClientThread().runOnClientThreadOptional(() -> {
             QuestHelperPlugin plugin = getQuestHelperPlugin();
-            return plugin != null && plugin.getSelectedQuest() != null
-                    && plugin.getSelectedQuest().getCurrentStep() != null
-                    && plugin.getSelectedQuest().getCurrentStep().getActiveStep() == step
+            QuestHelper selectedQuest = selectedQuestSnapshot(plugin);
+            return selectedQuest != null && selectedQuest.getCurrentStep() != null
+                    && selectedQuest.getCurrentStep().getActiveStep() == step
                     && Microbot.getVarbitValue(4606) == 0;
         }).orElse(false);
     }
