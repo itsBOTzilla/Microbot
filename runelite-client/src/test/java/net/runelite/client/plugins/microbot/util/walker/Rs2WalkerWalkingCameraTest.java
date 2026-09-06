@@ -328,6 +328,17 @@ public class Rs2WalkerWalkingCameraTest
     }
 
     @Test
+    public void forwardRouteProgressKeepsCameraLookaheadValid()
+    {
+        List<WorldPoint> path = List.of(PLAYER, point(6, 0), point(9, 0), point(12, 0));
+
+        assertTrue(RuneLiteWebWalkRuntime.isCameraLookAheadStillAhead(
+                path, 1, point(9, 0), PLAYER.getPlane()));
+        assertFalse(RuneLiteWebWalkRuntime.isCameraLookAheadStillAhead(
+                path, 2, point(9, 0), PLAYER.getPlane()));
+    }
+
+    @Test
     public void livePathfinderReplacementSuppressesQueuedYaw() throws Exception
     {
         try (CameraHarness harness = new CameraHarness())
