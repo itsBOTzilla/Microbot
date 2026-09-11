@@ -765,6 +765,27 @@ public class Rs2Bank {
         return bankItem == null ? 0 : bankItem.getQuantity();
     }
 
+    /** Returns true when at least one requested item ID is present in the bank. */
+    public static boolean contains(int... ids) {
+        return BankIdQueries.containsAny(Rs2Bank::count, ids);
+    }
+
+    /** Returns true when every requested item ID is present in the bank. */
+    public static boolean containsAll(int... ids) {
+        return BankIdQueries.containsAll(Rs2Bank::count, ids);
+    }
+
+    /** Returns the combined bank quantity for the unique requested item IDs. */
+    public static int count(int... ids) {
+        return BankIdQueries.count(Rs2Bank::count, ids);
+    }
+
+    /** Returns the first present bank item in requested-ID preference order. */
+    public static Rs2ItemModel get(int... ids) {
+        int id = BankIdQueries.firstAvailableId(Rs2Bank::count, ids);
+        return id == -1 ? null : getBankItem(id);
+    }
+
     /**
      * Query count of item inside of bank
      */

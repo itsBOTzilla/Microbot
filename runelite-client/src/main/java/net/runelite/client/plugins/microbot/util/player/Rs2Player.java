@@ -1720,7 +1720,11 @@ public class Rs2Player {
      * @return {@code true} if the local player has the specified spot animation, {@code false} otherwise.
      */
     public static boolean hasSpotAnimation(int graphicId) {
-        return Microbot.getClient().getLocalPlayer().hasSpotAnim(graphicId);
+        return hasSpotAnimation(Microbot.getClient().getLocalPlayer(), graphicId);
+    }
+
+    static boolean hasSpotAnimation(Player player, int graphicId) {
+        return player != null && player.hasSpotAnim(graphicId);
     }
 
     /**

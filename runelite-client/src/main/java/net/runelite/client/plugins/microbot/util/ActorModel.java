@@ -23,7 +23,34 @@ public class ActorModel implements Actor
 	@Override
 	public WorldView getWorldView()
 	{
+		if (actor == null)
+		{
+			return null;
+		}
 		return actor.getWorldView();
+	}
+
+	@Override
+	public boolean equals(Object other)
+	{
+		if (this == other)
+		{
+			return true;
+		}
+		if (actor == null || other == null || getClass() != other.getClass())
+		{
+			return false;
+		}
+		ActorModel that = (ActorModel) other;
+		return actor == that.actor;
+	}
+
+	@Override
+	public int hashCode()
+	{
+		return actor == null
+				? System.identityHashCode(this)
+				: 31 * getClass().hashCode() + System.identityHashCode(actor);
 	}
 
 	@Override
