@@ -95,26 +95,7 @@ public class NaturalMouse {
         if (cachedFactory != null && intensity == cachedIntensity) {
             return cachedFactory;
         }
-        MouseMotionFactory factory;
-        if (intensity == ActivityIntensity.VERY_LOW) {
-            log.debug("Creating average computer user motion factory");
-            factory = FactoryTemplates.createAverageComputerUserMotionFactory(nature);
-        } else if (intensity == ActivityIntensity.LOW) {
-            log.debug("Creating normal gamer motion factory");
-            factory = FactoryTemplates.createNormalGamerMotionFactory(nature);
-        } else if (intensity == ActivityIntensity.MODERATE) {
-            log.debug("Creating fast gamer motion factory");
-            factory = FactoryTemplates.createFastGamerMotionFactory(nature);
-        } else if (intensity == ActivityIntensity.HIGH) {
-            log.debug("Creating fast gamer motion factory");
-            factory = FactoryTemplates.createFastGamerMotionFactory(nature);
-        } else if (intensity == ActivityIntensity.EXTREME) {
-            log.debug("Creating super fast gamer motion factory");
-            factory = FactoryTemplates.createSuperFastGamerMotionFactory(nature);
-        } else {
-            log.debug("Default: Creating super fast gamer motion factory");
-            factory = FactoryTemplates.createSuperFastGamerMotionFactory(nature);
-        }
+        MouseMotionFactory factory = createFactoryForIntensity(intensity, nature);
         cachedIntensity = intensity;
         cachedFactory = factory;
         return factory;
@@ -134,6 +115,28 @@ public class NaturalMouse {
 //		factory.setSpeedManager(manager);
 //
 //		return factory;
+    }
+
+    static MouseMotionFactory createFactoryForIntensity(ActivityIntensity intensity,
+                                                        MouseMotionNature nature) {
+        if (intensity == ActivityIntensity.VERY_LOW) {
+            log.debug("Creating very slow mouse motion factory");
+            return FactoryTemplates.createGrannyMotionFactory(nature);
+        }
+        if (intensity == ActivityIntensity.LOW) {
+            log.debug("Creating low-speed mouse motion factory");
+            return FactoryTemplates.createAverageComputerUserMotionFactory(nature);
+        }
+        if (intensity == ActivityIntensity.MODERATE) {
+            log.debug("Creating moderate-speed mouse motion factory");
+            return FactoryTemplates.createNormalGamerMotionFactory(nature);
+        }
+        if (intensity == ActivityIntensity.HIGH) {
+            log.debug("Creating high-speed mouse motion factory");
+            return FactoryTemplates.createFastGamerMotionFactory(nature);
+        }
+        log.debug("Creating extreme-speed mouse motion factory");
+        return FactoryTemplates.createSuperFastGamerMotionFactory(nature);
     }
 
     /**

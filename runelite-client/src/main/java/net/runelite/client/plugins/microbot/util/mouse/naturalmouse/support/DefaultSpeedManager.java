@@ -53,4 +53,8 @@ public class DefaultSpeedManager implements SpeedManager {
     public void setMouseMovementBaseTimeMs(long mouseMovementSpeedMs) {
         this.mouseMovementTimeMs = mouseMovementSpeedMs;
     }
+
+    public long getMouseMovementBaseTimeMs() {
+        return mouseMovementTimeMs;
+    }
 }
