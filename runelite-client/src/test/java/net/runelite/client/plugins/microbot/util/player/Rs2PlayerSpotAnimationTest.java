@@ -15,7 +15,7 @@ public class Rs2PlayerSpotAnimationTest
     public void missingLocalPlayerHasNoSpotAnimation()
     {
         assertFalse(Rs2Player.hasSpotAnimation(null, 245));
-        assertEquals(-1, Rs2Player.getGraphicId(null));
+        assertEquals(-1, Rs2Player.graphicIdOrMissing(null));
     }
 
     @Test
@@ -23,8 +23,7 @@ public class Rs2PlayerSpotAnimationTest
     {
         Player player = mock(Player.class);
         when(player.hasSpotAnim(245)).thenReturn(true);
-        when(player.getGraphic()).thenReturn(245);
         assertTrue(Rs2Player.hasSpotAnimation(player, 245));
-        assertEquals(245, Rs2Player.getGraphicId(player));
+        assertEquals(245, Rs2Player.graphicIdOrMissing(245));
     }
 }

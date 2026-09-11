@@ -1707,11 +1707,18 @@ public class Rs2Player {
      * @return The graphic ID of the local player.
      */
     public static int getGraphicId() {
-        return getGraphicId(Microbot.getClient().getLocalPlayer());
+        if (Microbot.getClient() == null || Microbot.getClientThread() == null) {
+            return -1;
+        }
+
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            Player player = Microbot.getClient().getLocalPlayer();
+            return player == null ? -1 : player.getGraphic();
+        }).orElse(-1);
     }
 
-    static int getGraphicId(Player player) {
-        return player == null ? -1 : player.getGraphic();
+    static int graphicIdOrMissing(Integer graphicId) {
+        return graphicId == null ? -1 : graphicId;
     }
 
     /**
