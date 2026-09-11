@@ -424,15 +424,21 @@ public class QuestScript extends Script {
 	private boolean handleMissingItemRequirements(DetailedQuestStep questStep) {
 		List<ItemRequirement> missing = new ArrayList<>();
 		List<ItemRequirement> needsUnnoting = new ArrayList<>();
+		List<Requirement> currentRequirements = questStep.getRequirements();
+		List<Requirement> acquisitionRequirements = collectAllItemRequirements(questStep);
 
-		for (Requirement requirement : questStep.getRequirements()) {
+		for (Requirement requirement : acquisitionRequirements) {
 			if (!(requirement instanceof ItemRequirement)) {
 				continue;
 			}
 
 			ItemRequirement itemRequirement = (ItemRequirement) requirement;
+			boolean requiredByCurrentStep = currentRequirements.contains(requirement);
+			if (!requiredByCurrentStep && !isItemRequirementTradable(itemRequirement)) {
+				continue;
+			}
 
-			if (itemRequirement.mustBeEquipped()
+			if (requiredByCurrentStep && itemRequirement.mustBeEquipped()
 					&& Rs2Inventory.contains(itemRequirement.getAllIds().stream().mapToInt(i -> i).toArray())
 					&& itemRequirement.getAllIds().stream().noneMatch(Rs2Equipment::isWearing)) {
 				Rs2Inventory.wear(itemRequirement.getAllIds().stream().filter(Rs2Inventory::contains).findFirst().orElse(-1));
@@ -529,20 +535,13 @@ public class QuestScript extends Script {
 				continue;
 			}
 
-			int bestBankId = -1;
-			int bestBankCount = 0;
-			for (Integer id : ir.getAllIds()) {
-				if (id == null || id <= 0) {
-					continue;
-				}
-				int count = Rs2Bank.count(id);
-				if (count > bestBankCount) {
-					bestBankCount = count;
-					bestBankId = id;
-				}
-			}
+			int miningLevel = QuestBankItemSelector.containsPickaxe(ir.getAllIds())
+					? Microbot.getClient().getRealSkillLevel(Skill.MINING)
+					: 1;
+			int bestBankId = QuestBankItemSelector.selectBankId(
+					ir.getAllIds(), Rs2Bank::count, needed, miningLevel);
 
-			if (bestBankCount >= needed) {
+			if (bestBankId != -1) {
 				fromBank.add(ir);
 				bankWithdrawId.put(ir, bestBankId);
 			} else {
@@ -2033,6 +2032,33 @@ public class QuestScript extends Script {
 		return "use";
 	}
 
+	private boolean combineHighlightedInventoryItems(DetailedQuestStep step) {
+		List<Integer> highlightedItemIds = new ArrayList<>();
+		for (Requirement requirement : step.getRequirements()) {
+			if (!(requirement instanceof ItemRequirement)) {
+				continue;
+			}
+			ItemRequirement itemRequirement = (ItemRequirement) requirement;
+			if (!itemRequirement.shouldHighlightInInventory(Microbot.getClient())) {
+				continue;
+			}
+			int itemId = itemRequirement.getAllIds().stream()
+					.filter(Rs2Inventory::contains)
+					.findFirst()
+					.orElse(-1);
+			if (itemId > 0 && !highlightedItemIds.contains(itemId)) {
+				highlightedItemIds.add(itemId);
+			}
+		}
+
+		if (highlightedItemIds.size() < 2) {
+			return false;
+		}
+
+		Rs2Inventory.combine(highlightedItemIds.get(0), highlightedItemIds.get(1));
+		return true;
+	}
+
     private boolean applyDetailedQuestStep(DetailedQuestStep conditionalStep) {
         if (conditionalStep instanceof NpcStep) return false;
 
@@ -2050,6 +2076,10 @@ public class QuestScript extends Script {
                 }
             }
         }
+
+        if (combineHighlightedInventoryItems(conditionalStep)) {
+			return true;
+		}
 
         boolean usingItems = false;
         for (Requirement requirement : conditionalStep.getRequirements()) {
