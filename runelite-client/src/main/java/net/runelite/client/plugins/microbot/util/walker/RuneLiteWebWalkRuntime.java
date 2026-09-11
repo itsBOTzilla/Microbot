@@ -867,21 +867,33 @@ public final class RuneLiteWebWalkRuntime implements WebWalkRuntime
                 || request.targetGeneration != targetGeneration
                 || request.routeSource != observedPathfinder
                 || request.routeSource != Rs2PathApi.getPathfinder()
-                || request.path != lastRawPath || request.currentPathIndex != lastObservedPathIndex
+                || request.path != lastRawPath || lastObservedPathIndex < request.currentPathIndex
                 || player == null || player.getPlane() != request.lookAhead.getPlane()
                 || !isRouteOwnershipCurrent(target, targetGeneration,
                 Rs2Walker.getCurrentTarget(), Rs2Walker.getCurrentTargetGeneration()))
         {
             return false;
         }
-        for (int index = request.currentPathIndex + 1; index < request.path.size(); index++)
+        return isCameraLookAheadStillAhead(request.path,
+                Math.max(request.currentPathIndex, lastObservedPathIndex), request.lookAhead,
+                player.getPlane());
+    }
+
+    static boolean isCameraLookAheadStillAhead(List<WorldPoint> path, int currentPathIndex,
+                                               WorldPoint lookAhead, int plane)
+    {
+        if (path == null || lookAhead == null || currentPathIndex < -1)
         {
-            WorldPoint candidate = request.path.get(index);
-            if (candidate == null || candidate.getPlane() != player.getPlane())
+            return false;
+        }
+        for (int index = currentPathIndex + 1; index < path.size(); index++)
+        {
+            WorldPoint candidate = path.get(index);
+            if (candidate == null || candidate.getPlane() != plane)
             {
                 break;
             }
-            if (candidate.equals(request.lookAhead))
+            if (candidate.equals(lookAhead))
             {
                 return true;
             }
