@@ -58,4 +58,9 @@ public final class Rs2WalkerTransportAwaits {
         return !dialogueWasOpen && dialogueOpen
                 || Rs2WalkerProgress.hasMovementOrProgress(before, now, expectedDestination, target);
     }
+
+    public static boolean hasCompletedTollGateCrossing(boolean dialogueConfirmed,
+                                                       boolean reachedDestination) {
+        return reachedDestination;
+    }
 }

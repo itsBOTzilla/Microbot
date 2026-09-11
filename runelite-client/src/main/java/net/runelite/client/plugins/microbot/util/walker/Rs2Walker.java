@@ -80,6 +80,7 @@ import net.runelite.client.plugins.microbot.util.walker.awaits.Rs2WalkerRuntimeA
 import net.runelite.client.plugins.microbot.util.walker.puzzles.DraynorBasementSolver;
 import net.runelite.client.plugins.microbot.util.walker.stall.Rs2WalkerStallPolicy;
 import net.runelite.client.plugins.microbot.util.walker.transport.Rs2WalkerTransportAwaits;
+import net.runelite.client.plugins.microbot.util.walker.transport.TransportDialogueOptions;
 import net.runelite.client.plugins.microbot.util.walker.lifecycle.Rs2WalkerLifecycleRuntime;
 import net.runelite.client.plugins.skillcalculator.skills.MagicAction;
 import net.runelite.client.ui.overlay.worldmap.WorldMapPoint;
@@ -9249,7 +9250,9 @@ public class Rs2Walker {
                                     sleepUntil(() -> !Rs2Dialogue.hasContinue(), Rs2Dialogue::clickContinue, 5000, Rs2Random.between(600, 800));
                                     Rs2Dialogue.clickOption("Can you take me somewhere?");
                                     sleepUntil(() -> !Rs2Dialogue.hasContinue() && !Rs2Dialogue.hasSelectAnOption(), Rs2Dialogue::clickContinue, 5000, Rs2Random.between(600, 800));
-                                    Rs2Dialogue.clickOption(transport.getDisplayInfo());
+                                    Rs2Dialogue.clickOption(TransportDialogueOptions
+                                            .destinationAliases(transport.getName(), transport.getDisplayInfo())
+                                            .toArray(new String[0]));
                                     sleepUntil(() -> !Rs2Dialogue.hasContinue() && !Rs2Dialogue.hasSelectAnOption(), Rs2Dialogue::clickContinue, 5000, Rs2Random.between(600, 800));
                                 }
 
@@ -10671,7 +10674,7 @@ public class Rs2Walker {
                     compactWorldPoint(transport.getDestination()),
                     compactWorldPoint(Rs2Player.getWorldLocation()));
         }
-        return true;
+        return Rs2WalkerTransportAwaits.hasCompletedTollGateCrossing(confirmed, reachedDestination);
     }
 
     private static boolean handleObjectExceptions(Transport transport, TileObject tileObject) {

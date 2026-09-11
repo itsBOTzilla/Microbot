@@ -1707,7 +1707,11 @@ public class Rs2Player {
      * @return The graphic ID of the local player.
      */
     public static int getGraphicId() {
-        return Microbot.getClient().getLocalPlayer().getGraphic();
+        return getGraphicId(Microbot.getClient().getLocalPlayer());
+    }
+
+    static int getGraphicId(Player player) {
+        return player == null ? -1 : player.getGraphic();
     }
 
     /**
@@ -1720,7 +1724,11 @@ public class Rs2Player {
      * @return {@code true} if the local player has the specified spot animation, {@code false} otherwise.
      */
     public static boolean hasSpotAnimation(int graphicId) {
-        return Microbot.getClient().getLocalPlayer().hasSpotAnim(graphicId);
+        return hasSpotAnimation(Microbot.getClient().getLocalPlayer(), graphicId);
+    }
+
+    static boolean hasSpotAnimation(Player player, int graphicId) {
+        return player != null && player.hasSpotAnim(graphicId);
     }
 
     /**

@@ -71,4 +71,16 @@ public class Rs2WalkerTransportAwaitsTest
                 condition -> !condition.getAsBoolean() && condition.getAsBoolean()));
         assertTrue("the dialogue must be polled rather than sampled once", samples.get() >= 2);
     }
+
+    @Test
+    public void tollConfirmationAloneDoesNotCompleteTheTransport()
+    {
+        assertFalse(Rs2WalkerTransportAwaits.hasCompletedTollGateCrossing(true, false));
+    }
+
+    @Test
+    public void reachingTheFarSideCompletesTheTollTransport()
+    {
+        assertTrue(Rs2WalkerTransportAwaits.hasCompletedTollGateCrossing(false, true));
+    }
 }

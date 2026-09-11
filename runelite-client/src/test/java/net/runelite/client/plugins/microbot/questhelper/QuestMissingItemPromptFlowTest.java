@@ -23,10 +23,10 @@ public class QuestMissingItemPromptFlowTest
                 1, calls.callsFromMissingItemHandler);
         assertEquals("The quest loop must not ask before it knows an item is missing",
                 0, calls.callsFromOtherMethods);
-        assertEquals("Missing-item handling must inspect only the active step requirements",
+        assertEquals("Missing-item handling must still inspect the active step for immediate actions",
                 1, calls.currentStepRequirementReads);
-        assertEquals("Missing-item handling must not preempt the active step with future quest requirements",
-                0, calls.allQuestRequirementReads);
+        assertEquals("Missing-item handling must batch tradable requirements for the whole quest",
+                1, calls.allQuestRequirementReads);
     }
 
     private static PromptCalls readPromptCalls() throws IOException
